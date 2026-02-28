@@ -308,7 +308,8 @@ function renderControlOverlay(
       const WM_COMMAND = 0x0111;
       const dlgWnd = emu.handles.get<WindowInfo>(ds.hwnd);
       const wndProc = dlgWnd?.wndProc || ds.dlgProc;
-      if (wndProc) {
+      if (wndProc && !emu.isNE) {
+        // Win32: synchronously call dlgProc so the app can update state immediately
         const savedEIP = emu.cpu.eip;
         const savedESP = emu.cpu.reg[4];
         emu.callWndProc(wndProc, ds.hwnd, WM_COMMAND, ctrl.controlId, ctrl.childHwnd);

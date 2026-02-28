@@ -19,11 +19,11 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // Ordinal 88: EndDialog(hDlg, nResult_sword) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
   user.register('ord_88', 4, () => {
-    const [hDlg, nResult] = emu.readPascalArgs16([2, 2]);
-    const wnd = emu.handles.get<WindowInfo>(hDlg);
-    if (wnd) {
-      const endDialog = (wnd as any)._endDialog as ((r: number) => void) | undefined;
-      if (endDialog) endDialog(nResult);
+    const [_hDlg, nResult] = emu.readPascalArgs16([2, 2]);
+    if (emu.dialogState) {
+      emu.dialogState.result = nResult;
+      emu.dialogState.ended = true;
+      emu._endDialog(nResult);
     }
     return 0;
   });
@@ -335,27 +335,41 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
       width: Math.round(c.width * scaleX),
       height: Math.round(c.height * scaleY),
     })),
-    overlays: [],
+    overlays: (emu.handles.get<WindowInfo>(hwnd)?.childList ?? []).map(childHwnd => {
+      const child = emu.handles.get<WindowInfo>(childHwnd)!;
+      return {
+        controlId: child.controlId ?? 0,
+        childHwnd,
+        className: child.classInfo?.className ?? 'STATIC',
+        x: child.x,
+        y: child.y,
+        width: child.width,
+        height: child.height,
+        style: child.style,
+        exStyle: 0,
+        title: child.title ?? '',
+        checked: child.checked ?? 0,
+        fontHeight: 13,
+        trackPos: 0,
+        trackMin: 0,
+        trackMax: 0,
+      };
+    }),
     controlValues: new Map<number, string>(),
   };
 
   const stackBytes = emu._currentThunkStackBytes;
   emu.waitingForMessage = true;
 
-  // Store endDialog callback
-  const endDialog = (result: number) => {
-    emu.handles.free(hwnd);
-    emu.onCloseDialog?.();
+  // Set up dialogState so dismissDialog() and _endDialog() work
+  emu.dialogState = { hwnd, dlgProc, info: dialogInfo, result: 0, ended: false };
+  emu._dialogResolve = (result: number) => {
     emu.waitingForMessage = false;
     emuCompleteThunk16(emu, result, stackBytes);
     if (emu.running && !emu.halted) {
       requestAnimationFrame(emu.tick);
     }
   };
-
-  // Store endDialog on the window for EndDialog to find
-  const wnd = emu.handles.get<WindowInfo>(hwnd);
-  if (wnd) (wnd as any)._endDialog = endDialog;
 
   emu.onShowDialog?.(dialogInfo);
 

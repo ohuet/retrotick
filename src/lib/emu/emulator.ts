@@ -692,7 +692,8 @@ export class Emulator {
     // This is what Windows does when the user clicks a button — the dialog proc
     // handles WM_COMMAND/IDOK, calls GetDlgItemInt/GetDlgItemText, then EndDialog.
     const ds = this.dialogState;
-    if (!ds.ended) {
+    if (!ds.ended && !this.ne) {
+      // Win32: synchronously call the dlgProc with WM_COMMAND so it can call EndDialog
       const dlgWnd = this.handles.get<WindowInfo>(ds.hwnd);
       const wndProc = dlgWnd?.wndProc || ds.dlgProc;
       if (wndProc) {

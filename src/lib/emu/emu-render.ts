@@ -9,6 +9,8 @@ const WM_CTLCOLORSTATIC = 0x0138;
 function getCtlColorStatic(emu: Emulator, child: WindowInfo, childHwnd: number): string | undefined {
   const parentWnd = emu.handles.get<WindowInfo>(child.parent);
   if (!parentWnd?.wndProc) return undefined;
+  // Win16 (NE) wndProcs are 16-bit segmented addresses — can't call via callWndProc (32-bit)
+  if (emu.isNE) return undefined;
   // wParam = HDC (use 0 as placeholder), lParam = child window handle
   const result = emu.callWndProc(parentWnd.wndProc, child.parent, WM_CTLCOLORSTATIC, 0, childHwnd);
   if (!result) return undefined;
