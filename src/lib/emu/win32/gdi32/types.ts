@@ -55,6 +55,7 @@ export interface BrushInfo {
   color: number;
   style?: number;
   isNull: boolean;
+  patternBitmap?: OffscreenCanvas | HTMLCanvasElement;
 }
 
 export interface PaletteInfo {

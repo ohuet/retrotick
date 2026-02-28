@@ -153,10 +153,17 @@ export function registerWin16Gdi(emu: Emulator): void {
     return emu.handles.alloc('dc', dc);
   }
 
+  function brushToFillStyle(dc: DCInfo, brush: BrushInfo): string | CanvasPattern | null {
+    if (brush.patternBitmap) {
+      return dc.ctx.createPattern(brush.patternBitmap, 'repeat');
+    }
+    return colorToCSS(brush.color);
+  }
+
   function fillAndStroke(dc: DCInfo) {
     const brush = emu.getBrush(dc.selectedBrush);
     if (brush && !brush.isNull) {
-      dc.ctx.fillStyle = colorToCSS(brush.color);
+      dc.ctx.fillStyle = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
       dc.ctx.fill();
     }
     const pen = emu.getPen(dc.selectedPen);
@@ -582,21 +589,21 @@ export function registerWin16Gdi(emu: Emulator): void {
     } else if (rop === PATCOPY16) {
       const brush = emu.getBrush(dc.selectedBrush);
       if (brush && !brush.isNull) {
-        dc.ctx.fillStyle = colorToCSS(brush.color);
+        dc.ctx.fillStyle = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
         dc.ctx.fillRect(x, y, w, h);
       }
     } else if (rop === PATINVERT16) {
       dc.ctx.globalCompositeOperation = 'xor';
       const brush = emu.getBrush(dc.selectedBrush);
       if (brush && !brush.isNull) {
-        dc.ctx.fillStyle = colorToCSS(brush.color);
+        dc.ctx.fillStyle = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
         dc.ctx.fillRect(x, y, w, h);
       }
       dc.ctx.globalCompositeOperation = 'source-over';
     } else {
       const brush = emu.getBrush(dc.selectedBrush);
       if (brush && !brush.isNull) {
-        dc.ctx.fillStyle = colorToCSS(brush.color);
+        dc.ctx.fillStyle = brushToFillStyle(dc, brush) || colorToCSS(brush.color);
         dc.ctx.fillRect(x, y, w, h);
       }
     }
@@ -898,9 +905,27 @@ export function registerWin16Gdi(emu: Emulator): void {
   // Ordinal 48: CreateBitmap(w, h, nPlanes, nBitCount, lpBits) — pascal -ret16, 12 bytes (2+2+2+2+4)
   gdi.register('ord_48', 12, () => {
     const [w, h, nPlanes, nBitCount, lpBits] = emu.readPascalArgs16([2, 2, 2, 2, 4]);
-    const canvas = new OffscreenCanvas(w || 1, h || 1);
+    const bw = w || 1, bh = h || 1;
+    const canvas = new OffscreenCanvas(bw, bh);
     const ctx = canvas.getContext('2d')!;
-    const bmp: BitmapInfo = { width: w, height: h, canvas, ctx };
+    if (lpBits && nBitCount === 1) {
+      // Monochrome bitmap: read bits and render
+      const imgData = ctx.createImageData(bw, bh);
+      const bytesPerRow = Math.ceil(bw / 16) * 2; // WORD-aligned
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) {
+          const byteIdx = Math.floor(x / 8);
+          const bitIdx = 7 - (x % 8);
+          const b = emu.memory.readU8(lpBits + y * bytesPerRow + byteIdx);
+          const set = (b >> bitIdx) & 1;
+          const off = (y * bw + x) * 4;
+          imgData.data[off] = imgData.data[off + 1] = imgData.data[off + 2] = set ? 255 : 0;
+          imgData.data[off + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+    const bmp: BitmapInfo = { width: bw, height: bh, canvas, ctx };
     return emu.handles.alloc('bitmap', bmp);
   });
 
@@ -1003,7 +1028,9 @@ export function registerWin16Gdi(emu: Emulator): void {
 
   // Ordinal 60: CreatePatternBrush(hBitmap) — pascal -ret16, 2 bytes
   gdi.register('ord_60', 2, () => {
-    const brush: BrushInfo = { color: 0, isNull: false };
+    const hBitmap = emu.readArg16(0);
+    const bmp = emu.handles.get<BitmapInfo>(hBitmap);
+    const brush: BrushInfo = { color: 0x808080, isNull: false, patternBitmap: bmp?.canvas };
     return emu.handles.alloc('brush', brush);
   });
 
