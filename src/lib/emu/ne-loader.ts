@@ -33,13 +33,24 @@ export interface LoadedNE {
   autoDataSegIndex: number;
   autoDataStaticSize: number;  // file size of auto-data segment (static data)
   heapSize: number;            // local heap size from NE header
+  stackSize: number;           // stack size from NE header
+  thunkAddrEnd: number;        // next free thunk address after this module
+  entryPoints: Map<number, { seg: number; offset: number }>; // ordinal → {seg, offset}
+  nextSelector: number;        // next available selector after this module
+  flags: number;               // NE header flags
 }
 
 // Thunk segment selector
 const THUNK_SELECTOR = 0xFE;
 const THUNK_LINEAR_BASE = 0x000F0000;
 
-export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
+export interface LoadNEOptions {
+  selectorBase?: number;       // first selector to use (default 1)
+  thunkStartAddr?: number;     // start address for thunks (default THUNK_LINEAR_BASE + 1)
+  selectorToBase?: Map<number, number>; // shared selector map (default new Map)
+}
+
+export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOptions): LoadedNE {
   const dv = new DataView(arrayBuffer);
   const data = new Uint8Array(arrayBuffer);
 
@@ -80,9 +91,12 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
   console.log(`[NE] autoDataSeg=${autoDataSeg}, heap=${heapSize}, stack=${stackSize}`);
 
   // Parse segment table
+  const selectorBase = opts?.selectorBase ?? 1;
   const segments: NESegmentInfo[] = [];
-  const selectorToBase = new Map<number, number>();
+  const selectorToBase = opts?.selectorToBase ?? new Map<number, number>();
   const segTableBase = neOffset + segTableOffset;
+  // Track selector assignment — skip 0x0F (thunk page at 0xF0000) and 0xFE (thunk selector)
+  let nextSel = selectorBase;
 
   for (let i = 0; i < segTableCount; i++) {
     const off = segTableBase + i * 8;
@@ -91,7 +105,10 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
     const segFlags = dv.getUint16(off + 4, true);
     const minAllocRaw = dv.getUint16(off + 6, true);
 
-    const selector = i + 1; // 1-based
+    // Skip selectors whose linear base would conflict with thunk region
+    while (nextSel === 0x0F || nextSel === THUNK_SELECTOR) nextSel++;
+    const selector = nextSel;
+    nextSel++;
     const linearBase = selector * 0x10000; // each segment at 64KB-aligned address
     const fileOffset = sectorOffset === 0 ? 0 : sectorOffset << alignShift;
     const fileSize = fileLength === 0 ? 0x10000 : fileLength;
@@ -229,7 +246,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
 
   // Process relocations and build thunk table
   const apiMap = new Map<number, { dll: string; name: string; ordinal: number }>();
-  let thunkAddr = THUNK_LINEAR_BASE + 1; // Start at odd offset so OFFSET fixups have bit 0 set
+  let thunkAddr = opts?.thunkStartAddr ?? (THUNK_LINEAR_BASE + 1); // Start at odd offset so OFFSET fixups have bit 0 set
   // Cache: "MODULE:ordinal" → thunk linear address
   const thunkCache = new Map<string, number>();
 
@@ -341,14 +358,11 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
     }
   }
 
-  // Compute entry point
+  // Compute entry point — entryCS/entrySS are 1-based relative to this module
   const entrySegInfo = segments[entryCS - 1];
   const entryPoint = entrySegInfo ? entrySegInfo.linearBase + entryIP : 0;
 
   // Compute stack
-  // For NE, the auto-data segment (DGROUP) is allocated with space for:
-  //   data (fileSize) + heap (heapSize) + stack (stackSize)
-  // SP=0 means use the top of the full allocation.
   const ssSegInfo = segments[entrySS - 1];
   let stackTop = 0;
   if (ssSegInfo) {
@@ -356,7 +370,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
       // SP=0: compute full DGROUP allocation size
       const baseAlloc = ssSegInfo.minAlloc === 0 ? 0x10000 : ssSegInfo.minAlloc;
       const dataSize = Math.max(baseAlloc, ssSegInfo.fileSize);
-      if (ssSegInfo.index === autoDataSeg) {
+      if (entrySS === autoDataSeg) {
         // Auto-data segment: include heap + stack space
         entrySP = (dataSize + heapSize + stackSize) & 0xFFFF;
       } else {
@@ -370,13 +384,18 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
   console.log(`[NE] Stack top: linear=0x${stackTop.toString(16)} (seg ${entrySS}:SP=0x${entrySP.toString(16)})`);
   console.log(`[NE] API thunks: ${apiMap.size} entries, thunk range: 0x${THUNK_LINEAR_BASE.toString(16)}-0x${thunkAddr.toString(16)}`);
 
+  // Map 1-based NE-header indices to actual selectors
+  const codeSegSelector = selectorBase + entryCS - 1;
+  const stackSegSelector = selectorBase + entrySS - 1;
+  const dataSegSelector = autoDataSeg ? (selectorBase + autoDataSeg - 1) : 0;
+
   return {
     segments,
     entryPoint,
     stackTop,
-    stackSegSelector: entrySS,
-    codeSegSelector: entryCS,
-    dataSegSelector: autoDataSeg,
+    stackSegSelector,
+    codeSegSelector,
+    dataSegSelector,
     thunkBase: THUNK_LINEAR_BASE,
     apiMap,
     moduleNames,
@@ -385,6 +404,11 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory): LoadedNE {
     autoDataSegIndex: autoDataSeg,
     autoDataStaticSize: segments[autoDataSeg - 1]?.fileSize || 0,
     heapSize,
+    stackSize,
+    thunkAddrEnd: thunkAddr,
+    entryPoints,
+    nextSelector: nextSel,
+    flags,
   };
 }
 

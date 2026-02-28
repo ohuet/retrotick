@@ -2,6 +2,7 @@ import type { Emulator } from './emulator';
 import type { PEInfo } from '../pe/types';
 import { loadPE } from './pe-loader';
 import { loadNE } from './ne-loader';
+import type { LoadedNE } from './ne-loader';
 import { setAnsiCodePage, setAnsiCodePageFromCP, setAnsiEncoding, guessEncodingFromBytes } from './memory';
 import { registerGdi32 } from './win32/gdi32/index';
 import { registerKernel32 } from './win32/kernel32/index';
@@ -213,15 +214,32 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.cpu.reg[4] = emu.ne.stackTop; // ESP = SS:SP linear address
 
     // NE local heap: within auto-data segment, after static data
+    // Ensure local heap never starts at offset 0 (offset 0 is treated as NULL)
     const dsBase = emu.ne.selectorToBase.get(emu.ne.dataSegSelector) || 0;
-    emu.localHeapBase = dsBase + emu.ne.autoDataStaticSize;
+    const localStart = Math.max(emu.ne.autoDataStaticSize, 4); // min offset 4 (offset 0 = NULL)
+    emu.localHeapBase = dsBase + localStart;
     emu.localHeapPtr = emu.localHeapBase;
-    emu.localHeapEnd = emu.localHeapBase + Math.max(emu.ne.heapSize, 8192);
+    // Expand heap to fill gap between static data and stack, if SS == DS.
+    // Layout in segment: [static data | heap → ... ← stack]
+    const ssBase = emu.ne.selectorToBase.get(emu.ne.stackSegSelector) || 0;
+    let heapMax = Math.max(emu.ne.heapSize, 8192);
+    if (ssBase === dsBase && emu.ne.stackSize > 0) {
+      // Stack bottom offset = stackTop - stackSize (relative to dsBase)
+      const stackBottomOff = (emu.ne.stackTop - dsBase) - emu.ne.stackSize;
+      const safeHeap = stackBottomOff - localStart - 256; // 256-byte guard
+      if (safeHeap > heapMax) heapMax = safeHeap;
+    }
+    emu.localHeapEnd = emu.localHeapBase + heapMax;
 
-    // Global heap/virtual allocator after NE segments
-    emu.heapBase = 0x00100000; // 1MB — well above all NE segments
+    // Load NE DLLs referenced by the main exe (before setting heap base)
+    loadNEDlls(emu);
+
+    // Global heap/virtual allocator after all NE segments (exe + DLLs)
+    // nextSelector * 0x10000 is the next linear address after all segments
+    const heapStart = (emu.ne.nextSelector + 1) * 0x10000;
+    emu.heapBase = heapStart;
     emu.heapPtr = emu.heapBase;
-    emu.virtualBase = 0x01100000;
+    emu.virtualBase = heapStart + 0x01000000;
     emu.virtualPtr = emu.virtualBase;
 
     // Register Win16 API handlers
@@ -235,7 +253,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     registerWin16Keyboard(emu);
     registerWin16Win87em(emu);
 
-    // Build thunk table for NE
+    // Build thunk table for NE (includes thunks from loaded DLLs)
     buildNEThunkTable(emu);
 
     // Set up HALT thunk — push as far return address
@@ -264,7 +282,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.threads.push(mainThread);
     emu.currentThread = mainThread;
 
-    console.log(`[EMU] NE loaded: entry=0x${emu.ne.entryPoint.toString(16)} CS=${emu.ne.codeSegSelector} SS=${emu.ne.stackSegSelector} DS=${emu.ne.dataSegSelector}`);
+    console.log(`[EMU] NE loaded: entry=0x${emu.ne.entryPoint.toString(16)} CS=${emu.ne.codeSegSelector} SS=${emu.ne.stackSegSelector} DS=${emu.ne.dataSegSelector} heapBase=0x${emu.heapBase.toString(16)}`);
     return;
   }
 
@@ -1164,6 +1182,133 @@ function findCPlAppletExport(emu: Emulator, arrayBuffer: ArrayBuffer): number | 
     }
   } catch {}
   return null;
+}
+
+/** Load NE DLLs referenced by the main NE exe. */
+function loadNEDlls(emu: Emulator): void {
+  if (!emu.ne) return;
+
+  const ne = emu.ne;
+  let nextSelector = ne.nextSelector;
+  let thunkAddr = ne.thunkAddrEnd;
+
+  // Built-in modules handled by JS stubs — don't try to load these as DLLs
+  const builtinModules = new Set([
+    'KERNEL', 'USER', 'GDI', 'KEYBOARD', 'WIN87EM',
+    'SHELL', 'COMMDLG', 'DDEML', 'MMSYSTEM',
+  ]);
+
+  // Store loaded DLL info for resolving imports
+  const loadedDlls = new Map<string, LoadedNE>();
+
+  for (const modName of ne.moduleNames) {
+    if (builtinModules.has(modName)) continue;
+
+    // Look for the DLL in additionalFiles (case-insensitive, try common extensions)
+    // File keys may have path prefixes (e.g. "examples/CODEBRAK/VBRUN300.DLL")
+    let dllBuf: ArrayBuffer | undefined;
+    const modLower = modName.toLowerCase();
+    for (const ext of ['.dll', '.vbx', '.drv']) {
+      const target = modLower + ext;
+      for (const [key, data] of emu.additionalFiles) {
+        // Match by filename (ignoring path prefix), case-insensitive
+        const basename = key.replace(/.*[/\\]/, '').toLowerCase();
+        if (basename === target) {
+          dllBuf = data;
+          break;
+        }
+      }
+      if (dllBuf) break;
+    }
+    if (!dllBuf) {
+      console.warn(`[NE DLL] Module ${modName} not found in additionalFiles`);
+      continue;
+    }
+
+    console.log(`[NE DLL] Loading ${modName} at selectorBase=${nextSelector}, thunkAddr=0x${thunkAddr.toString(16)}`);
+
+    const dll = loadNE(dllBuf, emu.memory, {
+      selectorBase: nextSelector,
+      thunkStartAddr: thunkAddr,
+      selectorToBase: ne.selectorToBase,  // share the selector map
+    });
+
+    loadedDlls.set(modName, dll);
+    nextSelector = dll.nextSelector;
+    thunkAddr = dll.thunkAddrEnd;
+
+    // Store DLL resources for cross-module resource loading (LoadBitmap etc.)
+    if (dll.resources.length > 0) {
+      emu.neDllResources.push({ resources: dll.resources, arrayBuffer: dllBuf });
+    }
+
+    // Merge DLL's API thunks (its imports from KERNEL/USER/etc) into the main apiMap
+    for (const [addr, info] of dll.apiMap) {
+      ne.apiMap.set(addr, info);
+    }
+
+    // Add DLL segments to the main segment list (for WILD EIP validation)
+    for (const seg of dll.segments) {
+      ne.segments.push(seg);
+    }
+
+    console.log(`[NE DLL] ${modName}: ${dll.segments.length} segments, ${dll.entryPoints.size} exports, ${dll.apiMap.size} imports`);
+
+    // Recursively load DLLs that this DLL imports (if any non-builtin)
+    for (const subMod of dll.moduleNames) {
+      if (!builtinModules.has(subMod) && !loadedDlls.has(subMod)) {
+        // Add to moduleNames for processing in next iteration if needed
+        // For now, just warn
+        console.warn(`[NE DLL] ${modName} imports ${subMod} — nested DLL loading not yet supported`);
+      }
+    }
+  }
+
+  // Resolve exe→DLL imports: for thunks that reference loaded DLLs,
+  // register thunk handlers that perform a FAR JMP to the DLL's actual code.
+  let resolved = 0;
+  for (const [addr, info] of ne.apiMap) {
+    const dll = loadedDlls.get(info.dll);
+    if (!dll) continue;
+
+    const entry = dll.entryPoints.get(info.ordinal);
+    if (!entry) {
+      console.warn(`[NE DLL] ${info.dll}:ord_${info.ordinal} not found in DLL entry table`);
+      continue;
+    }
+
+    const seg = dll.segments[entry.seg - 1];
+    if (!seg) {
+      console.warn(`[NE DLL] ${info.dll}:ord_${info.ordinal} references invalid segment ${entry.seg}`);
+      continue;
+    }
+
+    const linearAddr = seg.linearBase + entry.offset;
+    const targetSelector = seg.selector;
+    const targetOffset = entry.offset;
+
+    // Register a thunk handler that jumps to the DLL code (FAR JMP)
+    const key = `${info.dll}:${info.name}`;
+    emu.apiDefs.set(key, {
+      handler: () => {
+        // The FAR CALL pushed IP/CS on the stack — leave them for the DLL's RETF
+        emu.cpu.cs = targetSelector;
+        emu.cpu.eip = linearAddr;
+        return undefined; // don't complete thunk — DLL code will RETF itself
+      },
+      stackBytes: 0,
+    });
+
+    resolved++;
+  }
+
+  if (resolved > 0) {
+    console.log(`[NE DLL] Resolved ${resolved} exe→DLL imports as FAR JMP thunks`);
+  }
+
+  // Update the ne object with new state
+  ne.thunkAddrEnd = thunkAddr;
+  ne.nextSelector = nextSelector;
 }
 
 /** Rebuild the thunk page set from current thunkToApi entries. */

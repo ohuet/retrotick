@@ -398,12 +398,21 @@ export function loadBitmapResource(emu: Emulator, resourceId: number): number {
     emu.bitmapCache.delete(resourceId);
   }
 
-  // NE (16-bit) path: look up in NE resource table
+  // NE (16-bit) path: look up in NE resource table (exe first, then DLLs)
   if (emu.isNE && emu.ne) {
-    const entry = emu.ne.resources.find(r => r.typeID === 2 && r.id === resourceId);
+    // Search exe resources
+    let entry = emu.ne.resources.find(r => r.typeID === 2 && r.id === resourceId);
+    let srcBuf = emu.arrayBuffer;
+    // If not found in exe, search loaded NE DLLs
+    if (!entry) {
+      for (const dllInfo of emu.neDllResources) {
+        entry = dllInfo.resources.find(r => r.typeID === 2 && r.id === resourceId);
+        if (entry) { srcBuf = dllInfo.arrayBuffer; break; }
+      }
+    }
     if (!entry) return 0;
     try {
-      const dibData = new Uint8Array(emu.arrayBuffer, entry.fileOffset, entry.length);
+      const dibData = new Uint8Array(srcBuf, entry.fileOffset, entry.length);
       const { canvas, ctx, imageData, width, height } = decodeDib(dibData);
       const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
       const hBitmap = emu.handles.alloc('bitmap', bmp);

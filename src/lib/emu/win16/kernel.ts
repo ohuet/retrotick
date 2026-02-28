@@ -24,13 +24,20 @@ export function registerWin16Kernel(emu: Emulator): void {
   kernel.register('ord_3', 0, () => 0x0A03);
 
   // --- Ordinal 4: LocalInit(segment, start, end) — 6 bytes (word+word+word) ---
-  kernel.register('ord_4', 6, () => 1);
+  kernel.register('ord_4', 6, () => {
+    const [segment, start, end] = emu.readPascalArgs16([2, 2, 2]);
+    const base = emu.cpu.segBases.get(segment) ?? (segment * 16);
+    console.log(`[KERNEL16] LocalInit(seg=0x${segment.toString(16)}, start=0x${start.toString(16)}, end=0x${end.toString(16)}) base=0x${base.toString(16)}`);
+    // Register per-segment local heap
+    emu.segLocalHeaps.set(segment, { ptr: base + start, end: base + end });
+    return 1;
+  });
 
   // --- Ordinal 5: LocalAlloc(flags, bytes) — 4 bytes (word+word) ---
   kernel.register('ord_5', 4, () => {
     const [flags, size] = emu.readPascalArgs16([2, 2]);
     const result = emu.allocLocal(size || 1);
-    console.log(`[KERNEL16] LocalAlloc(flags=0x${flags.toString(16)}, size=${size}) → 0x${result.toString(16)}`);
+    console.log(`[KERNEL16] LocalAlloc(flags=0x${flags.toString(16)}, size=${size}) DS=0x${emu.cpu.ds.toString(16)} → 0x${result.toString(16)}`);
     return result;
   });
 
@@ -72,7 +79,8 @@ export function registerWin16Kernel(emu: Emulator): void {
   kernel.register('ord_15', 6, () => {
     const [flags, size] = emu.readPascalArgs16([2, 4]);
     const allocSize = size || 1;
-    const addr = emu.allocHeap(allocSize);
+    // Use 64KB-aligned allocation so local heap can expand within the segment
+    const addr = emu.allocHeap64K(allocSize);
     const selector = nextGlobalSelector++;
     emu.cpu.segBases.set(selector, addr);
     globalHandleToAddr.set(selector, addr);
@@ -84,11 +92,18 @@ export function registerWin16Kernel(emu: Emulator): void {
   // --- Ordinal 16: GlobalReAlloc(handle, size_long, flags) — 8 bytes (word+dword+word) ---
   kernel.register('ord_16', 8, () => {
     const [handle, size, flags] = emu.readPascalArgs16([2, 4, 2]);
-    const oldAddr = globalHandleToAddr.get(handle);
-    const oldSize = globalHandleToSize.get(handle) || 0;
-    const newAddr = emu.allocHeap(size || 1);
+    let oldAddr = globalHandleToAddr.get(handle);
+    let oldSize = globalHandleToSize.get(handle) || 0;
+    // If handle is a segment selector not yet tracked, use its current segment base
+    if (oldAddr === undefined) {
+      oldAddr = emu.cpu.segBases.get(handle);
+      // For NE segments, the old size is up to 64KB — copy everything up to the new size
+      if (oldAddr !== undefined) oldSize = 0x10000;
+    }
+    const allocSize = Math.max(size, oldSize);
+    const newAddr = emu.allocHeap(allocSize || 1);
     if (oldAddr !== undefined && oldSize > 0) {
-      const copyLen = Math.min(oldSize, size);
+      const copyLen = Math.min(oldSize, allocSize);
       for (let i = 0; i < copyLen; i++) {
         emu.memory.writeU8(newAddr + i, emu.memory.readU8(oldAddr + i));
       }
@@ -96,6 +111,13 @@ export function registerWin16Kernel(emu: Emulator): void {
     emu.cpu.segBases.set(handle, newAddr);
     globalHandleToAddr.set(handle, newAddr);
     globalHandleToSize.set(handle, size);
+    // If this is the DGROUP (DS/SS) segment, update local heap pointers
+    if (oldAddr !== undefined && emu.ne && handle === emu.ne.dataSegSelector) {
+      const delta = newAddr - oldAddr;
+      emu.localHeapBase += delta;
+      emu.localHeapPtr += delta;
+      emu.localHeapEnd = newAddr + size;
+    }
     return handle;
   });
 
@@ -124,12 +146,15 @@ export function registerWin16Kernel(emu: Emulator): void {
   // --- Ordinal 20: GlobalSize(handle) — 2 bytes (word) ---
   kernel.register('ord_20', 2, () => {
     const handle = emu.readArg16(0);
-    return globalHandleToSize.get(handle) || 0x1000;
+    const size = globalHandleToSize.get(handle) || 0x1000;
+    console.log(`[KERNEL16] GlobalSize(0x${handle.toString(16)}) → 0x${size.toString(16)} (${size})`);
+    return size;
   });
 
   // --- Ordinal 21: GlobalHandle(word) — 2 bytes (word) ---
   kernel.register('ord_21', 2, () => {
     const sel = emu.readArg16(0);
+    console.log(`[KERNEL16] GlobalHandle(0x${sel.toString(16)}) → DX:AX=0x${sel.toString(16)}:0x${sel.toString(16)}`);
     // Return handle in DX:AX — DX=handle, AX=handle
     emu.cpu.setReg16(2, sel);
     emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000) | sel;
@@ -361,7 +386,9 @@ export function registerWin16Kernel(emu: Emulator): void {
 
   // --- Ordinal 88: lstrcpy(lpDst, lpSrc) — 8 bytes (segptr+str) ---
   kernel.register('ord_88', 8, () => {
-    const [lpDst, lpSrc] = emu.readPascalArgs16([4, 4]);
+    const [lpDstRaw, lpSrcRaw] = emu.readPascalArgs16([4, 4]);
+    const lpDst = emu.resolveFarPtr(lpDstRaw);
+    const lpSrc = emu.resolveFarPtr(lpSrcRaw);
     if (lpDst && lpSrc) {
       let i = 0;
       while (true) {
@@ -372,15 +399,17 @@ export function registerWin16Kernel(emu: Emulator): void {
         if (i > 0xFFFF) break;
       }
     }
-    // Return far pointer to lpDst — in DX:AX
-    emu.cpu.setReg16(2, (lpDst >>> 16) & 0xFFFF); // DX
-    emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000) | (lpDst & 0xFFFF); // AX
-    return lpDst;
+    // Return original far pointer to lpDst — in DX:AX
+    emu.cpu.setReg16(2, (lpDstRaw >>> 16) & 0xFFFF); // DX = segment
+    emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000) | (lpDstRaw & 0xFFFF); // AX = offset
+    return lpDstRaw;
   });
 
   // --- Ordinal 89: lstrcat(lpDst, lpSrc) — 8 bytes (segstr+str) ---
   kernel.register('ord_89', 8, () => {
-    const [lpDst, lpSrc] = emu.readPascalArgs16([4, 4]);
+    const [lpDstRaw, lpSrcRaw] = emu.readPascalArgs16([4, 4]);
+    const lpDst = emu.resolveFarPtr(lpDstRaw);
+    const lpSrc = emu.resolveFarPtr(lpSrcRaw);
     if (lpDst && lpSrc) {
       let dstLen = 0;
       while (emu.memory.readU8(lpDst + dstLen) !== 0 && dstLen < 0xFFFF) dstLen++;
@@ -393,14 +422,14 @@ export function registerWin16Kernel(emu: Emulator): void {
         if (i > 0xFFFF) break;
       }
     }
-    emu.cpu.setReg16(2, (lpDst >>> 16) & 0xFFFF);
-    emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000) | (lpDst & 0xFFFF);
-    return lpDst;
+    emu.cpu.setReg16(2, (lpDstRaw >>> 16) & 0xFFFF);
+    emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000) | (lpDstRaw & 0xFFFF);
+    return lpDstRaw;
   });
 
   // --- Ordinal 90: lstrlen(lpString) — 4 bytes (str) ---
   kernel.register('ord_90', 4, () => {
-    const lpString = emu.readArg16DWord(0);
+    const lpString = emu.readArg16FarPtr(0);
     if (!lpString) return 0;
     let len = 0;
     while (emu.memory.readU8(lpString + len) !== 0 && len < 0xFFFF) len++;
@@ -639,7 +668,14 @@ export function registerWin16Kernel(emu: Emulator): void {
   kernel.register('ord_136', 2, () => 3); // DRIVE_FIXED
 
   // --- Ordinal 137: FatalAppExit(action, lpMsg) — 6 bytes (word+str) ---
-  kernel.register('ord_137', 6, () => { emu.halted = true; return 0; });
+  kernel.register('ord_137', 6, () => {
+    // FatalAppExit(uAction, lpMessageText)
+    const msg = emu.memory.readCString(emu.readArg16DWord(2));
+    console.error(`[KERNEL] FatalAppExit: "${msg}"`);
+    emu.haltReason = `FatalAppExit: ${msg}`;
+    emu.halted = true;
+    return 0;
+  });
 
   // --- Ordinal 138: GetHeapSpaces(word) — 2 bytes ---
   kernel.register('ord_138', 2, () => {

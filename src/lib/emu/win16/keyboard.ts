@@ -5,8 +5,8 @@ import type { Emulator } from '../emulator';
 export function registerWin16Keyboard(emu: Emulator): void {
   const keyboard = emu.registerModule16('KEYBOARD');
 
-  // Ordinal 6: AnsiToOem(lpAnsiStr:4, lpOemStr:4) — copy string as-is
-  keyboard.register('ord_6', 8, () => {
+  // Ordinal 5: AnsiToOem(lpAnsiStr:4, lpOemStr:4) — 8 bytes
+  keyboard.register('ord_5', 8, () => {
     const [lpAnsi, lpOem] = emu.readPascalArgs16([4, 4]);
     if (lpAnsi && lpOem) {
       let i = 0;
@@ -16,6 +16,56 @@ export function registerWin16Keyboard(emu: Emulator): void {
         if (ch === 0) break;
         i++;
         if (i > 260) break;
+      }
+    }
+    return 1;
+  });
+
+  // Ordinal 6: OemToAnsi(lpOemStr:4, lpAnsiStr:4) — 8 bytes
+  keyboard.register('ord_6', 8, () => {
+    const [lpOem, lpAnsi] = emu.readPascalArgs16([4, 4]);
+    if (lpOem && lpAnsi) {
+      let i = 0;
+      while (true) {
+        const ch = emu.memory.readU8(lpOem + i);
+        emu.memory.writeU8(lpAnsi + i, ch);
+        if (ch === 0) break;
+        i++;
+        if (i > 260) break;
+      }
+    }
+    return 1;
+  });
+
+  // Ordinal 129: VkKeyScan(ch) — 2 bytes
+  keyboard.register('ord_129', 2, () => {
+    const ch = emu.readArg16(0) & 0xFF;
+    // Return virtual key in low byte, shift state in high byte
+    if (ch >= 0x61 && ch <= 0x7A) return ch - 0x20; // a-z → A-Z vk
+    if (ch >= 0x41 && ch <= 0x5A) return ch | 0x0100; // A-Z → shift+vk
+    return ch;
+  });
+
+  // Ordinal 132: GetKBCodePage() — 0 bytes
+  keyboard.register('ord_132', 0, () => 437); // US code page
+
+  // Ordinal 134: AnsiToOemBuff(lpAnsiStr, lpOemStr, nLength) — 10 bytes (4+4+2)
+  keyboard.register('ord_134', 10, () => {
+    const [lpAnsi, lpOem, nLength] = emu.readPascalArgs16([4, 4, 2]);
+    if (lpAnsi && lpOem) {
+      for (let i = 0; i < nLength; i++) {
+        emu.memory.writeU8(lpOem + i, emu.memory.readU8(lpAnsi + i));
+      }
+    }
+    return 1;
+  });
+
+  // Ordinal 135: OemToAnsiBuff(lpOemStr, lpAnsiStr, nLength) — 10 bytes (4+4+2)
+  keyboard.register('ord_135', 10, () => {
+    const [lpOem, lpAnsi, nLength] = emu.readPascalArgs16([4, 4, 2]);
+    if (lpOem && lpAnsi) {
+      for (let i = 0; i < nLength; i++) {
+        emu.memory.writeU8(lpAnsi + i, emu.memory.readU8(lpOem + i));
       }
     }
     return 1;

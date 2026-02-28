@@ -209,7 +209,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const lpWndClass = h.readFarPtr(0);
     if (lpWndClass) {
       const style = emu.memory.readU16(lpWndClass);
-      const wndProc = emu.memory.readU32(lpWndClass + 2);
+      const wndProc = h.resolveFarPtr(emu.memory.readU32(lpWndClass + 2));
       const cbClsExtra = emu.memory.readU16(lpWndClass + 6);
       const cbWndExtra = emu.memory.readU16(lpWndClass + 8);
       const hInstance = emu.memory.readU16(lpWndClass + 10);
@@ -217,7 +217,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       const hCursor = emu.memory.readU16(lpWndClass + 14);
       const hbrBackground = emu.memory.readU16(lpWndClass + 16);
       const lpszMenuName = emu.memory.readU32(lpWndClass + 18);
-      const lpszClassName = emu.memory.readU32(lpWndClass + 22);
+      const lpszClassName = h.resolveFarPtr(emu.memory.readU32(lpWndClass + 22));
 
       const className = lpszClassName ? emu.memory.readCString(lpszClassName) : 'UNKNOWN';
       console.log(`[WIN16] RegisterClass "${className}" wndProc=0x${wndProc.toString(16)}`);

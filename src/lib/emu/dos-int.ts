@@ -74,6 +74,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     case 0x2A: // Network — not installed
       cpu.setReg8(EAX, 0); // AL=0 means not installed
       return true;
+    case 0x1A: return handleInt1A(cpu, emu);
     case 0x2F: return handleInt2F(cpu, emu);
     default:
       if (cpu.realMode) {
@@ -1449,6 +1450,45 @@ function buildDosLoL(cpu: CPU, emu: Emulator): void {
   mem.writeU16(lolPtr + 0x26, 0x8004);
 
   emu._dosLoLAddr = lolPtr;
+}
+
+/** INT 1Ah — BIOS time services */
+function handleInt1A(cpu: CPU, emu: Emulator): boolean {
+  const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
+  switch (ah) {
+    case 0x00: {
+      // Get system timer tick count (18.2 ticks/sec since midnight)
+      const ticks = emu.memory.readU32(0x46C);
+      cpu.setReg16(ECX, (ticks >>> 16) & 0xFFFF); // CX = high word
+      cpu.setReg16(EDX, ticks & 0xFFFF);           // DX = low word
+      cpu.setReg8(EAX, 0); // AL = midnight flag (0 = no midnight rollover)
+      return true;
+    }
+    case 0x02: {
+      // Get real-time clock time → CH=hours(BCD), CL=minutes(BCD), DH=seconds(BCD)
+      const now = new Date();
+      const toBCD = (n: number) => ((Math.floor(n / 10) << 4) | (n % 10)) & 0xFF;
+      cpu.setReg8(5, toBCD(now.getHours()));   // CH (idx 5)
+      cpu.setReg8(1, toBCD(now.getMinutes())); // CL (idx 1)
+      cpu.setReg8(6, toBCD(now.getSeconds())); // DH (idx 6)
+      cpu.reg[0] = cpu.reg[0] & ~CF;
+      return true;
+    }
+    case 0x04: {
+      // Get real-time clock date → CH=century(BCD), CL=year(BCD), DH=month(BCD), DL=day(BCD)
+      const now = new Date();
+      const toBCD = (n: number) => ((Math.floor(n / 10) << 4) | (n % 10)) & 0xFF;
+      const year = now.getFullYear();
+      cpu.setReg8(5, toBCD(Math.floor(year / 100))); // CH
+      cpu.setReg8(1, toBCD(year % 100));               // CL
+      cpu.setReg8(6, toBCD(now.getMonth() + 1));       // DH
+      cpu.setReg8(2, toBCD(now.getDate()));             // DL
+      cpu.reg[0] = cpu.reg[0] & ~CF;
+      return true;
+    }
+    default:
+      return true; // ignore unknown subfunctions
+  }
 }
 
 /** Sync video memory (B800:0000) to emu.consoleBuffer */

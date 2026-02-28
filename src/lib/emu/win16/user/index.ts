@@ -24,8 +24,11 @@ export type ReadFarPtr = (byteOffset: number) => number;
 export type ReadRect = (ptr: number) => { left: number; top: number; right: number; bottom: number };
 export type WriteRect = (ptr: number, left: number, top: number, right: number, bottom: number) => void;
 
+export type ResolveFarPtr = (raw: number) => number;
+
 export interface Win16UserHelpers {
   readFarPtr: ReadFarPtr;
+  resolveFarPtr: ResolveFarPtr;
   readRect: ReadRect;
   writeRect: WriteRect;
 }
@@ -33,7 +36,14 @@ export interface Win16UserHelpers {
 export function registerWin16User(emu: Emulator): void {
   const user = emu.registerModule16('USER');
 
-  const readFarPtr: ReadFarPtr = (byteOffset: number) => emu.readArg16DWord(byteOffset);
+  // Read a far pointer from the stack and convert segment:offset to linear address
+  const readFarPtr: ReadFarPtr = (byteOffset: number) => {
+    const raw = emu.readArg16DWord(byteOffset);
+    const off = raw & 0xFFFF;
+    const seg = (raw >>> 16) & 0xFFFF;
+    if (!seg) return off; // NULL or near pointer
+    return (emu.cpu.segBases.get(seg) ?? (seg * 16)) + off;
+  };
 
   const readRect: ReadRect = (ptr: number) => ({
     left: emu.memory.readI16(ptr),
@@ -49,7 +59,15 @@ export function registerWin16User(emu: Emulator): void {
     emu.memory.writeU16(ptr + 6, bottom & 0xFFFF);
   };
 
-  const helpers: Win16UserHelpers = { readFarPtr, readRect, writeRect };
+  // Resolve a raw far pointer (offset:segment packed as U32) to a linear address
+  const resolveFarPtr: ResolveFarPtr = (raw: number) => {
+    const off = raw & 0xFFFF;
+    const seg = (raw >>> 16) & 0xFFFF;
+    if (!seg) return off;
+    return (emu.cpu.segBases.get(seg) ?? (seg * 16)) + off;
+  };
+
+  const helpers: Win16UserHelpers = { readFarPtr, resolveFarPtr, readRect, writeRect };
 
   registerWin16UserWindow(emu, user, helpers);
   registerWin16UserMessage(emu, user, helpers);

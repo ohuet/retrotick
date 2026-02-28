@@ -256,13 +256,213 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 293: CallNextHookEx — 12 bytes
   user.register('ord_293', 12, () => 0);
 
-  // Ordinal 404: GetClassInfo — 10 bytes
-  user.register('ord_404', 10, () => 0);
+  // Ordinal 404: GetClassInfo(hInstance, className, lpWndClass) — 10 bytes (2+4+4)
+  user.register('ord_404', 10, () => {
+    const args = emu.readPascalArgs16([2, 4, 4]);
+    const hInstance = args[0];
+    const classNameRaw = args[1];
+    const classNamePtr = emu.resolveFarPtr(classNameRaw);
+    const lpWndClass = emu.resolveFarPtr(args[2]);
+    // className can be an atom (HIWORD=0, LOWORD<0xC000) or a far string pointer
+    const classNameHi = (classNameRaw >>> 16) & 0xFFFF;
+    let className = '';
+    if (classNameHi !== 0) {
+      className = emu.memory.readCString(classNamePtr);
+    } else if (classNameRaw === 0) {
+      className = '';
+    } else {
+      // It's an atom — look up in registered classes by scanning
+      const atom = classNameRaw & 0xFFFF;
+      for (const [name, cls] of emu.windowClasses) {
+        if ((cls as any).atom === atom) { className = name; break; }
+      }
+      if (!className) className = `ATOM_${atom}`;
+    }
+    const BUILTIN_CLASSES = ['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'MDICLIENT'];
+    const upperName = className.toUpperCase();
+    let cls = emu.windowClasses.get(upperName);
+    // For built-in system classes (hInstance=0 or any), return success
+    if (!cls && BUILTIN_CLASSES.includes(upperName)) {
+      cls = { className: upperName, wndProc: 0, style: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hbrBackground: 0, hIcon: 0, hCursor: 0 } as any;
+    }
+    console.log(`[WIN16] GetClassInfo("${className}") → ${cls ? 'found' : 'not found'}`);
+    if (cls && lpWndClass) {
+      // Write WNDCLASS16 struct: style(2), wndProc(4), cbClsExtra(2), cbWndExtra(2),
+      // hInstance(2), hIcon(2), hCursor(2), hbrBackground(2), lpszMenuName(4), lpszClassName(4)
+      emu.memory.writeU16(lpWndClass, cls.style || 0);
+      emu.memory.writeU32(lpWndClass + 2, cls.wndProc || 0);
+      emu.memory.writeU16(lpWndClass + 6, cls.cbClsExtra || 0);
+      emu.memory.writeU16(lpWndClass + 8, cls.cbWndExtra || 0);
+      emu.memory.writeU16(lpWndClass + 10, cls.hInstance || hInstance);
+      emu.memory.writeU16(lpWndClass + 12, cls.hIcon || 0);
+      emu.memory.writeU16(lpWndClass + 14, cls.hCursor || 0);
+      emu.memory.writeU16(lpWndClass + 16, cls.hbrBackground || 0);
+      emu.memory.writeU32(lpWndClass + 18, 0); // lpszMenuName
+      emu.memory.writeU32(lpWndClass + 22, 0); // lpszClassName
+      return 1;
+    }
+    return cls ? 1 : 0;
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Ordinal 420: wsprintf — varargs, tricky
+  // Ordinal 420: _wsprintf(lpOutput, lpFormat, ...) — varargs cdecl (stackBytes=0)
+  // Win16 wsprintf: args on stack are 16-bit words unless %l prefix → 32-bit
+  // %s → far pointer (32-bit), %d → 16-bit word, %ld → 32-bit long
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_420', 0, () => 0);
+  user.register('ord_420', 0, () => {
+    // Stack: [retaddr 4] [lpOutput 4] [lpFormat 4] [varargs...]
+    const lpOutput = emu.resolveFarPtr(emu.readArg16DWord(0));
+    const lpFormat = emu.resolveFarPtr(emu.readArg16DWord(4));
+    const fmt = emu.memory.readCString(lpFormat);
+
+    // Parse format string and read 16-bit varargs
+    let argOff = 8; // byte offset on stack after lpOutput + lpFormat
+    let result = '';
+    let fi = 0;
+    while (fi < fmt.length) {
+      if (fmt[fi] !== '%' || fi + 1 >= fmt.length) {
+        result += fmt[fi++];
+        continue;
+      }
+      fi++; // skip '%'
+
+      // Flags
+      let flagMinus = false, flagPlus = false, flagZero = false, flagSpace = false, flagHash = false;
+      for (;;) {
+        const ch = fmt[fi];
+        if (ch === '-') flagMinus = true;
+        else if (ch === '+') flagPlus = true;
+        else if (ch === '0') flagZero = true;
+        else if (ch === ' ') flagSpace = true;
+        else if (ch === '#') flagHash = true;
+        else break;
+        fi++;
+      }
+
+      // Width
+      let width = 0;
+      if (fmt[fi] === '*') {
+        width = emu.readArg16(argOff); argOff += 2;
+        fi++;
+      } else {
+        while (fi < fmt.length && fmt[fi] >= '0' && fmt[fi] <= '9') {
+          width = width * 10 + (fmt.charCodeAt(fi) - 48);
+          fi++;
+        }
+      }
+
+      // Precision
+      let precision = -1;
+      if (fi < fmt.length && fmt[fi] === '.') {
+        fi++; precision = 0;
+        if (fmt[fi] === '*') {
+          precision = emu.readArg16(argOff); argOff += 2;
+          fi++;
+        } else {
+          while (fi < fmt.length && fmt[fi] >= '0' && fmt[fi] <= '9') {
+            precision = precision * 10 + (fmt.charCodeAt(fi) - 48);
+            fi++;
+          }
+        }
+      }
+
+      // Length modifier
+      let isLong = false;
+      if (fi < fmt.length && fmt[fi] === 'l') { isLong = true; fi++; }
+      else if (fi < fmt.length && fmt[fi] === 'h') { fi++; }
+
+      if (fi >= fmt.length) break;
+      const spec = fmt[fi++];
+
+      if (spec === '%') { result += '%'; continue; }
+
+      let val = '';
+      let isNeg = false;
+
+      const read16 = (): number => { const v = emu.readArg16(argOff); argOff += 2; return v; };
+      const read32 = (): number => { const v = emu.readArg16DWord(argOff); argOff += 4; return v; };
+
+      switch (spec) {
+        case 'd': case 'i': {
+          if (isLong) {
+            const n = read32() | 0;
+            isNeg = n < 0;
+            val = Math.abs(n).toString();
+          } else {
+            const n = (read16() << 16) >> 16; // sign-extend 16-bit
+            isNeg = n < 0;
+            val = Math.abs(n).toString();
+          }
+          break;
+        }
+        case 'u': {
+          val = (isLong ? read32() >>> 0 : read16()).toString();
+          break;
+        }
+        case 'x': case 'X': {
+          const n = isLong ? read32() >>> 0 : read16();
+          val = n.toString(16);
+          if (spec === 'X') val = val.toUpperCase();
+          if (flagHash && n !== 0) val = (spec === 'X' ? '0X' : '0x') + val;
+          break;
+        }
+        case 'o': {
+          const n = isLong ? read32() >>> 0 : read16();
+          val = n.toString(8);
+          if (flagHash && val[0] !== '0') val = '0' + val;
+          break;
+        }
+        case 's': {
+          const ptr = emu.resolveFarPtr(read32()); // far pointer (32-bit)
+          val = ptr ? emu.memory.readCString(ptr) : '(null)';
+          if (precision >= 0 && val.length > precision) val = val.slice(0, precision);
+          break;
+        }
+        case 'c': {
+          val = String.fromCharCode(read16() & 0xFF);
+          break;
+        }
+        default:
+          result += '%' + spec;
+          continue;
+      }
+
+      // Numeric precision
+      if (precision >= 0 && 'diouxX'.includes(spec)) {
+        let prefix = '';
+        if (flagHash && (spec === 'x' || spec === 'X') && val.startsWith('0')) {
+          prefix = val.slice(0, 2); val = val.slice(2);
+        }
+        val = val.padStart(precision, '0');
+        val = prefix + val;
+        flagZero = false;
+      }
+
+      // Sign
+      let sign = '';
+      if (spec === 'd' || spec === 'i') {
+        if (isNeg) sign = '-';
+        else if (flagPlus) sign = '+';
+        else if (flagSpace) sign = ' ';
+      }
+
+      // Width padding
+      const totalLen = sign.length + val.length;
+      if (width > totalLen) {
+        const padLen = width - totalLen;
+        if (flagMinus) result += sign + val + ' '.repeat(padLen);
+        else if (flagZero) result += sign + '0'.repeat(padLen) + val;
+        else result += ' '.repeat(padLen) + sign + val;
+      } else {
+        result += sign + val;
+      }
+    }
+
+    // Write result to lpOutput
+    emu.memory.writeCString(lpOutput, result);
+    console.log(`[WIN16] wsprintf → "${result}"`);
+    return result.length;
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 430: lstrcmp(s1, s2) — 8 bytes (4+4)
@@ -352,6 +552,248 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     if (!clipboardFormatMap.has(key)) clipboardFormatMap.set(key, nextClipboardAtom++);
     return clipboardFormatMap.get(key)!;
   });
+
+  // Ordinal 17: GetCursorPos(lpPoint) — 4 bytes (ptr)
+  user.register('ord_17', 4, () => {
+    const lpPoint = emu.readArg16DWord(0);
+    if (lpPoint) {
+      emu.memory.writeU16(lpPoint, 0);     // x
+      emu.memory.writeU16(lpPoint + 2, 0); // y
+    }
+    return 1;
+  });
+
+  // Ordinal 21: GetDoubleClickTime() — 0 bytes
+  user.register('ord_21', 0, () => 500);
+
+  // Ordinal 23: GetFocus() — 0 bytes
+  user.register('ord_23', 0, () => emu.focusedWindow || 0);
+
+  // Ordinal 30: WindowFromPoint(pt) — 4 bytes (long = POINT packed)
+  user.register('ord_30', 4, () => emu.mainWindow || 0);
+
+  // Ordinal 35: IsWindowEnabled(hWnd) — 2 bytes
+  user.register('ord_35', 2, () => 1);
+
+  // Ordinal 36: GetWindowText(hWnd, lpString, nMaxCount) — 8 bytes (2+4+2)
+  user.register('ord_36', 8, () => {
+    const [hWnd, lpString, nMaxCount] = emu.readPascalArgs16([2, 4, 2]);
+    const win = emu.windows.get(hWnd);
+    const title = win?.title || '';
+    if (lpString && nMaxCount > 0) {
+      for (let i = 0; i < Math.min(title.length, nMaxCount - 1); i++) {
+        emu.memory.writeU8(lpString + i, title.charCodeAt(i) & 0xFF);
+      }
+      emu.memory.writeU8(lpString + Math.min(title.length, nMaxCount - 1), 0);
+    }
+    return title.length;
+  });
+
+  // Ordinal 60: GetActiveWindow() — 0 bytes
+  user.register('ord_60', 0, () => emu.mainWindow || 0);
+
+  // Ordinal 63: GetScrollPos(hWnd, nBar) — 4 bytes
+  user.register('ord_63', 4, () => 0);
+
+  // Ordinal 75: IsRectEmpty(lpRect) — 4 bytes (ptr)
+  user.register('ord_75', 4, () => {
+    const lpRect = emu.readArg16DWord(0);
+    if (!lpRect) return 1;
+    const l = emu.memory.readI16(lpRect);
+    const t = emu.memory.readI16(lpRect + 2);
+    const r = emu.memory.readI16(lpRect + 4);
+    const b = emu.memory.readI16(lpRect + 6);
+    return (l >= r || t >= b) ? 1 : 0;
+  });
+
+  // Ordinal 89: CreateDialog(hInst, lpTemplate, hWndParent, lpDialogFunc) — 12 bytes (2+4+2+4)
+  user.register('ord_89', 12, () => 0); // stub: return NULL
+
+  // Ordinal 112: WaitMessage() — 0 bytes
+  user.register('ord_112', 0, () => { emu.waitingForMessage = true; return undefined; });
+
+  // Ordinal 121: SetWindowsHook(nFilterType, pfnFilterProc) — 6 bytes (2+4)
+  user.register('ord_121', 6, () => 0);
+
+  // Ordinal 122: CallWindowProc(lpPrevWndFunc, hWnd, Msg, wParam, lParam) — 14 bytes (4+2+2+2+4)
+  user.register('ord_122', 14, () => 0);
+
+  // Ordinal 129: GetClassWord(hWnd, nIndex) — 4 bytes (2+2)
+  user.register('ord_129', 4, () => 0);
+
+  // Ordinal 131: GetClassLong(hWnd, nIndex) — 4 bytes (2+2)
+  user.register('ord_131', 4, () => 0);
+
+  // Ordinal 134: SetWindowWord(hWnd, nIndex, wNewWord) — 6 bytes (2+2+2)
+  user.register('ord_134', 6, () => 0);
+
+  // Ordinal 137: OpenClipboard(hWnd) — 2 bytes
+  user.register('ord_137', 2, () => 1);
+
+  // Ordinal 138: CloseClipboard() — 0 bytes
+  user.register('ord_138', 0, () => 1);
+
+  // Ordinal 139: EmptyClipboard() — 0 bytes
+  user.register('ord_139', 0, () => 1);
+
+  // Ordinal 141: SetClipboardData(uFormat, hMem) — 4 bytes
+  user.register('ord_141', 4, () => emu.readArg16(2)); // return handle
+
+  // Ordinal 142: GetClipboardData(uFormat) — 2 bytes
+  user.register('ord_142', 2, () => 0);
+
+  // Ordinal 152: DestroyMenu(hMenu) — 2 bytes
+  user.register('ord_152', 2, () => 1);
+
+  // Ordinal 156: GetSystemMenu(hWnd, bRevert) — 4 bytes
+  user.register('ord_156', 4, () => 0);
+
+  // Ordinal 161: GetMenuString(hMenu, uIDItem, lpString, nMaxCount, uFlag) — 12 bytes (2+2+4+2+2)
+  user.register('ord_161', 12, () => 0);
+
+  // Ordinal 165: SetCaretPos(x, y) — 4 bytes
+  user.register('ord_165', 4, () => 0);
+
+  // Ordinal 183: GetCaretPos(lpPoint) — 4 bytes (ptr)
+  user.register('ord_183', 4, () => {
+    const lpPoint = emu.readArg16DWord(0);
+    if (lpPoint) {
+      emu.memory.writeU16(lpPoint, 0);
+      emu.memory.writeU16(lpPoint + 2, 0);
+    }
+    return 0;
+  });
+
+  // Ordinal 187: EndMenu() — 0 bytes
+  user.register('ord_187', 0, () => 0);
+
+  // Ordinal 193: InSendMessage() — 0 bytes
+  user.register('ord_193', 0, () => 0);
+
+  // Ordinal 196: TabbedTextOut(hDC, x, y, lpStr, nCount, nTabPositions, lpnTabStopPositions, nTabOrigin) — 20 bytes
+  user.register('ord_196', 20, () => 0);
+
+  // Ordinal 197: GetTabbedTextExtent(hDC, lpStr, nCount, nTabPositions, lpnTabStopPositions) — 14 bytes (2+4+2+2+4)
+  user.register('ord_197', 14, () => 0);
+
+  // Ordinal 222: GetKeyboardState(lpKeyState) — 4 bytes
+  user.register('ord_222', 4, () => 0);
+
+  // Ordinal 223: SetKeyboardState(lpKeyState) — 4 bytes
+  user.register('ord_223', 4, () => 0);
+
+  // Ordinal 224: GetWindowTask(hWnd) — 2 bytes
+  user.register('ord_224', 2, () => 1); // return a pseudo task handle
+
+  // Ordinal 237: GetUpdateRgn(hWnd, hRgn, bErase) — 6 bytes
+  user.register('ord_237', 6, () => 1); // NULLREGION
+
+  // Ordinal 250: GetMenuState(hMenu, uId, uFlags) — 6 bytes
+  user.register('ord_250', 6, () => 0xFFFFFFFF); // -1 = menu item doesn't exist
+
+  // Ordinal 264: GetMenuItemID(hMenu, nPos) — 4 bytes
+  user.register('ord_264', 4, () => 0xFFFF); // -1
+
+  // Ordinal 272: IsZoomed(hWnd) — 2 bytes
+  user.register('ord_272', 2, () => 0);
+
+  // Ordinal 282: SelectPalette(hDC, hPal, bForceBackground) — 6 bytes
+  user.register('ord_282', 6, () => 0);
+
+  // Ordinal 283: RealizePalette(hDC) — 2 bytes
+  user.register('ord_283', 2, () => 0);
+
+  // Ordinal 407: CreateIcon(hInst, nWidth, nHeight, nPlanes, nBitsPixel, lpANDbits, lpXORbits) — 18 bytes (2+2+2+2+2+4+4)
+  user.register('ord_407', 18, () => 0);
+
+  // Ordinal 414: ModifyMenu(hMenu, uPosition, uFlags, uIDNewItem, lpNewItem) — 12 bytes (2+2+2+2+4)
+  user.register('ord_414', 12, () => 1);
+
+  // Ordinal 416: TrackPopupMenu(hMenu, uFlags, x, y, nReserved, hWnd, lpRect) — 18 bytes (2+2+2+2+2+2+4)
+  user.register('ord_416', 18, () => 0);
+
+  // Ordinal 432: AnsiLower(lpStr) — 4 bytes (segstr)
+  user.register('ord_432', 4, () => {
+    const lpStr = emu.readArg16DWord(0);
+    if ((lpStr & 0xFFFF0000) === 0) {
+      const ch = lpStr & 0xFF;
+      return (ch >= 0x41 && ch <= 0x5A) ? ch + 0x20 : ch;
+    }
+    let i = 0;
+    while (true) {
+      const ch = emu.memory.readU8(lpStr + i);
+      if (ch === 0) break;
+      if (ch >= 0x41 && ch <= 0x5A) emu.memory.writeU8(lpStr + i, ch + 0x20);
+      i++;
+    }
+    return lpStr;
+  });
+
+  // Ordinal 433: IsCharAlpha(ch) — 2 bytes
+  user.register('ord_433', 2, () => {
+    const ch = emu.readArg16(0) & 0xFF;
+    return ((ch >= 0x41 && ch <= 0x5A) || (ch >= 0x61 && ch <= 0x7A)) ? 1 : 0;
+  });
+
+  // Ordinal 434: IsCharAlphaNumeric(ch) — 2 bytes
+  user.register('ord_434', 2, () => {
+    const ch = emu.readArg16(0) & 0xFF;
+    return ((ch >= 0x30 && ch <= 0x39) || (ch >= 0x41 && ch <= 0x5A) || (ch >= 0x61 && ch <= 0x7A)) ? 1 : 0;
+  });
+
+  // Ordinal 437: AnsiUpperBuff(lpStr, uLength) — 6 bytes (4+2)
+  user.register('ord_437', 6, () => {
+    const [lpStr, uLength] = emu.readPascalArgs16([4, 2]);
+    if (lpStr) {
+      for (let i = 0; i < uLength; i++) {
+        const ch = emu.memory.readU8(lpStr + i);
+        if (ch >= 0x61 && ch <= 0x7A) emu.memory.writeU8(lpStr + i, ch - 0x20);
+      }
+    }
+    return uLength;
+  });
+
+  // Ordinal 438: AnsiLowerBuff(lpStr, uLength) — 6 bytes (4+2)
+  user.register('ord_438', 6, () => {
+    const [lpStr, uLength] = emu.readPascalArgs16([4, 2]);
+    if (lpStr) {
+      for (let i = 0; i < uLength; i++) {
+        const ch = emu.memory.readU8(lpStr + i);
+        if (ch >= 0x41 && ch <= 0x5A) emu.memory.writeU8(lpStr + i, ch + 0x20);
+      }
+    }
+    return uLength;
+  });
+
+  // Ordinal 445: DefFrameProc(hWnd, hWndMDIClient, uMsg, wParam, lParam) — 12 bytes (2+2+2+2+4)
+  user.register('ord_445', 12, () => 0);
+
+  // Ordinal 447: DefMDIChildProc(hWnd, uMsg, wParam, lParam) — 10 bytes (2+2+2+4)
+  user.register('ord_447', 10, () => 0);
+
+  // Ordinal 451: TranslateMDISysAccel(hWndClient, lpMsg) — 6 bytes (2+4)
+  user.register('ord_451', 6, () => 0);
+
+  // Ordinal 458: DestroyCursor(hCursor) — 2 bytes
+  user.register('ord_458', 2, () => 1);
+
+  // Ordinal 466: DragDetect(hWnd, pt) — 6 bytes (2+4)
+  user.register('ord_466', 6, () => 0);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Ordinal 116: PostAppMessage(hTask, msg, wParam, lParam) — 10 bytes (2+2+2+4)
+  // ───────────────────────────────────────────────────────────────────────────
+  user.register('ord_116', 10, () => 1); // stub: always succeed
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Ordinal 241: CreateDialogParam(hInst, lpTemplate, hWndParent, dlgFunc, dwInitParam) — 14 bytes
+  // ───────────────────────────────────────────────────────────────────────────
+  user.register('ord_241', 14, () => 0); // stub: return NULL (dialog not created)
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Ordinal 308: DefDlgProc(hDlg, msg, wParam, lParam) — 10 bytes (2+2+2+4)
+  // ───────────────────────────────────────────────────────────────────────────
+  user.register('ord_308', 10, () => 0); // stub: return 0
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 608: GetForegroundWindow() — 0 bytes

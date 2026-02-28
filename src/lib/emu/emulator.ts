@@ -518,6 +518,12 @@ export class Emulator {
   localHeapPtr = 0;   // current allocation pointer
   localHeapEnd = 0;   // linear address of local heap end
 
+  // Per-segment local heaps (selector → {ptr, end})
+  segLocalHeaps = new Map<number, { ptr: number; end: number }>();
+
+  // NE DLL resources (for LoadBitmap etc. to search across DLLs)
+  neDllResources: Array<{ resources: import('./ne-loader').NEResourceEntry[]; arrayBuffer: ArrayBuffer }> = [];
+
   // Virtual allocator
   virtualBase = 0;
   virtualPtr = 0;
@@ -825,6 +831,26 @@ export class Emulator {
   allocLocal(size: number): number {
     if (size === 0) size = 1;
     const aligned = (size + 3) & ~3;
+
+    // Check if current DS has a per-segment local heap
+    const ds = this.cpu.ds;
+    const segHeap = this.segLocalHeaps.get(ds);
+    if (segHeap) {
+      let addr = segHeap.ptr;
+      if (addr + aligned > segHeap.end) {
+        // Expand heap end within the 64KB segment space
+        const segBase = this.cpu.segBases.get(ds) ?? 0;
+        if ((addr + aligned - segBase) > 0x10000) return 0;
+        segHeap.end = addr + aligned;
+      }
+      segHeap.ptr += aligned;
+      for (let i = 0; i < aligned; i++) this.memory.writeU8(addr + i, 0);
+      // Return offset within segment (not low 16 bits of linear address)
+      const segBase = this.cpu.segBases.get(ds) ?? 0;
+      return (addr - segBase) & 0xFFFF;
+    }
+
+    // Fall back to default DGROUP local heap
     const addr = this.localHeapPtr;
     if (addr + aligned > this.localHeapEnd) return 0; // out of memory
     this.localHeapPtr += aligned;
@@ -841,6 +867,17 @@ export class Emulator {
     for (let i = 0; i < aligned; i++) this.memory.writeU8(addr + i, 0);
     this.heapAllocSizes.set(addr, size);
     return addr;
+  }
+
+  /** Allocate on a 64KB-aligned boundary so the full 64KB segment is usable for local heap */
+  allocHeap64K(size: number): number {
+    if (size === 0) size = 1;
+    // Align heapPtr up to 64KB boundary
+    const aligned64K = (this.heapPtr + 0xFFFF) & ~0xFFFF;
+    this.heapPtr = aligned64K + Math.max(size, 0x10000);
+    for (let i = 0; i < size; i++) this.memory.writeU8(aligned64K + i, 0);
+    this.heapAllocSizes.set(aligned64K, size);
+    return aligned64K;
   }
 
   reallocHeap(oldAddr: number, newSize: number): number {
@@ -891,6 +928,19 @@ export class Emulator {
     const base = this.cpu.segBase(this.cpu.ss);
     const sp = this.cpu.reg[4] & 0xFFFF;
     return this.memory.readU32((base + sp + 4 + byteOffset) >>> 0);
+  }
+
+  /** Resolve a raw far pointer (offset:segment packed as U32) to a linear address */
+  resolveFarPtr(raw: number): number {
+    const off = raw & 0xFFFF;
+    const seg = (raw >>> 16) & 0xFFFF;
+    if (!seg) return off;
+    return (this.cpu.segBases.get(seg) ?? (seg * 16)) + off;
+  }
+
+  /** Read a far pointer arg from the 16-bit stack and resolve to linear address */
+  readArg16FarPtr(byteOffset: number): number {
+    return this.resolveFarPtr(this.readArg16DWord(byteOffset));
   }
 
   readPascalArgs16(sizes: number[]): number[] {
