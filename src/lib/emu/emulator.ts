@@ -578,7 +578,7 @@ export class Emulator {
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
 
   _childProcessWaiting = false;
-  _childProcessResume: { stackBytes: number; completer: (emu: Emulator, stackBytes: number, retVal: number) => void } | null = null;
+  _childProcessResume: { stackBytes: number; retVal: number; completer: (emu: Emulator, stackBytes: number, retVal: number) => void } | null = null;
   /** Callback to show browser file picker (open/save). Returns file info or null if cancelled. */
   onFileDialog?: (type: 'open' | 'save', filter?: string, title?: string) => Promise<{ name: string; data: ArrayBuffer } | null>;
   menuItems?: import('../pe/types').MenuItem[];

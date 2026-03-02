@@ -80,7 +80,7 @@ export function registerSync(emu: Emulator): void {
       // Block: save resume info and wait for child to exit
       const stackBytes = emu._currentThunkStackBytes;
       emu._childProcessWaiting = true;
-      emu._childProcessResume = { stackBytes, completer: emuCompleteThunk };
+      emu._childProcessResume = { stackBytes, retVal: WAIT_OBJECT_0, completer: emuCompleteThunk };
       emu.waitingForMessage = true;
       return undefined;
     }

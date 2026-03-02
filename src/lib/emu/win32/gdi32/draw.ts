@@ -66,22 +66,67 @@ export function registerDraw(emu: Emulator): void {
     const dc = emu.getDC(hdc);
     if (!dc) return 0;
 
-    const R2_NOT = 6;
     const pen = emu.getPen(dc.selectedPen);
-    const useXor = dc.rop2 === R2_NOT;
-    if (useXor) {
-      // Pixel-exact NOT: Bresenham line with direct pixel inversion
+    const rop2 = dc.rop2;
+    // R2_NOP (11) = no drawing; R2_COPYPEN (13) = normal; PS_NULL = invisible pen
+    const R2_NOP = 11, R2_COPYPEN = 13, R2_WHITE = 16, R2_BLACK = 1;
+    if (rop2 === R2_NOP) {
+      // do nothing
+    } else if (rop2 === R2_WHITE) {
+      dc.ctx.fillStyle = '#ffffff';
+      bresenhamLine(dc.ctx, dc.penPosX, dc.penPosY, x, y);
+    } else if (rop2 === R2_BLACK) {
+      dc.ctx.fillStyle = '#000000';
+      bresenhamLine(dc.ctx, dc.penPosX, dc.penPosY, x, y);
+    } else if (rop2 === R2_COPYPEN) {
+      // Normal pen drawing
+      if (pen && pen.style !== PS_NULL) {
+        if (isPaletteIndex(pen.color)) {
+          const pal = emu.handles.get<PaletteInfo>(dc.selectedPalette);
+          const [r, g, b] = resolveColor(pen.color, pal);
+          dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
+          const cw = dc.canvas.width || 1;
+          const ch = dc.canvas.height || 1;
+          const palBuf = ensurePalIndexBuf(dc);
+          const palIdx = getPaletteIdx(pen.color);
+          bresenhamLinePal(dc.ctx, dc.penPosX, dc.penPosY, x, y, palBuf, cw, ch, palIdx + 1);
+        } else {
+          dc.ctx.fillStyle = colorToCSS(pen.color);
+          bresenhamLine(dc.ctx, dc.penPosX, dc.penPosY, x, y);
+        }
+      }
+    } else {
+      // All other ROP2 modes need per-pixel dst read
+      let pr = 0, pg = 0, pb = 0;
+      if (pen) { pr = pen.color & 0xFF; pg = (pen.color >> 8) & 0xFF; pb = (pen.color >> 16) & 0xFF; }
+      const cw = dc.canvas.width || 1, ch = dc.canvas.height || 1;
+      const imgData = dc.ctx.getImageData(0, 0, cw, ch);
+      const d = imgData.data;
       let x0 = dc.penPosX, y0 = dc.penPosY, x1 = x, y1 = y;
       const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
       const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
       let err = dx - dy;
-      const cw = dc.canvas.width || 1, ch = dc.canvas.height || 1;
-      const imgData = dc.ctx.getImageData(0, 0, cw, ch);
-      const d = imgData.data;
       while (true) {
         if (x0 >= 0 && x0 < cw && y0 >= 0 && y0 < ch) {
           const off = (y0 * cw + x0) * 4;
-          d[off] = 255 - d[off]; d[off+1] = 255 - d[off+1]; d[off+2] = 255 - d[off+2];
+          const dr = d[off], dg = d[off+1], db = d[off+2];
+          let rr: number, rg: number, rb: number;
+          switch (rop2) {
+            case 2:  rr = ~(dr|pr)&0xFF; rg = ~(dg|pg)&0xFF; rb = ~(db|pb)&0xFF; break; // R2_NOTMERGEPEN
+            case 3:  rr = dr&(~pr&0xFF); rg = dg&(~pg&0xFF); rb = db&(~pb&0xFF); break; // R2_MASKNOTPEN
+            case 4:  rr = ~pr&0xFF;      rg = ~pg&0xFF;      rb = ~pb&0xFF;      break; // R2_NOTCOPYPEN
+            case 5:  rr = pr&(~dr&0xFF); rg = pg&(~dg&0xFF); rb = pb&(~db&0xFF); break; // R2_MASKPENNOT
+            case 6:  rr = ~dr&0xFF;      rg = ~dg&0xFF;      rb = ~db&0xFF;      break; // R2_NOT
+            case 7:  rr = dr^pr;         rg = dg^pg;         rb = db^pb;         break; // R2_XORPEN
+            case 8:  rr = ~(dr&pr)&0xFF; rg = ~(dg&pg)&0xFF; rb = ~(db&pb)&0xFF; break; // R2_NOTMASKPEN
+            case 9:  rr = dr&pr;         rg = dg&pg;         rb = db&pb;         break; // R2_MASKPEN
+            case 10: rr = ~(dr^pr)&0xFF; rg = ~(dg^pg)&0xFF; rb = ~(db^pb)&0xFF; break; // R2_NOTXORPEN
+            case 12: rr = dr|(~pr&0xFF); rg = dg|(~pg&0xFF); rb = db|(~pb&0xFF); break; // R2_MERGENOTPEN
+            case 14: rr = pr|(~dr&0xFF); rg = pg|(~dg&0xFF); rb = pb|(~db&0xFF); break; // R2_MERGEPENNOT
+            case 15: rr = dr|pr;         rg = dg|pg;         rb = db|pb;         break; // R2_MERGEPEN
+            default: rr = pr; rg = pg; rb = pb; break;
+          }
+          d[off] = rr; d[off+1] = rg; d[off+2] = rb;
         }
         if (x0 === x1 && y0 === y1) break;
         const e2 = 2 * err;
@@ -89,20 +134,6 @@ export function registerDraw(emu: Emulator): void {
         if (e2 < dx) { err += dx; y0 += sy; }
       }
       dc.ctx.putImageData(imgData, 0, 0);
-    } else if (pen && pen.style !== PS_NULL) {
-      if (isPaletteIndex(pen.color)) {
-        const pal = emu.handles.get<PaletteInfo>(dc.selectedPalette);
-        const [r, g, b] = resolveColor(pen.color, pal);
-        dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
-        const cw = dc.canvas.width || 1;
-        const ch = dc.canvas.height || 1;
-        const palBuf = ensurePalIndexBuf(dc);
-        const palIdx = getPaletteIdx(pen.color);
-        bresenhamLinePal(dc.ctx, dc.penPosX, dc.penPosY, x, y, palBuf, cw, ch, palIdx + 1);
-      } else {
-        dc.ctx.fillStyle = colorToCSS(pen.color);
-        bresenhamLine(dc.ctx, dc.penPosX, dc.penPosY, x, y);
-      }
     }
     dc.penPosX = x;
     dc.penPosY = y;

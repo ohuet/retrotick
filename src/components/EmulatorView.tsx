@@ -1566,11 +1566,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
           // Resume parent if it was waiting on WaitForSingleObject
           if (emu._childProcessWaiting && emu._childProcessResume) {
-            const { stackBytes, completer } = emu._childProcessResume;
+            const { stackBytes, retVal, completer } = emu._childProcessResume;
             emu._childProcessWaiting = false;
             emu._childProcessResume = null;
             emu.waitingForMessage = false;
-            completer(emu, stackBytes, 0 /* WAIT_OBJECT_0 */);
+            completer(emu, stackBytes, retVal);
             if (emu.running && !emu.halted) {
               requestAnimationFrame(emu.tick);
             }
