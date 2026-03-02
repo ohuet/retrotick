@@ -108,7 +108,20 @@ export function registerSync(emu: Emulator): void {
     return WAIT_TIMEOUT;
   });
 
-  kernel32.register('Sleep', 1, () => 0);
+  kernel32.register('Sleep', 1, () => {
+    const dwMilliseconds = emu.readArg(0);
+    if (dwMilliseconds === 0) return 0; // yield — return immediately
+    const stackBytes = emu._currentThunkStackBytes;
+    emu.waitingForMessage = true;
+    setTimeout(() => {
+      emu.waitingForMessage = false;
+      emuCompleteThunk(emu, 0, stackBytes);
+      if (emu.running && !emu.halted) {
+        requestAnimationFrame(emu.tick);
+      }
+    }, dwMilliseconds);
+    return undefined;
+  });
 
   // Mutex stubs
   kernel32.register('CreateMutexA', 3, () => emu.handles.alloc('mutex', {}));
