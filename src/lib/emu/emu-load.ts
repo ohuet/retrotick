@@ -238,7 +238,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.localHeapEnd = emu.localHeapBase + heapMax;
 
     // Load NE DLLs referenced by the main exe (before setting heap base)
-    loadNEDlls(emu);
+    const neDllEntries = loadNEDlls(emu);
 
     // Global heap/virtual allocator after all NE segments (exe + DLLs)
     // nextSelector * 0x10000 is the next linear address after all segments
@@ -283,6 +283,43 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.cpu.push16(HALT_ADDR - (emu.ne.selectorToBase.get(HALT_SELECTOR) ?? 0));
 
     rebuildThunkPages(emu);
+
+    // Call NE DLL entry points (LibEntry → LibMain) to initialize DLLs
+    // The standard LIBENTRY stub expects: CX=heapSize, DI=hInstance(=dataSegSelector),
+    // DS=autoDataSeg, ES:SI=cmdLine. It calls LocalInit then LibMain.
+    for (const dllEntry of neDllEntries) {
+      console.log(`[NE DLL] Calling entry point for ${dllEntry.name} at 0x${dllEntry.entryPoint.toString(16)}`);
+      const savedEIP = emu.cpu.eip;
+      const savedCS = emu.cpu.cs;
+      const savedDS = emu.cpu.ds;
+      const savedES = emu.cpu.es;
+      const savedECX = emu.cpu.reg[1];
+      const savedEDI = emu.cpu.reg[7];
+      const savedESI = emu.cpu.reg[6];
+
+      // Set up registers expected by LIBENTRY
+      emu.cpu.ds = dllEntry.dataSegSelector;
+      emu.cpu.es = emu.ne.dataSegSelector; // ES:SI = command line (just point somewhere safe)
+      emu.cpu.reg[1] = (emu.cpu.reg[1] & 0xFFFF0000) | (dllEntry.heapSize & 0xFFFF); // CX = heapSize
+      emu.cpu.reg[7] = (emu.cpu.reg[7] & 0xFFFF0000) | (dllEntry.dataSegSelector & 0xFFFF); // DI = hInstance
+      emu.cpu.reg[6] = (emu.cpu.reg[6] & 0xFFFF0000) | 0; // SI = 0 (cmdline offset)
+
+      // Temporarily override DS restoration in callWndProc16
+      const origDataSel = emu.ne.dataSegSelector;
+      emu.ne.dataSegSelector = dllEntry.dataSegSelector;
+      const result = emu.callWndProc16(dllEntry.entryPoint, 0, 0, 0, 0);
+      emu.ne.dataSegSelector = origDataSel;
+      console.log(`[NE DLL] ${dllEntry.name} entry returned ${result}`);
+
+      // Restore all CPU state
+      emu.cpu.eip = savedEIP;
+      emu.cpu.cs = savedCS;
+      emu.cpu.ds = savedDS;
+      emu.cpu.es = savedES;
+      emu.cpu.reg[1] = savedECX;
+      emu.cpu.reg[7] = savedEDI;
+      emu.cpu.reg[6] = savedESI;
+    }
 
     // Create a dummy thread for NE apps so thread-delegated getters/setters work
     const mainThread = new Thread(emu.nextThreadId++, Thread.createInitialState(emu.cpu));
@@ -623,13 +660,22 @@ function findCPlAppletExport(emu: Emulator, arrayBuffer: ArrayBuffer): number | 
   return null;
 }
 
-/** Load NE DLLs referenced by the main NE exe. */
-function loadNEDlls(emu: Emulator): void {
-  if (!emu.ne) return;
+interface NEDllEntry {
+  name: string;
+  entryPoint: number;
+  dataSegSelector: number;
+  codeSegSelector: number;
+  heapSize: number;
+}
+
+/** Load NE DLLs referenced by the main NE exe. Returns DLL entry points to call. */
+function loadNEDlls(emu: Emulator): NEDllEntry[] {
+  if (!emu.ne) return [];
 
   const ne = emu.ne;
   let nextSelector = ne.nextSelector;
   let thunkAddr = ne.thunkAddrEnd;
+  const dllEntries: NEDllEntry[] = [];
 
   // Built-in modules handled by JS stubs — don't try to load these as DLLs
   const builtinModules = new Set([
@@ -693,6 +739,17 @@ function loadNEDlls(emu: Emulator): void {
 
     console.log(`[NE DLL] ${modName}: ${dll.segments.length} segments, ${dll.entryPoints.size} exports, ${dll.apiMap.size} imports`);
 
+    // Collect DLL entry point for calling LibMain/LibEntry later
+    if (dll.entryPoint) {
+      dllEntries.push({
+        name: modName,
+        entryPoint: dll.entryPoint,
+        dataSegSelector: dll.dataSegSelector,
+        codeSegSelector: dll.codeSegSelector,
+        heapSize: dll.heapSize,
+      });
+    }
+
     // Recursively load DLLs that this DLL imports (if any non-builtin)
     for (const subMod of dll.moduleNames) {
       if (!builtinModules.has(subMod) && !loadedDlls.has(subMod)) {
@@ -754,6 +811,8 @@ function loadNEDlls(emu: Emulator): void {
   // Update the ne object with new state
   ne.thunkAddrEnd = thunkAddr;
   ne.nextSelector = nextSelector;
+
+  return dllEntries;
 }
 
 /** Rebuild the thunk page set from current thunkToApi entries. */

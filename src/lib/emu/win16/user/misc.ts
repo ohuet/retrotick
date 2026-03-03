@@ -45,6 +45,8 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('ord_10', 10, () => {
     const [hWnd, nIDEvent, uElapse, lpTimerFunc] = emu.readPascalArgs16([2, 2, 2, 4]);
     console.log(`[WIN16] SetTimer hwnd=0x${hWnd.toString(16)} id=${nIDEvent} elapse=${uElapse} timerFunc=0x${lpTimerFunc.toString(16)}`);
+    // Clear existing timer with same ID
+    emu.clearWin32Timer(hWnd, nIDEvent);
     const jsTimer = setInterval(() => {
       emu.postMessage(hWnd, 0x0113, nIDEvent, lpTimerFunc);
     }, uElapse);
@@ -53,7 +55,11 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   });
 
   // Ordinal 12: KillTimer(hWnd, nIDEvent) — 4 bytes
-  user.register('ord_12', 4, () => 1);
+  user.register('ord_12', 4, () => {
+    const [hWnd, nIDEvent] = emu.readPascalArgs16([2, 2]);
+    emu.clearWin32Timer(hWnd, nIDEvent);
+    return 1;
+  });
 
   // Ordinal 13: GetTickCount() — 0 bytes
   user.register('ord_13', 0, () => Date.now() & 0xFFFFFFFF);
@@ -124,7 +130,20 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   });
 
   // Ordinal 69: SetCursor(hCursor) — 2 bytes
-  user.register('ord_69', 2, () => 1);
+  user.register('ord_69', 2, () => {
+    const hCursor = emu.readArg16(0);
+    const prev = emu.currentCursor;
+    emu.currentCursor = hCursor;
+    const cursorInfo = emu.handles.get<{ css?: string }>(hCursor);
+    if (emu.canvas) {
+      const css = cursorInfo?.css || 'default';
+      emu.canvas.style.cursor = css;
+      if (emu.canvas.parentElement) {
+        emu.canvas.parentElement.style.cursor = css;
+      }
+    }
+    return prev;
+  });
 
   // Ordinal 70: SetCursorPos(x, y) — 4 bytes
   user.register('ord_70', 4, () => 0);

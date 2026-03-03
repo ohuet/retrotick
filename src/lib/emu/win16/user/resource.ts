@@ -7,7 +7,30 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 173: LoadCursor(hInstance, lpCursorName_ptr) — 6 bytes (2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_173', 6, () => 1);
+  const idcToCss: Record<number, string> = {
+    32512: 'default',      // IDC_ARROW
+    32513: 'text',          // IDC_IBEAM
+    32514: 'wait',          // IDC_WAIT
+    32515: 'crosshair',     // IDC_CROSS
+    32516: 'n-resize',      // IDC_UPARROW
+    32642: 'nwse-resize',   // IDC_SIZENWSE
+    32643: 'nesw-resize',   // IDC_SIZENESW
+    32644: 'ew-resize',     // IDC_SIZEWE
+    32645: 'ns-resize',     // IDC_SIZENS
+    32646: 'move',          // IDC_SIZEALL
+    32648: 'not-allowed',   // IDC_NO
+    32649: 'pointer',       // IDC_HAND
+    32650: 'progress',      // IDC_APPSTARTING
+    32651: 'help',          // IDC_HELP
+  };
+  user.register('ord_173', 6, () => {
+    const [hInstance, lpCursorName] = emu.readPascalArgs16([2, 4]);
+    let css = 'default';
+    if (hInstance === 0 && lpCursorName < 0x10000) {
+      css = idcToCss[lpCursorName] || 'default';
+    }
+    return emu.handles.alloc('cursor', { css });
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 174: LoadIcon(hInstance, lpIconName_ptr) — 6 bytes (2+4)
