@@ -1,425 +1,15 @@
-import type { CPU } from './x86/cpu';
-import type { Emulator } from './emulator';
-import type { DirEntry, OpenFile } from './file-manager';
+import type { CPU } from '../x86/cpu';
+import type { Emulator } from '../emulator';
+import type { DirEntry, OpenFile } from '../file-manager';
+import { dosResolvePath } from './path';
+import { teletypeOutput } from './video';
 
-const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
+const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
 const CF = 0x001;
 const ZF = 0x040;
 
-// Video memory base (B800:0000 in real mode)
-const VIDEO_MEM_BASE = 0xB8000;
-const SCREEN_COLS = 80;
-const SCREEN_ROWS = 25;
-
-/** Resolve a DOS path using per-process current drive/directory. */
-function dosResolvePath(emu: Emulator, input: string): string {
-  let p = input.replace(/\//g, '\\');
-  p = p.replace(/(?!^)\\\\+/g, '\\');
-  let resolved: string;
-  if (/^[A-Za-z]:\\/.test(p)) {
-    resolved = p;
-  } else if (/^[A-Za-z]:$/.test(p)) {
-    const drive = p[0].toUpperCase();
-    resolved = emu.currentDirs.get(drive) || (drive + ':\\');
-  } else if (/^[A-Za-z]:/.test(p) && p[2] !== '\\') {
-    const drive = p[0].toUpperCase();
-    const rel = p.substring(2);
-    const base = emu.currentDirs.get(drive) || (drive + ':\\');
-    resolved = base.endsWith('\\') ? base + rel : base + '\\' + rel;
-  } else if (p.startsWith('\\')) {
-    resolved = emu.currentDrive + ':' + p;
-  } else {
-    const base = emu.currentDirs.get(emu.currentDrive) || (emu.currentDrive + ':\\');
-    resolved = base.endsWith('\\') ? base + p : base + '\\' + p;
-  }
-  return resolved.toUpperCase();
-}
-
-/** Handle DOS/BIOS interrupts. Returns true if handled, false if not. */
-export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
-  // For hardware interrupts that programs hook (INT 09h keyboard),
-  // dispatch to the custom handler instead of built-in emulation.
-  // But if CS == 0xF000, we're in a BIOS stub (program chained to original
-  // vector), so use the built-in handler instead.
-  if ((intNum === 0x08 || intNum === 0x09 || intNum === 0x16) && cpu.cs !== 0xF000) {
-    const biosDefault = (0xF000 << 16) | (intNum * 3);
-    const vec = emu._dosIntVectors.get(intNum) ?? biosDefault;
-    if (vec !== biosDefault) {
-      const seg = (vec >>> 16) & 0xFFFF;
-      const off = vec & 0xFFFF;
-      const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
-      cpu.push16(cpu.getFlags() & 0xFFFF);
-      cpu.push16(cpu.cs);
-      cpu.push16(returnIP);
-      cpu.cs = seg;
-      cpu.eip = cpu.segBase(seg) + off;
-      return true;
-    }
-  }
-
-  switch (intNum) {
-    case 0x08: // Timer tick (IRQ0) — update BIOS tick counter at 0x46C
-      emu.memory.writeU32(0x46C, (emu.memory.readU32(0x46C) + 1) >>> 0);
-      return true;
-    case 0x09: return handleInt09(cpu, emu);
-    case 0x12: // Get conventional memory size → AX = KB (640)
-      cpu.setReg16(EAX, 640);
-      return true;
-    case 0x10: return handleInt10(cpu, emu);
-    case 0x16: return handleInt16(cpu, emu, cpu.cs === 0xF000);
-    case 0x20: return handleInt20(cpu, emu);
-    case 0x21: return handleInt21(cpu, emu);
-    case 0x15: return handleInt15(cpu, emu);
-    case 0x33: return handleInt33(cpu, emu);
-    case 0x2A: // Network — not installed
-      cpu.setReg8(EAX, 0); // AL=0 means not installed
-      return true;
-    case 0x1A: return handleInt1A(cpu, emu);
-    case 0x2F: return handleInt2F(cpu, emu);
-    default:
-      if (cpu.realMode) {
-        // Check if program installed a custom handler via INT 21h AH=25h
-        const biosDefault = (0xF000 << 16) | (intNum * 3);
-        const vec = emu._dosIntVectors.get(intNum);
-        if (vec && vec !== biosDefault) {
-          const seg = (vec >>> 16) & 0xFFFF;
-          const off = vec & 0xFFFF;
-          const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
-          cpu.push16(cpu.getFlags() & 0xFFFF);
-          cpu.push16(cpu.cs);
-          cpu.push16(returnIP);
-          cpu.cs = seg;
-          cpu.eip = cpu.segBase(seg) + off;
-          return true;
-        }
-        // No custom handler — just IRET
-        return true;
-      }
-      return false;
-  }
-}
-
-// --- INT 09h: Keyboard Hardware (BIOS default handler) ---
-// Scancode-to-ASCII table for unshifted keys (index = scancode 0x00-0x3F)
-const SCAN_TO_ASCII: (number | undefined)[] = [
-  /*00*/ undefined, 0x1B, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,  // ESC, 1-6
-  /*08*/ 0x37, 0x38, 0x39, 0x30, 0x2D, 0x3D, 0x08, 0x09,       // 7-0, -, =, BS, TAB
-  /*10*/ 0x71, 0x77, 0x65, 0x72, 0x74, 0x79, 0x75, 0x69,       // q w e r t y u i
-  /*18*/ 0x6F, 0x70, 0x5B, 0x5D, 0x0D, undefined, 0x61, 0x73,  // o p [ ] Enter, Ctrl, a s
-  /*20*/ 0x64, 0x66, 0x67, 0x68, 0x6A, 0x6B, 0x6C, 0x3B,       // d f g h j k l ;
-  /*28*/ 0x27, 0x60, undefined, 0x5C, 0x7A, 0x78, 0x63, 0x76,  // ' `, LShift, \ z x c v
-  /*30*/ 0x62, 0x6E, 0x6D, 0x2C, 0x2E, 0x2F, undefined, 0x2A,  // b n m , . /, RShift, *
-  /*38*/ undefined, 0x20, undefined,                              // Alt, Space, CapsLock
-  // F1-F10 (0x3B-0x44): extended keys, ascii=0
-  undefined, undefined, undefined, undefined, undefined,
-];
-
-// Extended key scancodes (arrows, F-keys, Home, End, etc.) — always ascii=0
-const EXTENDED_SCANCODES = new Set([
-  0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, // F1-F10
-  0x47, 0x48, 0x49, // Home, Up, PgUp
-  0x4B, 0x4D,       // Left, Right
-  0x4F, 0x50, 0x51, // End, Down, PgDn
-  0x52, 0x53,       // Ins, Del
-  0x57, 0x58,       // F11, F12
-]);
-
-function handleInt09(cpu: CPU, emu: Emulator): boolean {
-  const scancode = emu.portIn(0x60);
-  const BDA = 0x400;
-  const shiftFlags = emu.memory.readU8(BDA + 0x17);
-
-  if (scancode & 0x80) {
-    // Break code — update shift state for modifier releases
-    const baseScan = scancode & 0x7F;
-    if (baseScan === 0x2A || baseScan === 0x36) // LShift/RShift release
-      emu.memory.writeU8(BDA + 0x17, shiftFlags & ~0x03);
-    else if (baseScan === 0x1D) // Ctrl release
-      emu.memory.writeU8(BDA + 0x17, shiftFlags & ~0x04);
-    else if (baseScan === 0x38) // Alt release
-      emu.memory.writeU8(BDA + 0x17, shiftFlags & ~0x08);
-    return true;
-  }
-
-  // Make code — update shift state for modifier presses
-  if (scancode === 0x2A || scancode === 0x36) { // LShift/RShift
-    emu.memory.writeU8(BDA + 0x17, shiftFlags | (scancode === 0x2A ? 0x02 : 0x01));
-    return true;
-  }
-  if (scancode === 0x1D) { // Ctrl
-    emu.memory.writeU8(BDA + 0x17, shiftFlags | 0x04);
-    return true;
-  }
-  if (scancode === 0x38) { // Alt
-    emu.memory.writeU8(BDA + 0x17, shiftFlags | 0x08);
-    return true;
-  }
-
-  // Determine ASCII based on scancode and modifiers
-  let ascii: number;
-  const isAlt = !!(shiftFlags & 0x08);
-  const isCtrl = !!(shiftFlags & 0x04);
-
-  if (isAlt || EXTENDED_SCANCODES.has(scancode)) {
-    ascii = 0; // Extended key
-  } else if (isCtrl && scancode >= 0x1E && scancode <= 0x32) {
-    // Ctrl+letter: ASCII 1-26
-    const ctrlBase = SCAN_TO_ASCII[scancode];
-    ascii = ctrlBase ? (ctrlBase - 0x60) & 0x1F : 0;
-  } else {
-    ascii = (scancode < SCAN_TO_ASCII.length ? SCAN_TO_ASCII[scancode] : undefined) ?? 0;
-  }
-
-  // Push to dosKeyBuffer for BIOS INT 16h consumption.
-  // This must happen HERE (after INT 09h handler set the "key available" signal)
-  // rather than in ConsoleView (which would set data before signal).
-  emu.dosKeyBuffer.push({ ascii, scan: scancode });
-  emu.writeBdaKey(ascii, scancode);
-  return true;
-}
-
-// --- INT 10h: Video BIOS ---
-function handleInt10(cpu: CPU, emu: Emulator): boolean {
-  const ah = (cpu.reg[EAX] >> 8) & 0xFF;
-  const al = cpu.reg[EAX] & 0xFF;
-
-  switch (ah) {
-    case 0x00: // Set video mode
-      // Mode 03h = 80x25 text color. Just clear screen.
-      if (al === 0x03 || al === 0x07) {
-        clearVideoMem(cpu, emu, 0x07);
-        emu.consoleCursorX = 0;
-        emu.consoleCursorY = 0;
-      }
-      break;
-
-    case 0x01: // Set cursor shape (CX = start/end scan lines)
-      // Ignore — we always show a block cursor
-      break;
-
-    case 0x02: { // Set cursor position (BH=page, DH=row, DL=col)
-      const row = (cpu.reg[EDX] >> 8) & 0xFF;
-      const col = cpu.reg[EDX] & 0xFF;
-      emu.consoleCursorY = Math.min(row, SCREEN_ROWS - 1);
-      emu.consoleCursorX = Math.min(col, SCREEN_COLS - 1);
-      break;
-    }
-
-    case 0x03: { // Get cursor position (BH=page) → DH=row, DL=col, CX=cursor shape
-      const row = emu.consoleCursorY;
-      const col = emu.consoleCursorX;
-      cpu.setReg16(EDX, (row << 8) | col);
-      cpu.setReg16(ECX, 0x0607); // default cursor shape
-      break;
-    }
-
-    case 0x06: { // Scroll up (AL=lines, BH=attr, CX=top-left, DX=bottom-right)
-      const lines = al || SCREEN_ROWS; // 0 = clear entire window
-      const attr = (cpu.reg[EBX] >> 8) & 0xFF;
-      const top = (cpu.reg[ECX] >> 8) & 0xFF;
-      const left = cpu.reg[ECX] & 0xFF;
-      const bottom = (cpu.reg[EDX] >> 8) & 0xFF;
-      const right = cpu.reg[EDX] & 0xFF;
-      scrollUp(cpu, emu, lines, attr, top, left, bottom, right);
-      break;
-    }
-
-    case 0x07: { // Scroll down
-      const lines = al || SCREEN_ROWS;
-      const attr = (cpu.reg[EBX] >> 8) & 0xFF;
-      const top = (cpu.reg[ECX] >> 8) & 0xFF;
-      const left = cpu.reg[ECX] & 0xFF;
-      const bottom = (cpu.reg[EDX] >> 8) & 0xFF;
-      const right = cpu.reg[EDX] & 0xFF;
-      scrollDown(cpu, emu, lines, attr, top, left, bottom, right);
-      break;
-    }
-
-    case 0x08: { // Read char+attr at cursor (BH=page) → AH=attr, AL=char
-      const off = (emu.consoleCursorY * SCREEN_COLS + emu.consoleCursorX) * 2;
-      const ch = cpu.mem.readU8(VIDEO_MEM_BASE + off);
-      const attr = cpu.mem.readU8(VIDEO_MEM_BASE + off + 1);
-      cpu.setReg16(EAX, (attr << 8) | ch);
-      break;
-    }
-
-    case 0x09: { // Write char+attr at cursor (AL=char, BH=page, BL=attr, CX=count)
-      const ch = al;
-      const attr = cpu.reg[EBX] & 0xFF;
-      const count = cpu.getReg16(ECX);
-      let cx = emu.consoleCursorX;
-      let cy = emu.consoleCursorY;
-      for (let i = 0; i < count; i++) {
-        const off = (cy * SCREEN_COLS + cx) * 2;
-        cpu.mem.writeU8(VIDEO_MEM_BASE + off, ch);
-        cpu.mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
-        cx++;
-        if (cx >= SCREEN_COLS) { cx = 0; cy++; }
-        if (cy >= SCREEN_ROWS) break;
-      }
-      break;
-    }
-
-    case 0x0A: { // Write char at cursor (no attr change)
-      const ch = al;
-      const count = cpu.getReg16(ECX);
-      let cx = emu.consoleCursorX;
-      let cy = emu.consoleCursorY;
-      for (let i = 0; i < count; i++) {
-        const off = (cy * SCREEN_COLS + cx) * 2;
-        cpu.mem.writeU8(VIDEO_MEM_BASE + off, ch);
-        cx++;
-        if (cx >= SCREEN_COLS) { cx = 0; cy++; }
-        if (cy >= SCREEN_ROWS) break;
-      }
-      break;
-    }
-
-    case 0x0E: { // Teletype output (AL=char, BL=color)
-      teletypeOutput(cpu, emu, al);
-      break;
-    }
-
-    case 0x0F: // Get video mode → AH=cols, AL=mode, BH=page
-      cpu.setReg16(EAX, (SCREEN_COLS << 8) | 0x03);
-      cpu.setReg8(7 /* BH */, 0); // page 0  — setReg8(7) not available, use full reg
-      cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF00FF); // BH=0
-      break;
-
-    case 0x10: // Set palette registers — ignore
-      break;
-
-    case 0x11: { // Character generator
-      if (al === 0x30) {
-        // Get font info: BH=pointer specifier
-        // Return: CX=bytes per character, DL=rows-1
-        cpu.setReg16(ECX, 16); // 16 bytes per character (8x16 font)
-        const dl = SCREEN_ROWS - 1; // 24
-        cpu.setReg16(EDX, (cpu.getReg16(EDX) & 0xFF00) | dl);
-      }
-      break;
-    }
-
-    case 0x12: // Alternate select (video subsystem config)
-      // BL=10h: get video configuration info
-      // Return BH=0 (color), BL=03 (256K), CX=0
-      cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x0003;
-      cpu.setReg16(ECX, 0);
-      break;
-
-    case 0x1A: // Get/set display combination
-      if (al === 0x00) {
-        // Get: AL=1A (function supported), BL=08 (VGA color), BH=00
-        cpu.setReg8(EAX, 0x1A);
-        cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x0008;
-      }
-      break;
-
-    case 0x05: // Select active display page (AL=page number)
-      // We only support page 0 — ignore silently
-      break;
-
-    case 0x1B: { // Functionality/state information (BX=implementation type)
-      // Return AL=1B if supported. Write 64-byte state table at ES:DI.
-      const esBas = cpu.segBase(cpu.es);
-      const di = cpu.getReg16(EDI);
-      const addr = esBas + di;
-      // Zero 64 bytes
-      for (let i = 0; i < 64; i++) cpu.mem.writeU8(addr + i, 0);
-      // Static functionality table pointer (offset 0): null
-      cpu.mem.writeU32(addr + 0x00, 0);
-      // Video mode (offset 4): 03h
-      cpu.mem.writeU8(addr + 0x04, 0x03);
-      // Number of columns (offset 5-6)
-      cpu.mem.writeU16(addr + 0x05, SCREEN_COLS);
-      // Regen buffer length (offset 7-8)
-      cpu.mem.writeU16(addr + 0x07, SCREEN_COLS * SCREEN_ROWS * 2);
-      // Cursor position page 0 (offset 0x0B-0x0C)
-      cpu.mem.writeU8(addr + 0x0B, emu.consoleCursorX);
-      cpu.mem.writeU8(addr + 0x0C, emu.consoleCursorY);
-      // Cursor type (offset 0x23-0x24)
-      cpu.mem.writeU16(addr + 0x23, 0x0607);
-      // Active page (offset 0x25)
-      cpu.mem.writeU8(addr + 0x25, 0);
-      // Rows on screen -1 (offset 0x29)
-      cpu.mem.writeU8(addr + 0x29, SCREEN_ROWS - 1);
-      // Character height (offset 0x2A)
-      cpu.mem.writeU8(addr + 0x2A, 16);
-      // Active display code (offset 0x2B): 08 = VGA color
-      cpu.mem.writeU8(addr + 0x2B, 0x08);
-      cpu.setReg8(EAX, 0x1B); // AL=1Bh = supported
-      break;
-    }
-
-    case 0xFE: // Get video buffer — ignore (return original ES:DI)
-      break;
-
-    default:
-      // Silently ignore unknown subfunctions (includes vendor-specific EFh, FAh, etc.)
-      break;
-  }
-  return true;
-}
-
-// --- INT 16h: Keyboard BIOS ---
-function handleInt16(cpu: CPU, emu: Emulator, fromBiosStub = false): boolean {
-  const ah = (cpu.reg[EAX] >> 8) & 0xFF;
-  switch (ah) {
-    case 0x00: case 0x10: {
-      // Read keystroke
-      // In BIOS stub mode, limit to one key per tick so screen updates
-      // between each key (prevents keys being processed all at once).
-      if (emu.dosKeyBuffer.length > 0 && !(fromBiosStub && emu._dosKeyConsumedThisTick)) {
-        const key = emu.dosKeyBuffer.shift()!;
-        cpu.setReg16(EAX, (key.scan << 8) | key.ascii);
-        if (fromBiosStub) emu._dosKeyConsumedThisTick = true;
-      } else if (fromBiosStub) {
-        // Buffer empty: return AX=0 so QBasic's handler sees "no key"
-        // (QBasic checks OR AX,AX and loops if zero)
-        cpu.setReg16(EAX, 0);
-      } else {
-        // Direct INT 16h from program — block until key available
-        emu._dosWaitingForKey = 'read';
-        emu.waitingForMessage = true;
-      }
-      break;
-    }
-    case 0x01: case 0x11: {
-      // Check keystroke (non-blocking peek)
-      if (emu.dosKeyBuffer.length > 0 && !(fromBiosStub && emu._dosKeyConsumedThisTick)) {
-        const key = emu.dosKeyBuffer[0];
-        cpu.setReg16(EAX, (key.scan << 8) | key.ascii);
-        cpu.setFlag(ZF, false); // key available
-      } else {
-        cpu.setFlag(ZF, true); // no key
-        // Peek is non-blocking — never suspend here.
-        // Programs that busy-loop on peek will be throttled by the tick time limit.
-      }
-      break;
-    }
-    case 0x02: case 0x12: {
-      // Get shift flags
-      cpu.setReg8(EAX, 0); // no shift keys pressed
-      break;
-    }
-    default:
-      // Programs may use custom subfunctions (e.g. QBasic AH=0x55) that
-      // only their own INT 16h handler understands. Silently ignore.
-      break;
-  }
-  return true;
-}
-
-// --- INT 20h: Terminate ---
-function handleInt20(cpu: CPU, emu: Emulator): boolean {
-  emu.exitedNormally = true;
-  emu.halted = true;
-  cpu.halted = true;
-  return true;
-}
-
-// --- INT 21h: DOS Services ---
-function handleInt21(cpu: CPU, emu: Emulator): boolean {
+/** Handle INT 21h (DOS services). Exported for use by Win16 DOS3Call. */
+export function handleInt21(cpu: CPU, emu: Emulator): boolean {
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   const al = cpu.reg[EAX] & 0xFF;
   switch (ah) {
@@ -1144,6 +734,205 @@ function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
+    case 0x03: // Auxiliary input (AUX/COM1) — return null
+      cpu.setReg8(EAX, 0);
+      break;
+
+    case 0x04: // Auxiliary output (AUX/COM1) — ignore
+    case 0x05: // Printer output (PRN/LPT1) — ignore
+      break;
+
+    case 0x0C: { // Clear keyboard buffer, invoke keyboard function
+      emu.dosKeyBuffer.length = 0;
+      const subFunc = al;
+      if (subFunc === 0x01 || subFunc === 0x06 || subFunc === 0x07 || subFunc === 0x08 || subFunc === 0x0A) {
+        // Re-dispatch with AH=subfunc
+        cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | (subFunc << 8);
+        return handleInt21(cpu, emu);
+      }
+      break;
+    }
+
+    case 0x0D: // Disk reset — flush all buffers, succeed silently
+      break;
+
+    case 0x0F: // Open file using FCB — return AL=FF (fail)
+    case 0x10: // Close file using FCB — return AL=FF
+    case 0x11: // Search first using FCB — return AL=FF (not found)
+    case 0x12: // Search next using FCB — return AL=FF (not found)
+    case 0x14: // Sequential read using FCB — return AL=01 (EOF)
+    case 0x15: // Sequential write using FCB — return AL=01
+    case 0x16: // Create file using FCB — return AL=FF (fail)
+    case 0x21: // Random read using FCB — return AL=01
+    case 0x22: // Random write using FCB — return AL=01
+    case 0x27: // Random block read using FCB — CX=0, AL=01
+    case 0x28: // Random block write using FCB — CX=0, AL=01
+      // FCB functions: stub as failure — FCBs are legacy DOS 1.x API
+      cpu.setReg8(EAX, ah === 0x14 || ah === 0x15 || ah === 0x21 || ah === 0x22 || ah === 0x27 || ah === 0x28 ? 0x01 : 0xFF);
+      if (ah === 0x27 || ah === 0x28) cpu.setReg16(ECX, 0);
+      break;
+
+    case 0x13: { // Delete file using FCB — return AL=FF (fail)
+      cpu.setReg8(EAX, 0xFF);
+      break;
+    }
+
+    case 0x17: { // Rename file using FCB — return AL=FF (fail)
+      cpu.setReg8(EAX, 0xFF);
+      break;
+    }
+
+    case 0x1B: { // Get allocation table info for default drive
+      // AL=sectors/cluster, CX=bytes/sector, DX=total clusters, DS:BX→media ID
+      cpu.setReg8(EAX, 8);       // 8 sectors per cluster
+      cpu.setReg16(ECX, 512);    // 512 bytes per sector
+      cpu.setReg16(EDX, 65535);  // total clusters
+      break;
+    }
+
+    case 0x23: { // Get file size using FCB — return AL=FF (fail)
+      cpu.setReg8(EAX, 0xFF);
+      break;
+    }
+
+    case 0x24: // Set relative record field for FCB — no-op
+      break;
+
+    case 0x26: // Create new PSP at segment in DX — minimal stub
+      break;
+
+    case 0x2B: // Set date (CX=year, DH=month, DL=day) — accept silently
+      cpu.setReg8(EAX, 0); // AL=0 = success
+      break;
+
+    case 0x2D: // Set time (CH=hour, CL=min, DH=sec, DL=1/100) — accept silently
+      cpu.setReg8(EAX, 0); // AL=0 = success
+      break;
+
+    case 0x2E: // Set/reset verify switch (AL=0 off, AL=1 on)
+      emu._dosVerifyFlag = !!(al & 1);
+      break;
+
+    case 0x31: { // Terminate and stay resident (AL=return code, DX=paragraphs to keep)
+      emu.exitedNormally = true;
+      emu.halted = true;
+      cpu.halted = true;
+      break;
+    }
+
+    case 0x34: { // Get address of InDOS flag → ES:BX
+      // Allocate a single byte for the InDOS flag if not done
+      if (!emu._dosInDOSAddr) {
+        emu._dosInDOSAddr = emu.heapPtr;
+        emu.heapPtr += 2;
+        emu.memory.writeU8(emu._dosInDOSAddr, 0);
+      }
+      cpu.es = (emu._dosInDOSAddr >>> 4) & 0xFFFF;
+      cpu.setReg16(EBX, emu._dosInDOSAddr & 0x0F);
+      break;
+    }
+
+    case 0x37: // Get/set switch character (undocumented)
+      if (al === 0x00) {
+        cpu.setReg8(2 /* DL */, 0x2F); // '/' is the switch char
+        cpu.setReg8(EAX, 0); // AL=0 success
+      } else {
+        cpu.setReg8(EAX, 0);
+      }
+      break;
+
+    case 0x38: { // Get/set country-dependent information
+      if (al === 0x00 || (al !== 0xFF && (cpu.reg[EDX] & 0xFFFF) !== 0xFFFF)) {
+        // Get country info → DS:DX buffer (34 bytes)
+        const dsBase = cpu.segBase(cpu.ds);
+        const bufAddr = dsBase + cpu.getReg16(EDX);
+        // Zero 34 bytes
+        for (let i = 0; i < 34; i++) cpu.mem.writeU8(bufAddr + i, 0);
+        const DATE_FORMAT_USA = 0;
+        cpu.mem.writeU16(bufAddr + 0, DATE_FORMAT_USA);
+        // Currency symbol at offset 2 (5 bytes ASCIIZ)
+        cpu.mem.writeU8(bufAddr + 2, 0x24); // '$'
+        cpu.mem.writeU8(bufAddr + 3, 0);
+        // Thousands separator at offset 7 (2 bytes ASCIIZ)
+        cpu.mem.writeU8(bufAddr + 7, 0x2C); // ','
+        cpu.mem.writeU8(bufAddr + 8, 0);
+        // Decimal separator at offset 9 (2 bytes ASCIIZ)
+        cpu.mem.writeU8(bufAddr + 9, 0x2E); // '.'
+        cpu.mem.writeU8(bufAddr + 10, 0);
+        // Date separator at offset 11
+        cpu.mem.writeU8(bufAddr + 11, 0x2D); // '-'
+        cpu.mem.writeU8(bufAddr + 12, 0);
+        // Time separator at offset 13
+        cpu.mem.writeU8(bufAddr + 13, 0x3A); // ':'
+        cpu.mem.writeU8(bufAddr + 14, 0);
+        // Currency format at offset 15
+        cpu.mem.writeU8(bufAddr + 15, 0); // currency symbol precedes, no space
+        // Digits after decimal in currency at offset 16
+        cpu.mem.writeU8(bufAddr + 16, 2);
+        // Time format at offset 17 (0=12h, 1=24h)
+        cpu.mem.writeU8(bufAddr + 17, 0);
+        cpu.setReg16(EBX, 1); // BX = country code (1 = USA)
+        cpu.setFlag(CF, false);
+      } else {
+        // Set country — just succeed
+        cpu.setFlag(CF, false);
+      }
+      break;
+    }
+
+    case 0x39: { // Create subdirectory (mkdir) DS:DX=path
+      // Succeed silently — no real filesystem to create dirs in
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x3A: { // Remove subdirectory (rmdir) DS:DX=path
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x41: { // Delete file (DS:DX=filename)
+      // Succeed silently
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x45: { // Duplicate file handle (BX=handle) → AX=new handle
+      const srcH = cpu.getReg16(EBX);
+      const srcFile = emu.handles.get<OpenFile>(srcH);
+      if (srcFile) {
+        const newH = emu.handles.alloc('file', { ...srcFile });
+        // Also copy DOS file state if present
+        const dosF = emu._dosFiles.get(srcH);
+        if (dosF) emu._dosFiles.set(newH, { data: dosF.data, pos: dosF.pos, name: dosF.name });
+        cpu.setReg16(EAX, newH);
+        cpu.setFlag(CF, false);
+      } else {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 6); // invalid handle
+      }
+      break;
+    }
+
+    case 0x46: { // Force duplicate handle (BX=src, CX=dst)
+      const srcH = cpu.getReg16(EBX);
+      const dstH = cpu.getReg16(ECX);
+      const srcFile = emu.handles.get<OpenFile>(srcH);
+      if (srcFile) {
+        // Close dst if open, then make it point to same file
+        const dstFile = emu.handles.get<OpenFile>(dstH);
+        if (dstFile) emu.fs.persistOnClose(dstFile);
+        emu.handles.set(dstH, 'file', { ...srcFile });
+        const dosF = emu._dosFiles.get(srcH);
+        if (dosF) emu._dosFiles.set(dstH, { data: dosF.data, pos: dosF.pos, name: dosF.name });
+        cpu.setFlag(CF, false);
+      } else {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 6);
+      }
+      break;
+    }
+
     case 0x4B: { // EXEC — Load and Execute Program
       // AL=00 Load+Execute, AL=01 Load overlay, AL=03 Load only
       // DS:DX → ASCIZ program name, ES:BX → parameter block
@@ -1170,6 +959,195 @@ function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
+    case 0x4D: // Get return code of sub-process → AX=return code
+      cpu.setReg16(EAX, 0); // return code 0, normal termination
+      break;
+
+    case 0x54: // Get verify setting → AL
+      cpu.setReg8(EAX, emu._dosVerifyFlag ? 1 : 0);
+      break;
+
+    case 0x56: { // Rename file (DS:DX=old, ES:DI=new)
+      // Succeed silently — virtual FS doesn't track renames
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x57: { // Get/set file date and time (BX=handle)
+      if (al === 0x00) {
+        // Get: return a fixed date/time
+        const DOS_TIME = (12 << 11) | (0 << 5) | 0; // 12:00:00
+        const DOS_DATE = ((2000 - 1980) << 9) | (1 << 5) | 1; // 2000-01-01
+        cpu.setReg16(ECX, DOS_TIME);
+        cpu.setReg16(EDX, DOS_DATE);
+        cpu.setFlag(CF, false);
+      } else {
+        // Set — accept silently
+        cpu.setFlag(CF, false);
+      }
+      break;
+    }
+
+    case 0x58: { // Get/set memory allocation strategy
+      if (al === 0x00) {
+        // Get: return first fit (0)
+        cpu.setReg16(EAX, 0);
+        cpu.setFlag(CF, false);
+      } else if (al === 0x01) {
+        // Set — accept silently
+        cpu.setFlag(CF, false);
+      } else if (al === 0x02) {
+        // Get UMB link state — UMBs not linked (0)
+        cpu.setReg16(EAX, 0);
+        cpu.setFlag(CF, false);
+      } else if (al === 0x03) {
+        // Set UMB link state — accept silently
+        cpu.setFlag(CF, false);
+      } else {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 1);
+      }
+      break;
+    }
+
+    case 0x59: { // Get extended error information
+      // AX=extended error code, BH=error class, BL=suggested action, CH=locus
+      cpu.setReg16(EAX, 0); // no error
+      cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x0000; // class=0, action=0
+      cpu.setReg16(ECX, 0); // locus=0
+      break;
+    }
+
+    case 0x5A: { // Create temporary file (CX=attr, DS:DX=path prefix)
+      const dsBase = cpu.segBase(cpu.ds);
+      const prefixAddr = dsBase + cpu.getReg16(EDX);
+      let prefix = '';
+      for (let i = 0; i < 128; i++) {
+        const ch = cpu.mem.readU8(prefixAddr + i);
+        if (ch === 0) break;
+        prefix += String.fromCharCode(ch);
+      }
+      // Append a pseudo-random temp name
+      const tmpName = prefix + 'TMP' + ((Date.now() & 0xFFFF).toString(16)).toUpperCase() + '.TMP';
+      const resolved = dosResolvePath(emu, tmpName);
+      const handle = emu._dosNextHandle++;
+      const emptyData = new Uint8Array(0);
+      emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
+      emu._dosFiles.set(handle, { data: emptyData, pos: 0, name: tmpName });
+      // Write the full temp path back to DS:DX buffer
+      for (let i = 0; i < tmpName.length; i++) {
+        cpu.mem.writeU8(prefixAddr + i, tmpName.charCodeAt(i));
+      }
+      cpu.mem.writeU8(prefixAddr + tmpName.length, 0);
+      cpu.setReg16(EAX, handle);
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x5B: { // Create new file (fail if exists) CX=attr, DS:DX=filename
+      const dsBase = cpu.segBase(cpu.ds);
+      const nameAddr = dsBase + cpu.getReg16(EDX);
+      let name = '';
+      for (let i = 0; i < 128; i++) {
+        const ch = cpu.mem.readU8(nameAddr + i);
+        if (ch === 0) break;
+        name += String.fromCharCode(ch);
+      }
+      const resolved = dosResolvePath(emu, name);
+      // Check if file already exists
+      const existing = emu.fs.findFile(resolved, emu.additionalFiles);
+      if (existing) {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 80); // ERROR_FILE_EXISTS
+      } else {
+        const handle = emu._dosNextHandle++;
+        const emptyData = new Uint8Array(0);
+        emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
+        emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+      }
+      break;
+    }
+
+    case 0x5C: { // Lock/unlock file region (AL=0 lock, AL=1 unlock)
+      // BX=handle, CX:DX=offset, SI:DI=length
+      // Succeed silently — no real locking needed in emulator
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x67: { // Set handle count (BX=new count)
+      // Accept silently — we don't have a fixed handle table limit
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x68: { // Flush buffer (BX=handle)
+      const h = cpu.getReg16(EBX);
+      const of = emu.handles.get<OpenFile>(h);
+      if (of && of.modified) {
+        emu.fs.persistOnClose(of);
+      }
+      cpu.setFlag(CF, false);
+      break;
+    }
+
+    case 0x6C: { // Extended open/create (DOS 4.0+)
+      // BX=mode, CX=attr, DX=action, DS:SI=filename
+      const dsBase = cpu.segBase(cpu.ds);
+      const nameAddr = dsBase + cpu.getReg16(ESI);
+      let name = '';
+      for (let i = 0; i < 128; i++) {
+        const ch = cpu.mem.readU8(nameAddr + i);
+        if (ch === 0) break;
+        name += String.fromCharCode(ch);
+      }
+      const resolved = dosResolvePath(emu, name);
+      const action = cpu.getReg16(EDX);
+      const existing = emu.fs.findFile(resolved, emu.additionalFiles);
+
+      if (existing) {
+        // File exists — check action bits 0-3
+        const ACTION_OPEN = 0x01;
+        const ACTION_REPLACE = 0x02;
+        if (action & ACTION_REPLACE) {
+          // Truncate and open
+          const handle = emu._dosNextHandle++;
+          const emptyData = new Uint8Array(0);
+          emu.handles.set(handle, 'file', { path: resolved, access: cpu.getReg16(EBX) & 0xFF, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
+          emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
+          cpu.setReg16(EAX, handle);
+          cpu.setReg16(ECX, 3); // CX=3: file existed, was replaced
+          cpu.setFlag(CF, false);
+        } else if (action & ACTION_OPEN) {
+          // Open existing — delegate to 0x3D logic
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF0000) | (0x3D << 8) | (cpu.getReg16(EBX) & 0xFF);
+          cpu.setReg16(EDX, cpu.getReg16(ESI)); // point DX to the filename
+          return handleInt21(cpu, emu);
+        } else {
+          cpu.setFlag(CF, true);
+          cpu.setReg16(EAX, 80); // ERROR_FILE_EXISTS
+        }
+      } else {
+        // File doesn't exist — check action bits 4-7
+        const ACTION_CREATE = 0x10;
+        if (action & ACTION_CREATE) {
+          const handle = emu._dosNextHandle++;
+          const emptyData = new Uint8Array(0);
+          emu.handles.set(handle, 'file', { path: resolved, access: cpu.getReg16(EBX) & 0xFF, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
+          emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
+          cpu.setReg16(EAX, handle);
+          cpu.setReg16(ECX, 2); // CX=2: file did not exist, was created
+          cpu.setFlag(CF, false);
+        } else {
+          cpu.setFlag(CF, true);
+          cpu.setReg16(EAX, 2); // ERROR_FILE_NOT_FOUND
+        }
+      }
+      break;
+    }
+
     default:
       console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
       cpu.setFlag(CF, true);
@@ -1177,202 +1155,6 @@ function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
   }
   return true;
-}
-
-// --- INT 2Fh: Multiplex ---
-function handleInt2F(cpu: CPU, emu: Emulator): boolean {
-  const ax = cpu.getReg16(EAX);
-  const ah = (ax >> 8) & 0xFF;
-  const al = ax & 0xFF;
-
-  if (ah === 0x12 && al === 0x2E) {
-    // SYSMSG interface — DL selects subfunction
-    // DL=0: parse error msgs, DL=2: extended error msgs,
-    // DL=4: utility msgs, DL=6: critical error msgs,
-    // DL=8: get counts/extended info (CX=number of parse errors on entry)
-    const dl = cpu.reg[EDX] & 0xFF;
-    if (!emu._sysmsgTablesAddr) {
-      // Allocate space for 5 stub tables (each 32 bytes apart)
-      const base = ((emu.heapPtr + 0xF) & ~0xF); // paragraph-align
-      emu.heapPtr = base + 256;
-      emu._sysmsgTablesAddr = base;
-      // Zero the area
-      for (let i = 0; i < 256; i++) cpu.mem.writeU8(base + i, 0);
-      // DL=0,2,4,6: Each table starts with a header byte (message count=0)
-      // The SYSLOADMSG code checks that the pointer is non-null and reads the header
-      // DL=8: returns CL=number of parse error msgs, CH=extended count
-    }
-    if (dl === 0x08) {
-      // DL=8: "get extended error msg count"
-      // CX on entry = number of parse error messages
-      // Return: keep CX as-is (caller's count is accepted)
-      return true;
-    }
-    // Return ES:DI pointing to a stub table area (different offset per DL value)
-    const idx = (dl >>> 1) & 0x03; // DL=0→0, DL=2→1, DL=4→2, DL=6→3
-    const tableAddr = emu._sysmsgTablesAddr + idx * 32;
-    cpu.es = (tableAddr >>> 4) & 0xFFFF;
-    cpu.setReg16(EDI, tableAddr & 0x0F);
-    return true;
-  }
-
-  if (ax === 0x4300) {
-    // XMS installation check — AL=0x80 means XMS driver installed, anything else means not
-    cpu.setReg8(EAX, 0x00); // XMS not installed
-    return true;
-  }
-
-  if (ax === 0x0500) {
-    // DPMI detect — return AL=not available
-    cpu.setReg8(EAX, 0xFF); // DPMI not present (AL != 0)
-    return true;
-  }
-
-  console.warn(`[INT 2Fh] Unhandled AX=0x${ax.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
-  return true;
-}
-
-// --- INT 15h: System Services ---
-function handleInt15(cpu: CPU, _emu: Emulator): boolean {
-  const ah = (cpu.reg[EAX] >> 8) & 0xFF;
-  switch (ah) {
-    case 0xC0: { // Get system configuration table
-      // Return ES:BX pointing to a minimal config table
-      // For now, just fail gracefully
-      cpu.setFlag(CF, true);
-      cpu.setReg8(EAX + 4, 0x86); // AH = unsupported function
-      break;
-    }
-    case 0xC2: { // PS/2 Pointing device
-      // Not installed
-      cpu.setFlag(CF, true);
-      cpu.setReg8(EAX + 4, 0x04); // AH = error: interface error
-      break;
-    }
-    default:
-      cpu.setFlag(CF, true);
-      break;
-  }
-  return true;
-}
-
-// --- INT 33h: Mouse ---
-function handleInt33(cpu: CPU, _emu: Emulator): boolean {
-  const ax = cpu.getReg16(EAX);
-  if (ax === 0x0000) {
-    // Check mouse installed: AX=0 (not installed)
-    cpu.setReg16(EAX, 0);
-    cpu.setReg16(EBX, 0);
-  }
-  return true;
-}
-
-// --- Helper functions ---
-
-function clearVideoMem(cpu: CPU, emu: Emulator, attr: number): void {
-  for (let i = 0; i < SCREEN_COLS * SCREEN_ROWS; i++) {
-    cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2, 0x20);
-    cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2 + 1, attr);
-  }
-  syncVideoMemory(emu);
-}
-
-function scrollUp(_cpu: CPU, emu: Emulator, lines: number, attr: number, top: number, left: number, bottom: number, right: number): void {
-  const mem = emu.memory;
-  if (lines >= (bottom - top + 1)) {
-    // Clear the window
-    for (let row = top; row <= bottom; row++) {
-      for (let col = left; col <= right; col++) {
-        const off = (row * SCREEN_COLS + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
-      }
-    }
-  } else {
-    for (let row = top; row <= bottom - lines; row++) {
-      for (let col = left; col <= right; col++) {
-        const dst = (row * SCREEN_COLS + col) * 2;
-        const src = ((row + lines) * SCREEN_COLS + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + dst, mem.readU8(VIDEO_MEM_BASE + src));
-        mem.writeU8(VIDEO_MEM_BASE + dst + 1, mem.readU8(VIDEO_MEM_BASE + src + 1));
-      }
-    }
-    for (let row = bottom - lines + 1; row <= bottom; row++) {
-      for (let col = left; col <= right; col++) {
-        const off = (row * SCREEN_COLS + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
-      }
-    }
-  }
-  syncVideoMemory(emu);
-}
-
-function scrollDown(_cpu: CPU, emu: Emulator, lines: number, attr: number, top: number, left: number, bottom: number, right: number): void {
-  const mem = emu.memory;
-  if (lines >= (bottom - top + 1)) {
-    for (let row = top; row <= bottom; row++) {
-      for (let col = left; col <= right; col++) {
-        const off = (row * SCREEN_COLS + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
-      }
-    }
-  } else {
-    for (let row = bottom; row >= top + lines; row--) {
-      for (let col = left; col <= right; col++) {
-        const dst = (row * SCREEN_COLS + col) * 2;
-        const src = ((row - lines) * SCREEN_COLS + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + dst, mem.readU8(VIDEO_MEM_BASE + src));
-        mem.writeU8(VIDEO_MEM_BASE + dst + 1, mem.readU8(VIDEO_MEM_BASE + src + 1));
-      }
-    }
-    for (let row = top; row < top + lines; row++) {
-      for (let col = left; col <= right; col++) {
-        const off = (row * SCREEN_COLS + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
-      }
-    }
-  }
-  syncVideoMemory(emu);
-}
-
-function teletypeOutput(cpu: CPU, emu: Emulator, ch: number): void {
-  if (ch === 0x0D) {
-    emu.consoleCursorX = 0;
-    return;
-  }
-  if (ch === 0x0A) {
-    emu.consoleCursorY++;
-    if (emu.consoleCursorY >= SCREEN_ROWS) {
-      scrollUp(cpu, emu, 1, 0x07, 0, 0, SCREEN_ROWS - 1, SCREEN_COLS - 1);
-      emu.consoleCursorY = SCREEN_ROWS - 1;
-    }
-    return;
-  }
-  if (ch === 0x08) { // backspace
-    if (emu.consoleCursorX > 0) emu.consoleCursorX--;
-    return;
-  }
-  if (ch === 0x07) return; // bell
-
-  const off = (emu.consoleCursorY * SCREEN_COLS + emu.consoleCursorX) * 2;
-  cpu.mem.writeU8(VIDEO_MEM_BASE + off, ch);
-  cpu.mem.writeU8(VIDEO_MEM_BASE + off + 1, emu.consoleAttr);
-
-  emu.consoleCursorX++;
-  if (emu.consoleCursorX >= SCREEN_COLS) {
-    emu.consoleCursorX = 0;
-    emu.consoleCursorY++;
-    if (emu.consoleCursorY >= SCREEN_ROWS) {
-      scrollUp(cpu, emu, 1, 0x07, 0, 0, SCREEN_ROWS - 1, SCREEN_COLS - 1);
-      emu.consoleCursorY = SCREEN_ROWS - 1;
-    }
-  }
-
-  // Also update console buffer
-  syncVideoMemory(emu);
 }
 
 /** Write a DOS DTA entry for FindFirst/FindNext results.
@@ -1450,54 +1232,4 @@ function buildDosLoL(cpu: CPU, emu: Emulator): void {
   mem.writeU16(lolPtr + 0x26, 0x8004);
 
   emu._dosLoLAddr = lolPtr;
-}
-
-/** INT 1Ah — BIOS time services */
-function handleInt1A(cpu: CPU, emu: Emulator): boolean {
-  const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
-  switch (ah) {
-    case 0x00: {
-      // Get system timer tick count (18.2 ticks/sec since midnight)
-      const ticks = emu.memory.readU32(0x46C);
-      cpu.setReg16(ECX, (ticks >>> 16) & 0xFFFF); // CX = high word
-      cpu.setReg16(EDX, ticks & 0xFFFF);           // DX = low word
-      cpu.setReg8(EAX, 0); // AL = midnight flag (0 = no midnight rollover)
-      return true;
-    }
-    case 0x02: {
-      // Get real-time clock time → CH=hours(BCD), CL=minutes(BCD), DH=seconds(BCD)
-      const now = new Date();
-      const toBCD = (n: number) => ((Math.floor(n / 10) << 4) | (n % 10)) & 0xFF;
-      cpu.setReg8(5, toBCD(now.getHours()));   // CH (idx 5)
-      cpu.setReg8(1, toBCD(now.getMinutes())); // CL (idx 1)
-      cpu.setReg8(6, toBCD(now.getSeconds())); // DH (idx 6)
-      cpu.reg[0] = cpu.reg[0] & ~CF;
-      return true;
-    }
-    case 0x04: {
-      // Get real-time clock date → CH=century(BCD), CL=year(BCD), DH=month(BCD), DL=day(BCD)
-      const now = new Date();
-      const toBCD = (n: number) => ((Math.floor(n / 10) << 4) | (n % 10)) & 0xFF;
-      const year = now.getFullYear();
-      cpu.setReg8(5, toBCD(Math.floor(year / 100))); // CH
-      cpu.setReg8(1, toBCD(year % 100));               // CL
-      cpu.setReg8(6, toBCD(now.getMonth() + 1));       // DH
-      cpu.setReg8(2, toBCD(now.getDate()));             // DL
-      cpu.reg[0] = cpu.reg[0] & ~CF;
-      return true;
-    }
-    default:
-      return true; // ignore unknown subfunctions
-  }
-}
-
-/** Sync video memory (B800:0000) to emu.consoleBuffer */
-export function syncVideoMemory(emu: Emulator): void {
-  const mem = emu.memory;
-  for (let i = 0; i < SCREEN_COLS * SCREEN_ROWS; i++) {
-    const ch = mem.readU8(VIDEO_MEM_BASE + i * 2);
-    const attr = mem.readU8(VIDEO_MEM_BASE + i * 2 + 1);
-    emu.consoleBuffer[i] = { char: ch, attr };
-  }
-  emu.onConsoleOutput?.();
 }

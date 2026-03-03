@@ -154,7 +154,23 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       wnd.visible = true;
     }
 
+    // When transitioning from hidden to visible, mark window as needing paint
+    if (!wasVisible && wnd.visible) {
+      wnd.needsPaint = true;
+      wnd.needsErase = true;
+    }
+
     if (wnd.wndProc) {
+      const WM_SHOWWINDOW = 0x0018;
+      const WM_ACTIVATEAPP = 0x001C;
+      const WM_ACTIVATE = 0x0006;
+      const WA_ACTIVE = 1;
+      emu.callWndProc16(wnd.wndProc, hWnd, WM_SHOWWINDOW, wnd.visible ? 1 : 0, 0);
+      if (wnd.visible && hWnd === emu.mainWindow) {
+        emu.callWndProc16(wnd.wndProc, hWnd, WM_ACTIVATEAPP, 1, 0);
+        emu.callWndProc16(wnd.wndProc, hWnd, WM_ACTIVATE, WA_ACTIVE, 0);
+      }
+
       let { cw, ch } = getClientSize(wnd.style, !!wnd.hMenu, wnd.width, wnd.height, true);
       if (hWnd === emu.mainWindow && emu.canvas) {
         cw = emu.canvas.width;

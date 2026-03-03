@@ -146,7 +146,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
 
     // Set up video memory area (B800:0000)
     // Initialize with spaces + default attribute
-    for (let i = 0; i < 80 * 25; i++) {
+    for (let i = 0; i < emu.screenCols * emu.screenRows; i++) {
       emu.memory.writeU8(0xB8000 + i * 2, 0x20);
       emu.memory.writeU8(0xB8000 + i * 2 + 1, 0x07);
     }

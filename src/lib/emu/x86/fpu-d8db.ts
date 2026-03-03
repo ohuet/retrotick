@@ -68,14 +68,25 @@ function fpuArith(cpu: CPU, op: number, a: number, b: number): void {
   }
 }
 
+function roundToNearestEven(val: number): number {
+  // Round-half-to-even (banker's rounding) — x86 FPU default rounding mode
+  if (Math.abs(val - Math.trunc(val)) === 0.5) {
+    // Exactly halfway — pick the even candidate
+    const lo = Math.floor(val);
+    const hi = Math.ceil(val);
+    return (lo % 2 === 0) ? lo : hi;
+  }
+  return Math.round(val);
+}
+
 function fpuRound(cpu: CPU, val: number): number {
   const rc = (cpu.fpuCW >> 10) & 3;
   switch (rc) {
-    case 0: return Math.round(val) | 0;
+    case 0: return roundToNearestEven(val) | 0;
     case 1: return Math.floor(val) | 0;
     case 2: return Math.ceil(val) | 0;
     case 3: return Math.trunc(val) | 0;
-    default: return Math.round(val) | 0;
+    default: return roundToNearestEven(val) | 0;
   }
 }
 
@@ -159,10 +170,29 @@ export function execFPU_D9(cpu: CPU, mod: number, regField: number, rm: number, 
         fpuSetST(cpu, 0, Math.atan2(fpuST(cpu, 0), x));
         break;
       }
-      case 0x34: break;
+      case 0x34: { // FXTRACT — ST(0) → exponent in ST(1), significand in ST(0)
+        const v = fpuST(cpu, 0);
+        if (v === 0) {
+          fpuSetST(cpu, 0, -Infinity); // exponent of 0 is -inf
+          fpuPush(cpu, 0);
+        } else {
+          const exp = Math.floor(Math.log2(Math.abs(v)));
+          fpuSetST(cpu, 0, exp);
+          fpuPush(cpu, v / Math.pow(2, exp));
+        }
+        break;
+      }
+      case 0x35: { // FPREM1 — IEEE partial remainder
+        const st0 = fpuST(cpu, 0);
+        const st1 = fpuST(cpu, 1);
+        const q = Math.round(st0 / st1);
+        fpuSetST(cpu, 0, st0 - q * st1);
+        cpu.fpuSW &= ~0x0400; // clear C2
+        break;
+      }
       case 0x36: cpu.fpuTop = (cpu.fpuTop - 1) & 7; break;
       case 0x37: cpu.fpuTop = (cpu.fpuTop + 1) & 7; break;
-      case 0x38: {
+      case 0x38: { // FPREM — truncated partial remainder
         fpuSetST(cpu, 0, fpuST(cpu, 0) % fpuST(cpu, 1));
         cpu.fpuSW &= ~0x0400;
         break;
@@ -179,7 +209,12 @@ export function execFPU_D9(cpu: CPU, mod: number, regField: number, rm: number, 
         fpuPush(cpu, Math.cos(v));
         break;
       }
-      case 0x3C: fpuSetST(cpu, 0, fpuRound(cpu, fpuST(cpu, 0))); break;
+      case 0x3C: { // FRNDINT — round to integer as float (no 32-bit truncation)
+        const v = fpuST(cpu, 0);
+        const rc = (cpu.fpuCW >> 10) & 3;
+        fpuSetST(cpu, 0, rc === 0 ? roundToNearestEven(v) : rc === 1 ? Math.floor(v) : rc === 2 ? Math.ceil(v) : Math.trunc(v));
+        break;
+      }
       case 0x3D: fpuSetST(cpu, 0, fpuST(cpu, 0) * Math.pow(2, Math.trunc(fpuST(cpu, 1)))); break;
       case 0x3E: fpuSetST(cpu, 0, Math.sin(fpuST(cpu, 0))); break;
       case 0x3F: fpuSetST(cpu, 0, Math.cos(fpuST(cpu, 0))); break;
@@ -235,13 +270,52 @@ export function execFPU_DB(cpu: CPU, mod: number, regField: number, rm: number, 
         break;
       }
       case 7: {
+        // FSTP m80 — store as 80-bit extended precision
         const val = fpuPop(cpu);
-        const buf = new ArrayBuffer(8);
-        const dv = new DataView(buf);
-        dv.setFloat64(0, val, true);
-        mem.writeU32(addr, dv.getUint32(0, true));
-        mem.writeU32(addr + 4, dv.getUint32(4, true));
-        mem.writeU16(addr + 8, val < 0 ? 0x8000 : 0);
+        const sign = (val < 0 || Object.is(val, -0)) ? 1 : 0;
+        const abs = Math.abs(val);
+        if (abs === 0) {
+          mem.writeU32(addr, 0);
+          mem.writeU32(addr + 4, 0);
+          mem.writeU16(addr + 8, sign << 15);
+        } else if (isNaN(val)) {
+          mem.writeU32(addr, 0);
+          mem.writeU32(addr + 4, 0xC0000000);
+          mem.writeU16(addr + 8, 0x7FFF);
+        } else if (!isFinite(abs)) {
+          mem.writeU32(addr, 0);
+          mem.writeU32(addr + 4, 0x80000000);
+          mem.writeU16(addr + 8, (sign << 15) | 0x7FFF);
+        } else {
+          // Decompose double to 80-bit extended
+          // Double: 1 sign, 11-bit exp (bias 1023), 52-bit mantissa (implicit 1)
+          // Extended: 1 sign, 15-bit exp (bias 16383), 64-bit mantissa (explicit 1)
+          const buf = new ArrayBuffer(8);
+          const dv = new DataView(buf);
+          dv.setFloat64(0, abs, false); // big-endian for easy bit extraction
+          const hi32 = dv.getUint32(0);
+          const lo32 = dv.getUint32(4);
+          const dblExp = (hi32 >>> 20) & 0x7FF;
+          const dblMantHi = hi32 & 0xFFFFF; // top 20 bits of 52-bit mantissa
+          const dblMantLo = lo32;            // bottom 32 bits of 52-bit mantissa
+          if (dblExp === 0) {
+            // Denormal double → denormal or small normal extended
+            // For simplicity, store as extended denormal
+            const mantHi = (dblMantHi << 11) | (dblMantLo >>> 21);
+            const mantLo = (dblMantLo << 11) >>> 0;
+            mem.writeU32(addr, mantLo);
+            mem.writeU32(addr + 4, mantHi);
+            mem.writeU16(addr + 8, sign << 15);
+          } else {
+            const extExp = dblExp - 1023 + 16383;
+            // 64-bit mantissa: bit 63 = explicit 1, bits 62..11 = 52-bit mantissa, bits 10..0 = 0
+            const mantHi = (0x80000000 | (dblMantHi << 11) | (dblMantLo >>> 21)) >>> 0;
+            const mantLo = (dblMantLo << 11) >>> 0;
+            mem.writeU32(addr, mantLo);
+            mem.writeU32(addr + 4, mantHi);
+            mem.writeU16(addr + 8, (sign << 15) | extExp);
+          }
+        }
         break;
       }
       default:

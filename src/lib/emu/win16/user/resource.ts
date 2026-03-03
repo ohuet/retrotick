@@ -10,9 +10,17 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
   user.register('ord_173', 6, () => 1);
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Ordinal 174: LoadIcon(hInstance, lpIconName_ptr) — 6 bytes
+  // Ordinal 174: LoadIcon(hInstance, lpIconName_ptr) — 6 bytes (2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_174', 6, () => 1);
+  user.register('ord_174', 6, () => {
+    const [hInstance, lpIconName] = emu.readPascalArgs16([2, 4]);
+    const iconId = lpIconName < 0x10000 ? lpIconName : 0;
+    if (iconId) {
+      const hIcon = emu.loadIconResource(iconId);
+      if (hIcon) return hIcon;
+    }
+    return 1; // fallback handle
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 175: LoadBitmap(hInstance, lpBitmapName_ptr) — 6 bytes

@@ -240,7 +240,7 @@ export function materializeFlags(cpu: CPU): void {
       f |= PARITY_TABLE[r8] ? PF : 0;
       f |= a !== 0 ? CF : 0; // CF = (original != 0)
       f |= r8 === 0x80 ? OF : 0;
-      f |= (r8 & 0x0F) !== 0 ? AF : 0;
+      f |= (a & 0x0F) !== 0 ? AF : 0;
       break;
     }
     case LazyOp.NEG16: {
@@ -250,7 +250,7 @@ export function materializeFlags(cpu: CPU): void {
       f |= PARITY_TABLE[r16 & 0xFF] ? PF : 0;
       f |= (a & 0xFFFF) !== 0 ? CF : 0;
       f |= r16 === 0x8000 ? OF : 0;
-      f |= (r16 & 0x0F) !== 0 ? AF : 0;
+      f |= (a & 0x0F) !== 0 ? AF : 0;
       break;
     }
     case LazyOp.NEG32: {
@@ -260,7 +260,7 @@ export function materializeFlags(cpu: CPU): void {
       f |= PARITY_TABLE[r32 & 0xFF] ? PF : 0;
       f |= (a >>> 0) !== 0 ? CF : 0;
       f |= r32 === 0x80000000 ? OF : 0;
-      f |= (r32 & 0x0F) !== 0 ? AF : 0;
+      f |= (a & 0x0F) !== 0 ? AF : 0;
       break;
     }
     default:

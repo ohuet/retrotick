@@ -5,6 +5,7 @@ import { LazyOp } from './lazy-op';
 // Flag bits
 const CF = 0x001;
 const ZF = 0x040;
+const OF = 0x800;
 
 // Register indices
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
@@ -98,8 +99,18 @@ export function exec0FExt(
       const count = cpu.fetch8() & 0x1F;
       if (count) {
         const regVal = opSize === 16 ? cpu.getReg16(d.regField) : cpu.reg[d.regField];
-        const result = doShld(d.val, regVal, count, opSize);
+        const orig = d.val;
+        const { result, carryOut } = doShld(orig, regVal, count, opSize);
         cpu.writeModRM(d, result, opSize);
+        // SHL lazy sets ZF, SF, PF, CF correctly (b = carryOut)
+        cpu.setLazy(opSize === 16 ? LazyOp.SHL16 : LazyOp.SHL32, result, orig, carryOut);
+        if (count === 1) {
+          // Materialize flags, then set OF = sign bit changed
+          const f = cpu.getFlags();
+          const signBit = opSize === 16 ? 0x8000 : 0x80000000;
+          const of = ((orig ^ result) & signBit) ? OF : 0;
+          cpu.setFlags((f & ~OF) | of);
+        }
       }
       return true;
     }
@@ -110,8 +121,16 @@ export function exec0FExt(
       const count = cpu.getReg8(ECX) & 0x1F;
       if (count) {
         const regVal = opSize === 16 ? cpu.getReg16(d.regField) : cpu.reg[d.regField];
-        const result = doShld(d.val, regVal, count, opSize);
+        const orig = d.val;
+        const { result, carryOut } = doShld(orig, regVal, count, opSize);
         cpu.writeModRM(d, result, opSize);
+        cpu.setLazy(opSize === 16 ? LazyOp.SHL16 : LazyOp.SHL32, result, orig, carryOut);
+        if (count === 1) {
+          const f = cpu.getFlags();
+          const signBit = opSize === 16 ? 0x8000 : 0x80000000;
+          const of = ((orig ^ result) & signBit) ? OF : 0;
+          cpu.setFlags((f & ~OF) | of);
+        }
       }
       return true;
     }
@@ -122,8 +141,18 @@ export function exec0FExt(
       const count = cpu.fetch8() & 0x1F;
       if (count) {
         const regVal = opSize === 16 ? cpu.getReg16(d.regField) : cpu.reg[d.regField];
-        const result = doShrd(d.val, regVal, count, opSize);
+        const orig = d.val;
+        const { result, carryOut } = doShrd(orig, regVal, count, opSize);
         cpu.writeModRM(d, result, opSize);
+        // SHR lazy sets ZF, SF, PF, CF correctly
+        cpu.setLazy(opSize === 16 ? LazyOp.SHR16 : LazyOp.SHR32, result, orig, carryOut);
+        if (count === 1) {
+          // OF = sign bit changed (orig MSB XOR result MSB)
+          const f = cpu.getFlags();
+          const signBit = opSize === 16 ? 0x8000 : 0x80000000;
+          const of = ((orig ^ result) & signBit) ? OF : 0;
+          cpu.setFlags((f & ~OF) | of);
+        }
       }
       return true;
     }
@@ -134,8 +163,16 @@ export function exec0FExt(
       const count = cpu.getReg8(ECX) & 0x1F;
       if (count) {
         const regVal = opSize === 16 ? cpu.getReg16(d.regField) : cpu.reg[d.regField];
-        const result = doShrd(d.val, regVal, count, opSize);
+        const orig = d.val;
+        const { result, carryOut } = doShrd(orig, regVal, count, opSize);
         cpu.writeModRM(d, result, opSize);
+        cpu.setLazy(opSize === 16 ? LazyOp.SHR16 : LazyOp.SHR32, result, orig, carryOut);
+        if (count === 1) {
+          const f = cpu.getFlags();
+          const signBit = opSize === 16 ? 0x8000 : 0x80000000;
+          const of = ((orig ^ result) & signBit) ? OF : 0;
+          cpu.setFlags((f & ~OF) | of);
+        }
       }
       return true;
     }
@@ -152,15 +189,17 @@ export function exec0FExt(
     case 0xC1: {
       const d = cpu.decodeModRM(opSize);
       if (opSize === 16) {
-        const sum = (d.val + cpu.getReg16(d.regField)) & 0xFFFF;
+        const origReg = cpu.getReg16(d.regField);
+        const sum = d.val + origReg;
         cpu.setReg16(d.regField, d.val);
-        cpu.writeModRM(d, sum, 16);
-        cpu.setLazy(LazyOp.ADD16, sum, d.val, cpu.getReg16(d.regField));
+        cpu.writeModRM(d, sum & 0xFFFF, 16);
+        cpu.setLazy(LazyOp.ADD16, sum, d.val, origReg);
       } else {
-        const sum = (d.val + cpu.reg[d.regField]) | 0;
+        const origReg = cpu.reg[d.regField];
+        const sum = (d.val + origReg) | 0;
         cpu.reg[d.regField] = d.val | 0;
         cpu.writeModRM(d, sum, 32);
-        cpu.setLazy(LazyOp.ADD32, sum, d.val, cpu.reg[d.regField]);
+        cpu.setLazy(LazyOp.ADD32, sum, d.val, origReg);
       }
       return true;
     }
@@ -168,10 +207,11 @@ export function exec0FExt(
     // XADD r/m8, r8
     case 0xC0: {
       const d = cpu.decodeModRM(8);
-      const sum = (d.val + cpu.getReg8(d.regField)) & 0xFF;
+      const origReg = cpu.getReg8(d.regField);
+      const sum = d.val + origReg;
       cpu.setReg8(d.regField, d.val);
-      cpu.writeModRM(d, sum, 8);
-      cpu.setLazy(LazyOp.ADD8, sum, d.val, cpu.getReg8(d.regField));
+      cpu.writeModRM(d, sum & 0xFF, 8);
+      cpu.setLazy(LazyOp.ADD8, sum, d.val, origReg);
       return true;
     }
 
@@ -179,19 +219,21 @@ export function exec0FExt(
     case 0xB1: {
       const d = cpu.decodeModRM(opSize);
       if (opSize === 16) {
-        if (cpu.getReg16(EAX) === (d.val & 0xFFFF)) {
-          cpu.setFlags(cpu.getFlags() | ZF);
+        const eaxVal = cpu.getReg16(EAX);
+        const cmp = (eaxVal - (d.val & 0xFFFF)) | 0;
+        cpu.setLazy(LazyOp.SUB16, cmp, eaxVal, d.val & 0xFFFF);
+        if (eaxVal === (d.val & 0xFFFF)) {
           cpu.writeModRM(d, cpu.getReg16(d.regField), 16);
         } else {
-          cpu.setFlags(cpu.getFlags() & ~ZF);
           cpu.setReg16(EAX, d.val & 0xFFFF);
         }
       } else {
-        if ((cpu.reg[EAX] | 0) === (d.val | 0)) {
-          cpu.setFlags(cpu.getFlags() | ZF);
+        const eaxVal = cpu.reg[EAX] | 0;
+        const cmp = (eaxVal - (d.val | 0)) | 0;
+        cpu.setLazy(LazyOp.SUB32, cmp, eaxVal, d.val | 0);
+        if (eaxVal === (d.val | 0)) {
           cpu.writeModRM(d, cpu.reg[d.regField], 32);
         } else {
-          cpu.setFlags(cpu.getFlags() & ~ZF);
           cpu.reg[EAX] = d.val | 0;
         }
       }
@@ -201,11 +243,12 @@ export function exec0FExt(
     // CMPXCHG r/m8, r8 (0F B0)
     case 0xB0: {
       const d = cpu.decodeModRM(8);
-      if (cpu.getReg8(EAX) === (d.val & 0xFF)) {
-        cpu.setFlags(cpu.getFlags() | ZF);
+      const eaxVal = cpu.getReg8(EAX);
+      const cmp = (eaxVal - (d.val & 0xFF)) | 0;
+      cpu.setLazy(LazyOp.SUB8, cmp, eaxVal, d.val & 0xFF);
+      if (eaxVal === (d.val & 0xFF)) {
         cpu.writeModRM(d, cpu.getReg8(d.regField), 8);
       } else {
-        cpu.setFlags(cpu.getFlags() & ~ZF);
         cpu.setReg8(EAX, d.val);
       }
       return true;
@@ -220,6 +263,41 @@ export function exec0FExt(
         ((v >> 8) & 0xFF00) | ((v >> 24) & 0xFF)) | 0;
       return true;
     }
+
+    // BTC r/m32, reg32
+    case 0xBB: {
+      const d = cpu.decodeModRM(opSize);
+      const bit = (opSize === 16 ? cpu.getReg16(d.regField) : cpu.reg[d.regField]) & (opSize - 1);
+      const cf = (d.val >> bit) & 1;
+      cpu.writeModRM(d, d.val ^ (1 << bit), opSize);
+      const f = cpu.getFlags() & ~CF;
+      cpu.setFlags(f | (cf ? CF : 0));
+      return true;
+    }
+
+    // PUSH FS (0F A0)
+    case 0xA0:
+      if (opSize === 16) cpu.push16(0);
+      else cpu.push32(0);
+      return true;
+
+    // POP FS (0F A1)
+    case 0xA1:
+      if (opSize === 16) cpu.pop16();
+      else cpu.pop32();
+      return true;
+
+    // PUSH GS (0F A8)
+    case 0xA8:
+      if (opSize === 16) cpu.push16(0);
+      else cpu.push32(0);
+      return true;
+
+    // POP GS (0F A9)
+    case 0xA9:
+      if (opSize === 16) cpu.pop16();
+      else cpu.pop32();
+      return true;
 
     // 0F 3F xx xx — undocumented (used by CPU-Z for CPU detection); treat as 4-byte NOP
     case 0x3F: {

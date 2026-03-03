@@ -3,6 +3,7 @@ import { materializeFlags } from './flags';
 import { decodeModRM as _decodeModRM, decodeSIB as _decodeSIB, getSegOverrideSel as _getSegOverrideSel, decodeModRM16 as _decodeModRM16, writeModRM as _writeModRM, decodeFPUModRM as _decodeFPUModRM } from './decode';
 import { cpuStep } from './dispatch';
 import { LazyOp } from './lazy-op';
+import type { Emulator } from '../emulator';
 
 // Register indices
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
@@ -50,7 +51,7 @@ export class CPU {
   _segOverride = 0; // 0 = none, 0x64 = FS, 0x26=ES, 0x2E=CS, 0x36=SS, 0x3E=DS
 
   // Back-reference to emulator (set during load, used for DOS INT handling)
-  emu: import('../../emu/emulator').Emulator | null = null;
+  emu: Emulator | null = null;
 
   // Real mode: segment * 16 = linear (no lookup table needed)
   realMode = false;

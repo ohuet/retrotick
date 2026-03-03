@@ -1,5 +1,5 @@
 import type { Emulator } from '../../emulator';
-import type { PaletteInfo } from './types';
+import type { PaletteInfo, BitmapInfo, DCInfo } from './types';
 import { PS_NULL, OPAQUE } from '../types';
 import { colorToCSS, isPaletteIndex, getPaletteIdx, resolveColor, ensurePalIndexBuf } from './_helpers';
 
@@ -197,7 +197,7 @@ export function registerDraw(emu: Emulator): void {
 
     // If the DC has a selected bitmap, check bounds and read from DIB bits if available
     if (dc.selectedBitmap) {
-      const bmp = emu.handles.get<import('./types').BitmapInfo>(dc.selectedBitmap);
+      const bmp = emu.handles.get<BitmapInfo>(dc.selectedBitmap);
       if (bmp) {
         if (x < 0 || x >= bmp.width || y < 0 || y >= bmp.height) return 0xFFFFFFFF;
         if (bmp.dibBitsPtr && bmp.dibBpp) {
@@ -912,7 +912,7 @@ export function registerDraw(emu: Emulator): void {
 
 /** Scanline-based flood fill implementation */
 function floodFillImpl(
-  dc: import('./types').DCInfo, emu: Emulator,
+  dc: DCInfo, emu: Emulator,
   x: number, y: number, color: number, fuFillType: number,
 ): void {
   const canvas = dc.ctx.canvas || dc.canvas;

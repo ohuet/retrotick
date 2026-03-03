@@ -1,14 +1,16 @@
 import { Memory } from './memory';
 import { CPU } from './x86/cpu';
 import type { LoadedPE } from './pe-loader';
-import type { LoadedNE } from './ne-loader';
+import type { LoadedNE, NEResourceEntry } from './ne-loader';
 import { HandleTable } from './win32/handles';
 import type { DCInfo, BitmapInfo, PenInfo, BrushInfo } from './win32/gdi32/index';
 import type { WindowInfo, WndClassInfo } from './win32/user32/index';
-import type { PEInfo } from '../pe/types';
+import type { TreeViewItem, ListViewColumn, ListViewItem } from './win32/user32/types';
+import type { PEInfo, MenuItem } from '../pe/types';
 import type { GL1Context } from './win32/gl-context';
 import type { RegistryStore } from '../registry-store';
 import { DefaultFileManager } from './file-manager';
+import { VGAState, isVGAPort } from './dos/vga';
 import type { FileManager } from './file-manager';
 import { renderChildControls as _renderChildControls, notifyControlOverlays as _notifyControlOverlays } from './emu-render';
 import { getDC as _getDC, getWindowDC as _getWindowDC, promoteToMainWindow as _promoteToMainWindow, setupCanvasSize as _setupCanvasSize, beginPaint as _beginPaint, endPaint as _endPaint, syncDCToCanvas as _syncDCToCanvas, releaseChildDC as _releaseChildDC, dispatchToSehHandler as _dispatchToSehHandler, getBrush as _getBrush, getPen as _getPen, loadBitmapResource as _loadBitmapResource, loadBitmapResourceFromModule as _loadBitmapResourceFromModule, loadBitmapResourceByName as _loadBitmapResourceByName, loadCursorResourceByName as _loadCursorResourceByName, loadStringResource as _loadStringResource, loadIconResource as _loadIconResource } from './emu-window';
@@ -71,7 +73,7 @@ export interface ControlOverlay {
   trackPos: number;
   trackMin: number;
   trackMax: number;
-  treeItems?: import('./win32/user32/types').TreeViewItem[];
+  treeItems?: TreeViewItem[];
   treeSelectedItem?: number;
   treeImageUrls?: (string | undefined)[];
   lbItems?: string[];
@@ -79,8 +81,8 @@ export interface ControlOverlay {
   lbSelectedIndices?: number[];
   cbItems?: string[];
   cbSelectedIndex?: number;
-  listColumns?: import('./win32/user32/types').ListViewColumn[];
-  listItems?: import('./win32/user32/types').ListViewItem[];
+  listColumns?: ListViewColumn[];
+  listItems?: ListViewItem[];
   statusTexts?: string[];
   tabItems?: { text: string }[];
   tabSelectedIndex?: number;
@@ -326,10 +328,21 @@ export class Emulator {
   _dosFileOpenPending = false;
   _dosLastTimerTick = 0;
   _dosHalted = false;
+  _dosVerifyFlag = false;
+  _dosInDOSAddr = 0;
   /** I/O port data (for IN/OUT instructions) */
   _ioPorts = new Map<number, number>();
   /** Pending hardware interrupts to fire at next tick */
   _pendingHwInts: number[] = [];
+
+  // VGA state
+  vga = new VGAState();
+  videoMode = 0x03;
+  screenCols = 80;
+  screenRows = 25;
+  charHeight = 16;
+  isGraphicsMode = false;
+  onVideoFrame?: () => void;
 
   // API dispatch
   apiDefs = new Map<string, ApiDef>();
@@ -530,7 +543,7 @@ export class Emulator {
   segLocalHeaps = new Map<number, { ptr: number; end: number }>();
 
   // NE DLL resources (for LoadBitmap etc. to search across DLLs)
-  neDllResources: Array<{ resources: import('./ne-loader').NEResourceEntry[]; arrayBuffer: ArrayBuffer }> = [];
+  neDllResources: Array<{ resources: NEResourceEntry[]; arrayBuffer: ArrayBuffer }> = [];
 
   // Virtual allocator
   virtualBase = 0;
@@ -587,7 +600,7 @@ export class Emulator {
   _childProcessResume: { stackBytes: number; retVal: number; completer: (emu: Emulator, stackBytes: number, retVal: number) => void } | null = null;
   /** Callback to show browser file picker (open/save). Returns file info or null if cancelled. */
   onFileDialog?: (type: 'open' | 'save', filter?: string, title?: string) => Promise<{ name: string; data: ArrayBuffer } | null>;
-  menuItems?: import('../pe/types').MenuItem[];
+  menuItems?: MenuItem[];
 
   // Shared process registry (set by host to share across emulator instances)
   processRegistry?: ProcessRegistry;
@@ -685,12 +698,14 @@ export class Emulator {
       }
     }
 
-    // If the app's dlgProc didn't call EndDialog, end it ourselves
+    // If the app's dlgProc called EndDialog during WM_COMMAND, ds.ended is true
+    // but _endDialog hasn't been called yet (EndDialog only sets the flag).
+    // If the dlgProc didn't call EndDialog, force it ourselves.
     if (!ds.ended) {
       ds.result = action;
       ds.ended = true;
-      this._endDialog(action);
     }
+    this._endDialog(ds.result);
   }
 
   /** Show a MessageBox — onDismiss is called synchronously when user dismisses it. */
@@ -715,8 +730,9 @@ export class Emulator {
   }
 
   initConsoleBuffer(): void {
-    this.consoleBuffer = new Array(80 * 25);
-    for (let i = 0; i < 80 * 25; i++) {
+    const size = this.screenCols * this.screenRows;
+    this.consoleBuffer = new Array(size);
+    for (let i = 0; i < size; i++) {
       this.consoleBuffer[i] = { char: 0x20, attr: 0x07 };
     }
     this.consoleCursorX = 0;
@@ -961,7 +977,7 @@ export class Emulator {
     // Route to the thread that owns the target window
     let targetThread = this.currentThread;
     if (hwnd && this.threads.length > 1) {
-      const wnd = this.handles.get<import('./win32/user32/types').WindowInfo>(hwnd);
+      const wnd = this.handles.get<WindowInfo>(hwnd);
       if (wnd?.ownerThreadId) {
         const ownerThread = this.threads.find(t => t.id === wnd.ownerThreadId);
         if (ownerThread) targetThread = ownerThread;
@@ -1137,11 +1153,21 @@ export class Emulator {
 
   /** Read an I/O port value */
   portIn(port: number): number {
+    if (isVGAPort(port)) return this.vga.portRead(port);
     if (port === 0x60) {
       // Reading port 0x60 clears the "output buffer full" bit in port 0x64
       this._ioPorts.set(0x64, (this._ioPorts.get(0x64) ?? 0) & ~0x01);
     }
     return this._ioPorts.get(port) ?? 0xFF;
+  }
+
+  /** Write to an I/O port */
+  portOut(port: number, value: number): void {
+    if (isVGAPort(port)) {
+      this.vga.portWrite(port, value);
+    } else {
+      this._ioPorts.set(port, value);
+    }
   }
 
   /** Inject a hardware keyboard event: write scancode to port 0x60 and trigger INT 09h */

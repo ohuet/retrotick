@@ -280,6 +280,30 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
     }
   }
 
+  // Patch Win16 function prologs in code segments
+  // The standard prolog "push ds; pop ax; nop" (1E 58 90) must be patched to
+  // "mov ax, DGROUP_selector" (B8 xx xx) so DS gets set to the module's own data segment.
+  if (autoDataSeg) {
+    const dgroupSelector = selectorBase + autoDataSeg - 1;
+    for (const seg of segments) {
+      if (seg.flags & 0x01) continue; // skip DATA segments, only patch CODE segments
+      const base = seg.linearBase;
+      const size = seg.fileSize > 0 ? seg.fileSize : seg.minAlloc;
+      // Scan for exported entry points and patch their prologs
+      // ep.seg is 1-based local segment index; convert to global selector
+      for (const [, ep] of entryPoints) {
+        const epSelector = selectorBase + ep.seg - 1;
+        if (epSelector !== seg.selector) continue;
+        const addr = base + ep.offset;
+        if (memory.readU8(addr) === 0x1E && memory.readU8(addr + 1) === 0x58 &&
+            memory.readU8(addr + 2) === 0x90) {
+          memory.writeU8(addr, 0xB8); // mov ax, imm16
+          memory.writeU16(addr + 1, dgroupSelector);
+        }
+      }
+    }
+  }
+
   // Process relocations and build thunk table
   const apiMap = new Map<number, { dll: string; name: string; ordinal: number }>();
   let thunkAddr = opts?.thunkStartAddr ?? (THUNK_LINEAR_BASE + 1); // Start at odd offset so OFFSET fixups have bit 0 set

@@ -1,5 +1,5 @@
 import type { Emulator } from '../../emulator';
-import type { WindowInfo } from './types';
+import type { WindowInfo, TreeViewItem, ListViewColumn, ListViewItem } from './types';
 import { writeMsgStruct, getClientSize } from './_helpers';
 import { encodeMBCS } from '../../memory';
 import { emuCompleteThunk } from '../../emu-exec';
@@ -167,7 +167,7 @@ export function registerMessage(emu: Emulator): void {
     }
 
     // Check if any window needs repainting (synthesizable WM_PAINT)
-    for (const [, wnd] of emu.handles.findByType('window') as [number, import('./types').WindowInfo][]) {
+    for (const [, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
       if (wnd && wnd.needsPaint && wnd.wndProc) {
         return nCount;
       }
@@ -1067,7 +1067,7 @@ export function registerMessage(emu: Emulator): void {
         }
         const id = wnd.treeNextId!++;
         const parentId = (hParent === TVI_ROOT || hParent === 0) ? 0 : hParent;
-        const item: import('./types').TreeViewItem = { id, parent: parentId, text, children: [], imageIndex: iImage, selectedImageIndex: iSelImage, lParam: itemLParam };
+        const item: TreeViewItem = { id, parent: parentId, text, children: [], imageIndex: iImage, selectedImageIndex: iSelImage, lParam: itemLParam };
         wnd.treeItems!.set(id, item);
         if (parentId !== 0) {
           const parentItem = wnd.treeItems!.get(parentId);
@@ -1161,7 +1161,7 @@ export function registerMessage(emu: Emulator): void {
         if ((mask & LVCF_TEXT) && pszText) {
           text = emu.memory.readUTF16String(pszText);
         }
-        const col: import('./types').ListViewColumn = { text, width: cx, fmt };
+        const col: ListViewColumn = { text, width: cx, fmt };
         const idx = wParam | 0;
         wnd.listColumns!.splice(idx, 0, col);
         return idx;
@@ -1220,7 +1220,7 @@ export function registerMessage(emu: Emulator): void {
               emu.memory.writeU16(textBuf, 0);
               // Send WM_NOTIFY to parent
               emu.callWndProc(
-                emu.handles.get<import('./types').WindowInfo>(wnd.parent)?.wndProc || 0,
+                emu.handles.get<WindowInfo>(wnd.parent)?.wndProc || 0,
                 wnd.parent, WM_NOTIFY, wnd.controlId || 0, nm
               );
               // Read back text from buffer (callback may have set pszText to a different pointer)
@@ -1285,7 +1285,7 @@ export function registerMessage(emu: Emulator): void {
           text = emu.memory.readUTF16String(pszText);
         }
         if (message === LVM_INSERTITEMW) {
-          const item: import('./types').ListViewItem = { text };
+          const item: ListViewItem = { text };
           if (mask & LVIF_PARAM) item.lParam = itemLParam;
           wnd.listItems!.splice(iItem, 0, item);
           return iItem;
@@ -1392,7 +1392,7 @@ export function registerMessage(emu: Emulator): void {
       if (message === 0x1015) { // LVM_REDRAWITEMS
         // Re-query display info for items via LVN_GETDISPINFO
         if (wnd.parent && wnd.listColumns && wnd.listColumns.length > 1) {
-          const parentWnd = emu.handles.get<import('./types').WindowInfo>(wnd.parent);
+          const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd?.wndProc) {
             const WM_NOTIFY = 0x004E;
             const LVN_GETDISPINFOW = -177;

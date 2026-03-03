@@ -42,14 +42,23 @@ function fpuCompareToCPUFlags(cpu: CPU, a: number, b: number): void {
   cpu.setFlags(f);
 }
 
+function roundToNearestEven(val: number): number {
+  if (Math.abs(val - Math.trunc(val)) === 0.5) {
+    const lo = Math.floor(val);
+    const hi = Math.ceil(val);
+    return (lo % 2 === 0) ? lo : hi;
+  }
+  return Math.round(val);
+}
+
 function fpuRound(cpu: CPU, val: number): number {
   const rc = (cpu.fpuCW >> 10) & 3;
   switch (rc) {
-    case 0: return Math.round(val) | 0;
+    case 0: return roundToNearestEven(val) | 0;
     case 1: return Math.floor(val) | 0;
     case 2: return Math.ceil(val) | 0;
     case 3: return Math.trunc(val) | 0;
-    default: return Math.round(val) | 0;
+    default: return roundToNearestEven(val) | 0;
   }
 }
 
@@ -73,16 +82,15 @@ function writeF64(mem: Memory, addr: number, val: number): void {
 
 function readI64AsFloat(mem: Memory, addr: number): number {
   const lo = mem.readU32(addr);
-  const hi = mem.readU32(addr + 4);
+  const hi = mem.readI32(addr + 4); // signed — FILD loads signed int64
   return hi * 0x100000000 + lo;
 }
 
 function writeFloatAsI64(mem: Memory, addr: number, val: number): void {
-  const i = Math.trunc(val);
-  const lo = i >>> 0;
-  const hi = (i / 0x100000000) | 0;
-  mem.writeU32(addr, lo);
-  mem.writeU32(addr + 4, hi);
+  const bi = BigInt(Math.trunc(val));
+  const u64 = bi & 0xFFFFFFFFFFFFFFFFn;
+  mem.writeU32(addr, Number(u64 & 0xFFFFFFFFn));
+  mem.writeU32(addr + 4, Number((u64 >> 32n) & 0xFFFFFFFFn));
 }
 
 function fpuArith(cpu: CPU, op: number, a: number, b: number): void {

@@ -1,5 +1,5 @@
 import type { CPU } from './x86/cpu';
-import type { WinMsg } from './emulator';
+import type { Emulator, WinMsg } from './emulator';
 
 /**
  * Snapshot of all mutable CPU fields for one thread.
@@ -65,7 +65,7 @@ export class Thread {
     savedEBX: number; savedEBP: number; savedESI: number; savedEDI: number;
     savedDS?: number; savedSP?: number;
     outerStackBytes: number;
-    outerCompleter: (emu: import('./emulator').Emulator, retVal: number, stackBytes: number) => void;
+    outerCompleter: (emu: Emulator, retVal: number, stackBytes: number) => void;
   }> = [];
   _wndProcSetupPending = false;
   _currentThunkStackBytes = 0;

@@ -94,9 +94,11 @@ export function exec0F(
         const of = truncated !== result;
         cpu.setFlags((cpu.getFlags() & ~(CF | OF)) | (of ? CF | OF : 0));
       } else {
-        const result = Math.imul(cpu.reg[d.regField] | 0, d.val | 0);
+        const r64 = BigInt(cpu.reg[d.regField] | 0) * BigInt(d.val | 0);
+        const result = Number(r64 & 0xFFFFFFFFn) | 0;
         cpu.reg[d.regField] = result;
-        cpu.setFlags(cpu.getFlags() & ~(CF | OF));
+        const of = r64 !== BigInt(result);
+        cpu.setFlags((cpu.getFlags() & ~(CF | OF)) | (of ? CF | OF : 0));
       }
       break;
     }

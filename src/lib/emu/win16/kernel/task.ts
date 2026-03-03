@@ -36,19 +36,19 @@ export function registerKernelTask(kernel: Win16Module, emu: Emulator, state: Ke
   kernel.register('ord_38', 6, () => 0);
 
   // --- Ordinal 91: InitTask() — 0 bytes, register-based ---
-  kernel.register('ord_91', 2, () => {
+  kernel.register('ord_91', 0, () => {
     const hInstance = 1;
-    emu.cpu.reg[0] = hInstance;
-    emu.cpu.setReg16(3, 1);       // BX = cmdShow
+    const SW_SHOWNORMAL = 1;
     emu.cpu.setReg16(1, 0x1000);  // CX = stack size
-    emu.cpu.setReg16(2, 1);       // DX = nCmdShow
     emu.cpu.setReg16(7, hInstance); // DI = hInstance
     emu.cpu.setReg16(6, 0);       // SI = hPrevInstance
     const cmdLineAddr = emu.allocHeap(16);
     emu.memory.writeU8(cmdLineAddr, 0);
     emu.cpu.es = emu.cpu.ds;
-    emu.cpu.setReg16(3, 0x81);    // BX = offset 0x81
-    return hInstance;
+    emu.cpu.setReg16(3, 0x81);    // BX = offset to command line in PSP
+    // Return DWORD: DX:AX where AX=hInstance, DX=nCmdShow
+    // emuCompleteThunk16 sets AX=low word, DX=high word
+    return (SW_SHOWNORMAL << 16) | hInstance;
   });
 
   // --- Ordinal 117: OldYield() — 0 bytes ---

@@ -102,26 +102,34 @@ interface ConsoleViewProps {
 export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [, setTick] = useState(0);
 
-  const COLS = 80;
-  const ROWS = 25;
+  const COLS = emu.screenCols;
+  const ROWS = emu.screenRows;
 
   const render = useCallback(() => {
     setTick(t => t + 1);
   }, []);
 
-  // Re-render on console output
+  // Re-render on console output / video frame
   useEffect(() => {
     emu.onConsoleOutput = () => render();
+    emu.onVideoFrame = () => {
+      const canvas = canvasRef.current;
+      const fb = emu.vga.framebuffer;
+      if (canvas && fb) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) ctx.putImageData(fb, 0, 0);
+      }
+    };
     render();
-    // Focus input so keyboard works immediately
     inputRef.current?.focus();
-    // Cursor blink
     const blinkTimer = setInterval(render, 500);
     return () => {
       clearInterval(blinkTimer);
       emu.onConsoleOutput = undefined;
+      emu.onVideoFrame = undefined;
     };
   }, [emu, render]);
 
@@ -511,10 +519,11 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
 
   // Measure actual ch width and compute scaleX to fit 80 columns into 640px
   const [scaleX, setScaleX] = useState(1);
+  const lineHeight = emu.charHeight === 8 ? 8 : 16;
   useEffect(() => {
+    if (emu.isGraphicsMode) return;
     const el = preRef.current;
     if (!el) return;
-    // Measure one ch in the current font
     const span = document.createElement('span');
     span.style.font = el.style.font;
     span.style.position = 'absolute';
@@ -524,32 +533,49 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     const chWidth = span.getBoundingClientRect().width;
     document.body.removeChild(span);
     if (chWidth > 0) setScaleX(640 / (COLS * chWidth));
-  }, []);
+  }, [COLS, emu.isGraphicsMode]);
+
+  const isGfx = emu.isGraphicsMode;
+  const gfxMode = emu.vga.currentMode;
+  const gfxWidth = gfxMode.width;
+  const gfxHeight = gfxMode.height;
 
   return (
-    <div style={{ position: 'relative', width: '640px', height: `${ROWS * 16}px`, background: '#000' }} onPointerUp={handleClick}>
-      <pre
-        ref={preRef}
-        style={{
-          margin: 0,
-          padding: '1px',
-          background: '#000',
-          color: '#C0C0C0',
-          font: '14px/16px "Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace',
-          cursor: 'text',
-          overflow: 'hidden',
-          userSelect: 'text',
-          width: `${COLS}ch`,
-          height: `${ROWS * 16}px`,
-          lineHeight: '16px',
-          letterSpacing: '0px',
-          transformOrigin: 'top left',
-          transform: `scaleX(${scaleX})`,
-        }}
-      >
-        {rows}
-      </pre>
-      {/* Hidden input to capture keyboard events */}
+    <div style={{ position: 'relative', width: '640px', height: isGfx ? '400px' : `${ROWS * lineHeight}px`, background: '#000' }} onPointerUp={handleClick}>
+      {isGfx ? (
+        <canvas
+          ref={canvasRef}
+          width={gfxWidth}
+          height={gfxHeight}
+          style={{
+            width: '640px',
+            height: '400px',
+            imageRendering: 'pixelated',
+          }}
+        />
+      ) : (
+        <pre
+          ref={preRef}
+          style={{
+            margin: 0,
+            padding: '1px',
+            background: '#000',
+            color: '#C0C0C0',
+            font: `14px/${lineHeight}px "Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace`,
+            cursor: 'text',
+            overflow: 'hidden',
+            userSelect: 'text',
+            width: `${COLS}ch`,
+            height: `${ROWS * lineHeight}px`,
+            lineHeight: `${lineHeight}px`,
+            letterSpacing: '0px',
+            transformOrigin: 'top left',
+            transform: `scaleX(${scaleX})`,
+          }}
+        >
+          {rows}
+        </pre>
+      )}
       <input
         ref={inputRef}
         type="text"

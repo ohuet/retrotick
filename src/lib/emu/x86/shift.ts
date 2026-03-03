@@ -90,22 +90,36 @@ export function doShift(cpu: CPU, op: number, val: number, count: number, size: 
   }
 }
 
-export function doShld(dest: number, src: number, count: number, size: number): number {
+export function doShld(dest: number, src: number, count: number, size: number): { result: number; carryOut: number } {
+  const mask = size === 16 ? 0xFFFF : 0xFFFFFFFF;
+  const d = dest & mask;
+  const s = src & mask;
+
   if (size === 16) {
-    const combined = ((dest & 0xFFFF) << 16) | (src & 0xFFFF);
-    const result = (combined << count) >>> 16;
-    return result & 0xFFFF;
+    const combined = ((d << 16) | s);
+    const result = ((combined << count) >>> 16) & 0xFFFF;
+    const carryOut = (combined >>> (32 - count)) & 1;
+    return { result, carryOut };
   }
-  const result = (count < 32) ? ((dest << count) | ((src >>> 0) >>> (32 - count))) : 0;
-  return result | 0;
+
+  const result = (count < 32) ? ((d << count) | ((s >>> 0) >>> (32 - count))) : 0;
+  const carryOut = (d >>> (32 - count)) & 1;
+  return { result: result | 0, carryOut };
 }
 
-export function doShrd(dest: number, src: number, count: number, size: number): number {
+export function doShrd(dest: number, src: number, count: number, size: number): { result: number; carryOut: number } {
+  const mask = size === 16 ? 0xFFFF : 0xFFFFFFFF;
+  const d = dest & mask;
+  const s = src & mask;
+
   if (size === 16) {
-    const combined = ((src & 0xFFFF) << 16) | (dest & 0xFFFF);
-    const result = (combined >>> count) & 0xFFFF;
-    return result;
+    const combined = ((s << 16) | d);
+    const result = ((combined >>> count) & 0xFFFF);
+    const carryOut = (combined >>> (count - 1)) & 1;
+    return { result, carryOut };
   }
-  const result = (count < 32) ? (((dest >>> 0) >>> count) | (src << (32 - count))) : 0;
-  return result | 0;
+
+  const result = (count < 32) ? (((d >>> 0) >>> count) | (s << (32 - count))) : 0;
+  const carryOut = ((d >>> 0) >>> (count - 1)) & 1;
+  return { result: result | 0, carryOut };
 }

@@ -1,6 +1,7 @@
 import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
-import { syncVideoMemory, handleDosInt } from './dos-int';
+import { syncVideoMemory, handleDosInt } from './dos/index';
+import { syncMode13h } from './dos/vga';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
@@ -261,8 +262,11 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
           if (emu.waitingForMessage) {
             emu._wndProcFrames.push(frame);
             emu._wndProcSetupPending = true;
+            break;
           }
-          break;
+          // Handler adjusted EIP/ESP directly — continue execution
+          steps++;
+          continue;
         }
         if (emu.waitingForMessage || emu.halted) break;
         emuCompleteThunk16(emu, retVal as number, thunk.stackBytes);
@@ -486,9 +490,6 @@ export function emuTick(emu: Emulator): void {
       if (handler) {
         if (key === 'SYSTEM:WNDPROC_RETURN') {
           // Check if this is a legitimate WNDPROC_RETURN or a stale value on the stack.
-          // A stale value occurs when native code copies the WNDPROC_RETURN_THUNK address
-          // (e.g., reading [EBP+4] and storing it in a global/data structure) and it later
-          // ends up at a position where RET picks it up.
           const frame = emu._wndProcFrames.length > 0 ? emu._wndProcFrames.shift() : undefined;
           if (!frame && emu.wndProcDepth <= 0) {
             // Stale WNDPROC_RETURN_THUNK on stack — treat as a no-op function.
@@ -618,8 +619,11 @@ export function emuTick(emu: Emulator): void {
 
   // Sync video memory for DOS mode (picks up direct B800:0000 writes)
   if (emu.isDOS) {
-    syncVideoMemory(emu);
-    // Debug: sample EIP every 50 ticks
+    if (emu.isGraphicsMode) {
+      if (emu.videoMode === 0x13) syncMode13h(emu);
+    } else {
+      syncVideoMemory(emu);
+    }
   }
 
   if (emu.running && !emu.halted && !emu.waitingForMessage) {

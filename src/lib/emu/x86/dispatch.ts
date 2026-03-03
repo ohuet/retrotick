@@ -3,7 +3,7 @@ import { execFPU } from './fpu';
 import { exec0F } from './ops-0f';
 import { doShift } from './shift';
 import { doMovs, doStos, doLods, doCmps, doScas } from './string';
-import { handleDosInt } from '../dos-int';
+import { handleDosInt } from '../dos/index';
 import { LazyOp } from './lazy-op';
 
 // Register indices
@@ -263,9 +263,12 @@ export function cpuStep(cpu: CPU): void {
         cpu.setFlags(f | (of ? CF | OF : 0));
       } else {
         const imm = cpu.fetchI32();
-        const result = Math.imul(d.val | 0, imm);
+        const r64 = BigInt(d.val | 0) * BigInt(imm);
+        const result = Number(r64 & 0xFFFFFFFFn) | 0;
         cpu.reg[d.regField] = result;
-        cpu.setFlags(cpu.getFlags() & ~(CF | OF));
+        // CF and OF are set if result overflows signed 32-bit range
+        const of = r64 !== BigInt(result);
+        cpu.setFlags((cpu.getFlags() & ~(CF | OF)) | (of ? CF | OF : 0));
       }
       break;
     }
@@ -285,11 +288,17 @@ export function cpuStep(cpu: CPU): void {
       if (opSize === 16) {
         const result = (d.val << 16 >> 16) * imm;
         cpu.setReg16(d.regField, result & 0xFFFF);
+        const truncated = (result << 16) >> 16;
+        const of = truncated !== result;
+        cpu.setFlags((cpu.getFlags() & ~(CF | OF)) | (of ? CF | OF : 0));
       } else {
-        const result = Math.imul(d.val | 0, imm);
+        const r64 = BigInt(d.val | 0) * BigInt(imm);
+        const result = Number(r64 & 0xFFFFFFFFn) | 0;
         cpu.reg[d.regField] = result;
+        // CF and OF are set if result overflows signed 32-bit range
+        const of = r64 !== BigInt(result);
+        cpu.setFlags((cpu.getFlags() & ~(CF | OF)) | (of ? CF | OF : 0));
       }
-      cpu.setFlags(cpu.getFlags() & ~(CF | OF));
       break;
     }
 
@@ -778,15 +787,18 @@ export function cpuStep(cpu: CPU): void {
     // LES (0xC4) / LDS (0xC5) — load far pointer
     case 0xC4: case 0xC5: {
       const d = cpu.decodeModRM(opSize);
-      if (!cpu.use32) {
+      if (opSize === 16) {
         const offset = d.val & 0xFFFF;
         const selector = cpu.mem.readU16((d.addr + 2) >>> 0);
         cpu.setReg16(d.regField, offset);
         if (opcode === 0xC4) cpu.es = selector;
         else cpu.ds = selector;
       } else {
-        if (opSize === 16) cpu.setReg16(d.regField, d.val);
-        else cpu.reg[d.regField] = d.val | 0;
+        const offset = d.val;
+        const selector = cpu.mem.readU16((d.addr + 4) >>> 0);
+        cpu.reg[d.regField] = offset | 0;
+        if (opcode === 0xC4) cpu.es = selector;
+        else cpu.ds = selector;
       }
       break;
     }
@@ -846,6 +858,13 @@ export function cpuStep(cpu: CPU): void {
     // INT 3
     case 0xCC:
       console.warn(`INT 3 at 0x${((cpu.eip - 1) >>> 0).toString(16)}`);
+      break;
+
+    // INTO — INT 4 if OF=1
+    case 0xCE:
+      if (cpu.getFlag(OF)) {
+        console.warn(`INTO triggered at 0x${((cpu.eip - 1) >>> 0).toString(16)}`);
+      }
       break;
 
     // INT imm8
@@ -983,32 +1002,44 @@ export function cpuStep(cpu: CPU): void {
       cpu.setReg8(EAX, cpu.emu?.portIn(port) ?? 0xFF);
       break;
     }
-    case 0xE5:
-      cpu.fetch8(); // port number
-      if (opSize === 16) cpu.setReg16(EAX, 0xFFFF);
-      else cpu.reg[EAX] = 0xFFFFFFFF;
+    case 0xE5: {
+      const port = cpu.fetch8();
+      const val = cpu.emu?.portIn(port) ?? 0xFFFF;
+      if (opSize === 16) cpu.setReg16(EAX, val & 0xFFFF);
+      else cpu.reg[EAX] = val >>> 0;
       break;
+    }
 
     // OUT imm8, AL / OUT imm8, AX
-    case 0xE6:
-      cpu.fetch8(); // port number — ignore
+    case 0xE6: {
+      const port = cpu.fetch8();
+      cpu.emu?.portOut(port, cpu.getReg8(EAX));
       break;
-    case 0xE7:
-      cpu.fetch8(); // port number — ignore
+    }
+    case 0xE7: {
+      const port = cpu.fetch8();
+      cpu.emu?.portOut(port, opSize === 16 ? cpu.getReg16(EAX) : cpu.reg[EAX]);
       break;
+    }
 
     // IN AL, DX / IN AX, DX
     case 0xEC:
       cpu.setReg8(EAX, cpu.emu?.portIn(cpu.getReg16(EDX)) ?? 0xFF);
       break;
-    case 0xED:
-      if (opSize === 16) cpu.setReg16(EAX, 0xFFFF);
-      else cpu.reg[EAX] = 0xFFFFFFFF;
+    case 0xED: {
+      const val = cpu.emu?.portIn(cpu.getReg16(EDX)) ?? 0xFFFF;
+      if (opSize === 16) cpu.setReg16(EAX, val & 0xFFFF);
+      else cpu.reg[EAX] = val >>> 0;
       break;
+    }
 
     // OUT DX, AL / OUT DX, AX
-    case 0xEE: case 0xEF:
-      break; // ignore
+    case 0xEE:
+      cpu.emu?.portOut(cpu.getReg16(EDX), cpu.getReg8(EAX));
+      break;
+    case 0xEF:
+      cpu.emu?.portOut(cpu.getReg16(EDX), opSize === 16 ? cpu.getReg16(EAX) : cpu.reg[EAX]);
+      break;
 
     // LOCK prefix (ignore)
     case 0xF0:
@@ -1333,27 +1364,46 @@ export function cpuStep(cpu: CPU): void {
     // LOOP
     case 0xE0: { // LOOPNE
       const disp = cpu.fetchI8();
-      cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
-      if (cpu.reg[ECX] !== 0 && !cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+      if (cpu._addrSize16) {
+        const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
+        cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
+        if (cx !== 0 && !cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+      } else {
+        cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
+        if (cpu.reg[ECX] !== 0 && !cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+      }
       break;
     }
     case 0xE1: { // LOOPE
       const disp = cpu.fetchI8();
-      cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
-      if (cpu.reg[ECX] !== 0 && cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+      if (cpu._addrSize16) {
+        const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
+        cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
+        if (cx !== 0 && cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+      } else {
+        cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
+        if (cpu.reg[ECX] !== 0 && cpu.getFlag(ZF)) cpu.eip = (cpu.eip + disp) | 0;
+      }
       break;
     }
     case 0xE2: { // LOOP
       const disp = cpu.fetchI8();
-      cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
-      if (cpu.reg[ECX] !== 0) cpu.eip = (cpu.eip + disp) | 0;
+      if (cpu._addrSize16) {
+        const cx = (cpu.reg[ECX] - 1) & 0xFFFF;
+        cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | cx;
+        if (cx !== 0) cpu.eip = (cpu.eip + disp) | 0;
+      } else {
+        cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
+        if (cpu.reg[ECX] !== 0) cpu.eip = (cpu.eip + disp) | 0;
+      }
       break;
     }
 
-    // JECXZ rel8
+    // JECXZ/JCXZ rel8
     case 0xE3: {
       const disp = cpu.fetchI8();
-      if (cpu.reg[ECX] === 0) cpu.eip = (cpu.eip + disp) | 0;
+      const cxZero = cpu._addrSize16 ? (cpu.reg[ECX] & 0xFFFF) === 0 : cpu.reg[ECX] === 0;
+      if (cxZero) cpu.eip = (cpu.eip + disp) | 0;
       break;
     }
 
@@ -1380,12 +1430,22 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // XLAT — AL = [DS:BX+AL]
+    // SALC — undocumented: AL = 0xFF if CF, else 0x00
+    case 0xD6:
+      cpu.setReg8(EAX, cpu.getFlag(CF) ? 0xFF : 0x00);
+      break;
+
+    // XLAT — AL = [DS:BX+AL] or [DS:EBX+AL]
     case 0xD7: {
       const al = cpu.getReg8(EAX);
-      const bx = cpu.getReg16(EBX);
       const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
-      const addr = (cpu.segBase(segSel) + ((bx + al) & 0xFFFF)) >>> 0;
+      let addr: number;
+      if (cpu._addrSize16) {
+        const bx = cpu.getReg16(EBX);
+        addr = (cpu.segBase(segSel) + ((bx + al) & 0xFFFF)) >>> 0;
+      } else {
+        addr = ((cpu.reg[EBX] + al) >>> 0);
+      }
       cpu.setReg8(EAX, cpu.mem.readU8(addr));
       break;
     }

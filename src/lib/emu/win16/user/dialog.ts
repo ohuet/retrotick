@@ -1,5 +1,6 @@
 import type { Emulator, Win16Module, DialogControlInfo } from '../../emulator';
 import type { WindowInfo } from '../../win32/user32/types';
+import type { NEResourceEntry } from '../../ne-loader';
 import { getNonClientMetrics } from '../../win32/user32/_helpers';
 import type { Win16UserHelpers } from './index';
 import { emuCompleteThunk16 } from '../../emu-exec';
@@ -23,7 +24,9 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
     if (emu.dialogState) {
       emu.dialogState.result = nResult;
       emu.dialogState.ended = true;
-      emu._endDialog(nResult);
+      // Don't call _endDialog here — we're inside callWndProc16 and the stack
+      // is in WM_COMMAND state, not DialogBox state. The dialog message pump
+      // will detect ds.ended and call _dialogResolve after restoring CPU state.
     }
     return 0;
   });
@@ -36,12 +39,32 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 91: GetDlgItem(hDlg, nIDDlgItem) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_91', 4, () => 0);
+  user.register('ord_91', 4, () => {
+    const [hDlg, nIDDlgItem] = emu.readPascalArgs16([2, 2]);
+    const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
+    const childHwnd = dlgWnd?.children?.get(nIDDlgItem) ?? 0;
+    console.log(`[WIN16] GetDlgItem(0x${hDlg.toString(16)}, ${nIDDlgItem}) → 0x${childHwnd.toString(16)}`);
+    return childHwnd;
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 92: SetDlgItemText(hDlg, nIDDlgItem, lpString) — 8 bytes (2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_92', 8, () => 1);
+  user.register('ord_92', 8, () => {
+    const [hDlg, nIDDlgItem, lpString] = emu.readPascalArgs16([2, 2, 4]);
+    const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
+    if (dlgWnd) {
+      const childHwnd = dlgWnd.children?.get(nIDDlgItem);
+      if (childHwnd) {
+        const child = emu.handles.get<WindowInfo>(childHwnd);
+        if (child && lpString) {
+          child.title = emu.memory.readCString(lpString);
+          console.log(`[WIN16] SetDlgItemText(dlg=0x${hDlg.toString(16)}, id=${nIDDlgItem}, "${child.title}")`);
+        }
+      }
+    }
+    return 1;
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 94: SetDlgItemInt(hDlg, nID, wValue, bSigned) — 8 bytes (2+2+2+2)
@@ -177,7 +200,7 @@ const classNames: Record<number, string> = {
 
 function parseWin16DialogTemplate(data: Uint8Array): {
   style: number; nItems: number; x: number; y: number; cx: number; cy: number;
-  title: string; controls: DialogControlInfo[];
+  title: string; fontSize: number; controls: DialogControlInfo[];
 } | null {
   if (data.length < 13) return null;
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -203,8 +226,10 @@ function parseWin16DialogTemplate(data: Uint8Array): {
   off++; // skip null terminator
 
   // Font (if DS_SETFONT = 0x40 in style)
+  let fontSize = 8; // default MS Sans Serif 8pt
   if (style & 0x40) {
-    off += 2; // font size
+    fontSize = dv.getUint16(off, true);
+    off += 2;
     while (off < data.length && data[off] !== 0) off++; off++; // font name
   }
 
@@ -249,31 +274,37 @@ function parseWin16DialogTemplate(data: Uint8Array): {
     controls.push({ id, className, text, style: cstyle, x: cx2, y: cy2, width: cw, height: ch });
   }
 
-  return { style, nItems, x, y, cx, cy, title, controls };
+  return { style, nItems, x, y, cx, cy, title, fontSize, controls };
 }
 
 function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, dlgProc: number): number | undefined {
   // lpTemplate is either MAKEINTRESOURCE(id) (high word = 0) or a pointer to string name
   let res;
-  if (lpTemplate < 0x10000) {
-    // Integer resource ID (MAKEINTRESOURCE)
-    res = emu.ne?.resources.find(r => r.typeID === 5 && r.id === lpTemplate);
-  } else {
-    // Pointer to string name
+  let sourceBuffer: ArrayBuffer | undefined = emu._arrayBuffer!;
+  const matchRes = (r: NEResourceEntry) => {
+    if (r.typeID !== 5) return false;
+    if (lpTemplate < 0x10000) return r.id === lpTemplate;
     const templateName = emu.memory.readCString(lpTemplate);
-    res = emu.ne?.resources.find(r => r.typeID === 5 && r.name?.toUpperCase() === templateName.toUpperCase());
+    return r.name?.toUpperCase() === templateName.toUpperCase();
+  };
+  // Search main EXE resources first
+  if (emu.ne) res = emu.ne.resources.find(matchRes);
+  // Fall back to DLL resources
+  if (!res) {
+    for (const dllInfo of emu.neDllResources) {
+      res = dllInfo.resources.find(matchRes);
+      if (res) { sourceBuffer = dllInfo.arrayBuffer; break; }
+    }
   }
   if (!res) {
     console.warn(`[WIN16] DialogBox: dialog template ${lpTemplate < 0x10000 ? lpTemplate : emu.memory.readCString(lpTemplate)} not found`);
     return 0;
   }
 
-  // Read template from the original file data (stored in memory by NE loader)
-  // NE resources are loaded into memory at known offsets
+  // Read template from the original file data
   const data = new Uint8Array(res.length);
   for (let i = 0; i < res.length; i++) {
-    // Read from original array buffer via the NE resource's file offset
-    data[i] = new Uint8Array(emu._arrayBuffer!)[res.fileOffset + i];
+    data[i] = new Uint8Array(sourceBuffer!)[res.fileOffset + i];
   }
 
   const dlg = parseWin16DialogTemplate(data);
@@ -283,6 +314,9 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
   }
 
   console.log(`[WIN16] DialogBox template=${res.name ?? res.id} title="${dlg.title}" ${dlg.cx}x${dlg.cy} controls=${dlg.controls.length}`);
+  for (const c of dlg.controls) {
+    console.log(`  [DLG] id=${c.id} class="${c.className}" text="${c.text}" style=0x${c.style.toString(16)} ${c.x},${c.y} ${c.width}x${c.height}`);
+  }
 
   // Scale from dialog units to pixels (approximate: 1 DLU ≈ 1.5px horizontal, 1.75px vertical)
   const scaleX = 1.5, scaleY = 1.75;
@@ -316,6 +350,18 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
       const iconId = parseInt(ctrl.text.slice(1), 10);
       if (iconId) hImage = emu.loadIconResource(iconId);
     }
+    // SS_ICON controls auto-size to icon dimensions (default 32x32)
+    let cw = Math.round(ctrl.width * scaleX);
+    let ch = Math.round(ctrl.height * scaleY);
+    if (ctrl.className === 'STATIC' && (ctrl.style & 0x1F) === SS_ICON && cw === 0 && ch === 0) {
+      if (hImage) {
+        const icon = emu.handles.get<{ width?: number; height?: number }>(hImage);
+        cw = icon?.width ?? 32;
+        ch = icon?.height ?? 32;
+      } else {
+        cw = 32; ch = 32;
+      }
+    }
     const childHwnd = emu.handles.alloc('window', {
       classInfo: { className: ctrl.className, wndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: ctrl.text,
@@ -323,8 +369,8 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
       exStyle: 0,
       x: Math.round(ctrl.x * scaleX),
       y: Math.round(ctrl.y * scaleY),
-      width: Math.round(ctrl.width * scaleX),
-      height: Math.round(ctrl.height * scaleY),
+      width: cw,
+      height: ch,
       hMenu: 0,
       parent: hwnd,
       wndProc: 0,
@@ -370,7 +416,7 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
         exStyle: 0,
         title: child.title ?? '',
         checked: child.checked ?? 0,
-        fontHeight: 13,
+        fontHeight: Math.round(dlg.fontSize * 4 / 3),
         trackPos: 0,
         trackMin: 0,
         trackMax: 0,
@@ -386,8 +432,23 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
   emu.dialogState = { hwnd, dlgProc, info: dialogInfo, result: 0, ended: false };
   emu._dialogResolve = (result: number) => {
     emu.waitingForMessage = false;
-    emuCompleteThunk16(emu, result, stackBytes);
+    emu._wndProcSetupPending = false;
     if (emu._dialogPumpTimer !== null) { clearInterval(emu._dialogPumpTimer); emu._dialogPumpTimer = null; }
+    emu._dialogResolve = null;
+    // Free dialog window handle and child controls
+    if (emu.dialogState) emu.handles.free(emu.dialogState.hwnd);
+    // Pop outer dialog from stack (if any)
+    const outer = emu._dialogStack.pop();
+    if (outer) {
+      emu.dialogState = outer.dialogState;
+      emu._dialogResolve = outer.resolve;
+      emu._dialogPumpTimer = outer.pumpTimer;
+      emu.onShowDialog?.(outer.dialogState.info);
+    } else {
+      emu.dialogState = null;
+      emu.onCloseDialog?.();
+    }
+    emuCompleteThunk16(emu, result, stackBytes);
     if (emu.running && !emu.halted) {
       requestAnimationFrame(emu.tick);
     }
@@ -413,11 +474,51 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
       emu.callWndProc16(dlgWnd.wndProc, msg.hwnd, msg.message, msg.wParam, msg.lParam);
       emu.cpu.eip = eipSave;
       emu.cpu.reg[4] = espSave;
-      if (ds.ended) return;
+      if (ds.ended) {
+        // CPU state restored — now safe to complete the DialogBox thunk
+        if (emu._dialogResolve) emu._dialogResolve(ds.result);
+        return;
+      }
     }
 
     emu.waitingForMessage = savedWaiting;
   }, 50);
+
+  // Send WM_INITDIALOG to the dialog proc
+  // Temporarily clear waitingForMessage so callWndProc16 doesn't exit early
+  // when the dialog proc makes API calls (e.g. SetDlgItemText)
+  const WM_INITDIALOG = 0x0110;
+  if (dlgProc) {
+    const eipSave = emu.cpu.eip;
+    const espSave = emu.cpu.reg[4];
+    emu.waitingForMessage = false;
+    emu.callWndProc16(dlgProc, hwnd, WM_INITDIALOG, 0, 0);
+    emu.cpu.eip = eipSave;
+    emu.cpu.reg[4] = espSave;
+    emu.waitingForMessage = true;
+
+    // Rebuild overlays after WM_INITDIALOG so updated titles (from SetDlgItemText) are reflected
+    dialogInfo.overlays = (emu.handles.get<WindowInfo>(hwnd)?.childList ?? []).map(childHwnd => {
+      const child = emu.handles.get<WindowInfo>(childHwnd)!;
+      return {
+        controlId: child.controlId ?? 0,
+        childHwnd,
+        className: child.classInfo?.className ?? 'STATIC',
+        x: child.x,
+        y: child.y,
+        width: child.width,
+        height: child.height,
+        style: child.style,
+        exStyle: 0,
+        title: child.title ?? '',
+        checked: child.checked ?? 0,
+        fontHeight: Math.round(dlg.fontSize * 4 / 3),
+        trackPos: 0,
+        trackMin: 0,
+        trackMax: 0,
+      };
+    });
+  }
 
   emu.onShowDialog?.(dialogInfo);
 

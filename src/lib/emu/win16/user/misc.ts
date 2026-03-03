@@ -143,8 +143,30 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     return 1;
   });
 
-  // Ordinal 101: SetParent(hWndChild, hWndNewParent) — 4 bytes
-  user.register('ord_101', 4, () => 0);
+  // Ordinal 101: SendDlgItemMessage(hDlg, nIDDlgItem, wMsg, wParam, lParam) — 12 bytes (2+2+2+2+4)
+  user.register('ord_101', 12, () => {
+    const [hDlg, nIDDlgItem, wMsg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 2, 4]);
+    const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
+    const childHwnd = dlgWnd?.children?.get(nIDDlgItem);
+    const STM_SETICON = 0x0170;
+    const WM_USER = 0x0400;
+    if ((wMsg === STM_SETICON || wMsg === WM_USER) && childHwnd) {
+      const child = emu.handles.get<WindowInfo>(childHwnd);
+      if (child && wParam) {
+        const icon = emu.handles.get<{ width?: number; height?: number }>(wParam);
+        if (icon) {
+          child.hImage = wParam;
+          // Auto-size SS_ICON controls to icon dimensions
+          if ((child.style & 0x1F) === 0x03 && child.width === 0 && child.height === 0) {
+            child.width = icon.width ?? 32;
+            child.height = icon.height ?? 32;
+          }
+        }
+      }
+      return wParam;
+    }
+    return 0;
+  });
 
   // Ordinal 84: DrawIcon(hDC, x, y, hIcon) — 8 bytes (2+2+2+2)
   user.register('ord_84', 8, () => 1);

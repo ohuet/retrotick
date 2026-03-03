@@ -55,7 +55,15 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 37: SetWindowText(hWnd, lpString_ptr) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ord_37', 6, () => 0);
+  user.register('ord_37', 6, () => {
+    const [hWnd, lpString] = emu.readPascalArgs16([2, 4]);
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    if (wnd && lpString) {
+      wnd.title = emu.memory.readCString(lpString);
+      console.log(`[WIN16] SetWindowText(0x${hWnd.toString(16)}, "${wnd.title}")`);
+    }
+    return 1;
+  });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 38: GetWindowTextLength(hWnd) — 2 bytes
