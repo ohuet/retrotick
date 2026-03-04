@@ -232,8 +232,9 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       if (e.ctrlKey) emu.injectHwKey(0x1D);   // Ctrl make
       if (e.altKey) emu.injectHwKey(0x38);     // Alt make
 
-      // Send the actual key make + break codes
-      emu.injectHwKey(scan);
+      // Send the actual key make + break codes, with browser char for layout-aware ASCII
+      const browserChar = e.key.length === 1 ? e.key.charCodeAt(0) : undefined;
+      emu.injectHwKey(scan, browserChar);
       emu.injectHwKey(scan | 0x80);
 
       // Send modifier break codes so they don't stay "pressed"

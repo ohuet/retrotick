@@ -71,6 +71,9 @@ export function handleInt09(cpu: CPU, emu: Emulator): boolean {
     // Ctrl+letter: ASCII 1-26
     const ctrlBase = SCAN_TO_ASCII[scancode];
     ascii = ctrlBase ? (ctrlBase - 0x60) & 0x1F : 0;
+  } else if (emu._currentHwKeyChar !== undefined) {
+    // Use browser-provided ASCII (layout-aware, handles shifted chars like ':')
+    ascii = emu._currentHwKeyChar;
   } else {
     ascii = (scancode < SCAN_TO_ASCII.length ? SCAN_TO_ASCII[scancode] : undefined) ?? 0;
   }

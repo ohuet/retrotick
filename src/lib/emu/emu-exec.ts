@@ -433,6 +433,8 @@ export function emuTick(emu: Emulator): void {
       emu._hwKeyDelay++;
       if (emu._hwKeyDelay >= delay) {
         const code = emu._pendingHwKeys.shift()!;
+        emu._currentHwKeyChar = emu._pendingHwKeyChars.get(code);
+        emu._pendingHwKeyChars.delete(code);
         emu._ioPorts.set(0x60, code);
         emu._ioPorts.set(0x64, (emu._ioPorts.get(0x64) ?? 0) | 0x01);
         // Pre-update BDA shift flags for modifier keys so programs that hook

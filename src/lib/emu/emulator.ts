@@ -1171,10 +1171,11 @@ export class Emulator {
   }
 
   /** Inject a hardware keyboard event: write scancode to port 0x60 and trigger INT 09h */
-  injectHwKey(scancode: number): void {
+  injectHwKey(scancode: number, browserChar?: number): void {
     // Queue all scancodes for sequential delivery — writing directly to port 0x60
     // would lose earlier scancodes when multiple keys are injected in the same JS event.
     this._pendingHwKeys.push(scancode);
+    if (browserChar !== undefined) this._pendingHwKeyChars.set(scancode, browserChar);
     // If the emulator is paused waiting for a key (INT 16h wait), wake it up
     if (this.waitingForMessage && this.running && !this.halted) {
       this.waitingForMessage = false;
@@ -1182,6 +1183,8 @@ export class Emulator {
     }
   }
   _pendingHwKeys: number[] = [];
+  _pendingHwKeyChars = new Map<number, number>();
+  _currentHwKeyChar: number | undefined;
   _hwKeyDelay = 0;
 
   /** Deliver a DOS key for INT 16h blocking wait */
