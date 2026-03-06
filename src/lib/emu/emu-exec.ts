@@ -389,7 +389,7 @@ export function emuTick(emu: Emulator): void {
   try {
   const tickStart = performance.now();
   let stepCount = 0;
-  const DOS_TICK_MS = 8; // shorter ticks in DOS mode for responsive keyboard
+  const DOS_TICK_MS = 14; // run close to one frame (~16ms) for throughput
   const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
   let dosYieldAfterKeyAt = -1;
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
@@ -400,7 +400,9 @@ export function emuTick(emu: Emulator): void {
   // Wake from HLT: check if a timer interrupt is due
   if (emu._dosHalted && emu.isDOS) {
     const now = performance.now();
-    if (now - emu._dosLastTimerTick >= 55) {
+    const pitReload = emu._pitCounters[0] || 0x10000;
+    const timerIntervalMs = (pitReload / 1193182) * 1000;
+    if (now - emu._dosLastTimerTick >= timerIntervalMs) {
       emu._dosLastTimerTick = now;
       emu._pendingHwInts.push(0x08);
       emu._dosHalted = false;
@@ -433,14 +435,17 @@ export function emuTick(emu: Emulator): void {
     if ((i & 0xFFF) === 0 && i > 0) {
       const waitingForPostKeyWindow = dosYieldAfterKeyAt >= 0 && i < dosYieldAfterKeyAt;
       if (!waitingForPostKeyWindow && performance.now() - tickStart > tickMs) break;
-      // Yield after screen draws so browser can render intermediate frames
-      if (emu.screenDirty) { emu.screenDirty = false; break; }
+      // Yield after screen draws so browser can render intermediate frames (Win32 only —
+      // DOS games do rapid VGA writes and yielding on each one kills throughput)
+      if (!emu.isDOS && emu.screenDirty) { emu.screenDirty = false; break; }
     }
 
-    // DOS timer interrupt (INT 08h, ~18.2 Hz = every ~55ms)
+    // DOS timer interrupt (INT 08h) — frequency derived from PIT channel 0
     if (emu.isDOS) {
       const now = performance.now();
-      if (now - emu._dosLastTimerTick >= 55) {
+      const pitReload = emu._pitCounters[0] || 0x10000;
+      const timerIntervalMs = (pitReload / 1193182) * 1000; // PIT frequency → ms
+      if (now - emu._dosLastTimerTick >= timerIntervalMs) {
         emu._dosLastTimerTick = now;
         if (!emu._pendingHwInts.includes(0x08)) emu._pendingHwInts.push(0x08);
         emu._dosHalted = false; // wake from HLT
@@ -491,7 +496,15 @@ export function emuTick(emu: Emulator): void {
     if (emu._pendingHwInts.length > 0) {
       const intNum = emu._pendingHwInts.shift()!;
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
-      const vec = emu._dosIntVectors.get(intNum);
+      let vec = emu._dosIntVectors.get(intNum);
+      // Also check the actual IVT in memory — programs may write vectors
+      // directly without using INT 21h AH=25h
+      if (!vec || vec === biosDefault) {
+        const ivtOff = emu.memory.readU16(intNum * 4);
+        const ivtSeg = emu.memory.readU16(intNum * 4 + 2);
+        const ivtVec = (ivtSeg << 16) | ivtOff;
+        if (ivtVec !== biosDefault && ivtSeg !== 0xF000) vec = ivtVec;
+      }
       if (vec && vec !== biosDefault) {
         // Custom handler installed — dispatch via INT (push flags/CS/IP, jump)
         const seg = (vec >>> 16) & 0xFFFF;
@@ -693,9 +706,15 @@ export function emuTick(emu: Emulator): void {
     emu._tickCount++;
     if (emu._dosHalted) {
       // HLT: sleep until next timer tick instead of busy-spinning
+      const pitReload = emu._pitCounters[0] || 0x10000;
+      const timerIntervalMs = (pitReload / 1193182) * 1000;
       const elapsed = performance.now() - emu._dosLastTimerTick;
-      const delay = Math.max(1, 55 - elapsed);
+      const delay = Math.max(1, timerIntervalMs - elapsed);
       setTimeout(emu.tick, delay);
+    } else if (emu.isDOS) {
+      // DOS games need maximum throughput — setTimeout(0) yields to browser
+      // for rendering/input but resumes much faster than requestAnimationFrame (~16ms)
+      setTimeout(emu.tick, 0);
     } else {
       requestAnimationFrame(emu.tick);
     }

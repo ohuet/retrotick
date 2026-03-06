@@ -11,6 +11,7 @@ import type { GL1Context } from './win32/gl-context';
 import type { RegistryStore } from '../registry-store';
 import { DefaultFileManager } from './file-manager';
 import { VGAState, isVGAPort } from './dos/vga';
+import { DosAudio } from './dos/audio';
 import type { FileManager } from './file-manager';
 import { renderChildControls as _renderChildControls, notifyControlOverlays as _notifyControlOverlays } from './emu-render';
 import { getDC as _getDC, getWindowDC as _getWindowDC, promoteToMainWindow as _promoteToMainWindow, setupCanvasSize as _setupCanvasSize, beginPaint as _beginPaint, endPaint as _endPaint, syncDCToCanvas as _syncDCToCanvas, releaseChildDC as _releaseChildDC, dispatchToSehHandler as _dispatchToSehHandler, getBrush as _getBrush, getPen as _getPen, loadBitmapResource as _loadBitmapResource, loadBitmapResourceFromModule as _loadBitmapResourceFromModule, loadBitmapResourceByName as _loadBitmapResourceByName, loadCursorResourceByName as _loadCursorResourceByName, loadStringResource as _loadStringResource, loadIconResource as _loadIconResource } from './emu-window';
@@ -599,6 +600,7 @@ export class Emulator {
 
   // Audio
   audioContext?: AudioContext;
+  dosAudio = new DosAudio();
 
   // Generic common dialog request — UI renders the appropriate dialog
   onShowCommonDialog?: (req: CommonDialogRequest) => void;
@@ -1173,6 +1175,9 @@ export class Emulator {
   /** Read an I/O port value */
   portIn(port: number): number {
     if (isVGAPort(port)) return this.vga.portRead(port);
+    // Audio ports (AdLib, Sound Blaster)
+    const audioVal = this.dosAudio.portIn(port);
+    if (audioVal >= 0) return audioVal;
     switch (port) {
       case 0x20: // PIC master — ISR/IRR (simplified: return 0)
         return 0;
@@ -1263,6 +1268,8 @@ export class Emulator {
       this.vga.portWrite(port, value);
       return;
     }
+    // Audio ports (AdLib, Sound Blaster)
+    if (this.dosAudio.portOut(port, value)) return;
     switch (port) {
       case 0x20: // PIC master command
         if (value === 0x20) break; // EOI — acknowledged
@@ -1304,6 +1311,10 @@ export class Emulator {
             this._pitWriteHigh[ch] = false;
           }
         }
+        // Update PC speaker when PIT channel 2 changes
+        if (ch === 2 && this.isDOS) {
+          this.dosAudio.updateSpeaker(this._ioPorts.get(0x61) ?? 0, this._pitCounters[2] || 0x10000);
+        }
         break;
       }
       case 0x43: { // PIT control word
@@ -1341,6 +1352,10 @@ export class Emulator {
       }
       default:
         this._ioPorts.set(port, value);
+        // Update PC speaker when port 0x61 changes
+        if (port === 0x61 && this.isDOS) {
+          this.dosAudio.updateSpeaker(value, this._pitCounters[2] || 0x10000);
+        }
         break;
     }
   }

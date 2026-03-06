@@ -323,6 +323,7 @@ function renderControlOverlay(
       const oldState = emu.audioContext?.state;
       if (emu.audioContext) emu.audioContext.close();
       emu.audioContext = new AudioContext();
+      if (emu.isDOS) emu.dosAudio.init(emu.audioContext);
       console.log(`[AUDIO] postCommand: replaced ctx (was ${oldState}) → new state=${emu.audioContext.state}`);
     }
   };
@@ -1676,6 +1677,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       const oldState = emu.audioContext?.state;
       if (emu.audioContext) emu.audioContext.close();
       emu.audioContext = new AudioContext();
+      if (emu.isDOS) emu.dosAudio.init(emu.audioContext);
       console.log(`[AUDIO] handlePointerEvent: replaced ctx (was ${oldState}) → new state=${emu.audioContext.state}`);
     }
 

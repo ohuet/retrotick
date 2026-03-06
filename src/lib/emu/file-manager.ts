@@ -101,6 +101,8 @@ const KNOWN_DIRS = new Set([
 export class DefaultFileManager implements FileManager {
   virtualFiles: { name: string; size: number }[] = [];
   externalFiles = new Map<string, { data: Uint8Array; name: string }>();
+  /** In-memory cache for virtual file data (key = store name uppercase) */
+  virtualFileCache = new Map<string, ArrayBuffer>();
   currentDrive = 'D';
   currentDirs = new Map<string, string>([['C', 'C:\\WINDOWS\\SYSTEM32'], ['D', 'D:\\']]);
 
@@ -116,7 +118,9 @@ export class DefaultFileManager implements FileManager {
       const vf = this.virtualFiles.find(f => this.vfToRelPath(f.name) === relPath);
       const name = vf ? vf.name : relPath.replace(/\\/g, '/');
       if (vf) vf.size = file.data.length;
-      this.onFileSave(name, file.data.buffer.slice(file.data.byteOffset, file.data.byteOffset + file.data.byteLength) as ArrayBuffer);
+      const ab = file.data.buffer.slice(file.data.byteOffset, file.data.byteOffset + file.data.byteLength) as ArrayBuffer;
+      this.virtualFileCache.set(name.toUpperCase(), ab);
+      this.onFileSave(name, ab);
     }
 
     // If file was modified and on Z:\, update externalFiles and trigger browser download
@@ -202,8 +206,9 @@ export class DefaultFileManager implements FileManager {
         }
         const baseName = relPath.includes('\\') ? relPath.substring(relPath.lastIndexOf('\\') + 1) : relPath;
         for (const [name, data] of additionalFiles) {
-          const nameUpper = name.toUpperCase();
-          if (nameUpper === relPath || nameUpper === baseName) return { name, size: data.byteLength, source: 'additional' };
+          const nameNorm = name.toUpperCase().replace(/\//g, '\\');
+          const nameBase = nameNorm.includes('\\') ? nameNorm.substring(nameNorm.lastIndexOf('\\') + 1) : nameNorm;
+          if (nameNorm === relPath || nameBase === baseName) return { name, size: data.byteLength, source: 'additional' };
         }
       }
     }
@@ -213,8 +218,9 @@ export class DefaultFileManager implements FileManager {
         if (subPath) {
           const baseName = subPath.includes('\\') ? subPath.substring(subPath.lastIndexOf('\\') + 1) : subPath;
           for (const [name, data] of additionalFiles) {
-            const nameUpper = name.toUpperCase();
-            if (nameUpper === subPath || nameUpper === baseName) return { name, size: data.byteLength, source: 'additional' };
+            const nameNorm = name.toUpperCase().replace(/\//g, '\\');
+            const nameBase = nameNorm.includes('\\') ? nameNorm.substring(nameNorm.lastIndexOf('\\') + 1) : nameNorm;
+            if (nameNorm === subPath || nameBase === baseName) return { name, size: data.byteLength, source: 'additional' };
           }
         }
       }
@@ -231,8 +237,14 @@ export class DefaultFileManager implements FileManager {
       const ext = this.externalFiles.get(resolvedPath.toUpperCase());
       if (ext) return Promise.resolve(ext.data.buffer.slice(ext.data.byteOffset, ext.data.byteOffset + ext.data.byteLength) as ArrayBuffer);
     }
+    // Check in-memory cache first
+    const cached = this.virtualFileCache.get(file.name.toUpperCase());
+    if (cached) return Promise.resolve(cached);
     if (this.onFileRequest) {
-      return this.onFileRequest(file.name);
+      return this.onFileRequest(file.name).then(buf => {
+        if (buf) this.virtualFileCache.set(file.name.toUpperCase(), buf);
+        return buf;
+      });
     }
     return Promise.resolve(null);
   }
@@ -283,17 +295,11 @@ export class DefaultFileManager implements FileManager {
     const pat = pattern.toUpperCase();
     const uName = name.toUpperCase();
     if (pat === '*.*' || pat === '*') return true;
-    if (pat.startsWith('*.')) {
-      const ext = pat.substring(1);
-      return uName.endsWith(ext);
-    }
-    if (pat.endsWith('.*')) {
-      const base = pat.substring(0, pat.length - 2);
-      const dot = uName.lastIndexOf('.');
-      const uBase = dot >= 0 ? uName.substring(0, dot) : uName;
-      return uBase === base;
-    }
-    return uName === pat;
+    // Convert DOS wildcard pattern to regex: * = any chars, ? = any single char
+    const regexStr = pat.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.');
+    return new RegExp(`^${regexStr}$`).test(uName);
   }
 
   getVirtualDirListing(pattern: string, additionalFiles: Map<string, ArrayBuffer>): DirEntry[] {
@@ -345,6 +351,27 @@ export class DefaultFileManager implements FileManager {
       }
     }
 
+    // Also search additionalFiles for D:\ listings — these are companion files
+    // loaded alongside the exe (e.g. .DAT files in the same directory)
+    if (dirPart.startsWith('D:\\')) {
+      const dirRel = dirPart.substring(3); // relative dir under D:\
+      const seen = new Set(results.map(e => e.name.toUpperCase()));
+      for (const [name, data] of additionalFiles) {
+        const nameNorm = name.toUpperCase().replace(/\//g, '\\');
+        // Check if this file is in the target directory
+        const lastSep = nameNorm.lastIndexOf('\\');
+        const fileDir = lastSep >= 0 ? nameNorm.substring(0, lastSep + 1) : '';
+        const fileName = lastSep >= 0 ? nameNorm.substring(lastSep + 1) : nameNorm;
+        if (fileDir !== dirRel.toUpperCase()) continue;
+        if (seen.has(fileName)) continue;
+        seen.add(fileName);
+        if (this.matchesPattern(fileName, filePat)) {
+          const displayName = lastSep >= 0 ? name.substring(lastSep + 1) : name;
+          results.push({ name: displayName, size: data.byteLength, isDir: false });
+        }
+      }
+    }
+
     // Always include "." and ".." for wildcard directory listings
     if (filePat === '*.*' || filePat === '*') {
       const hasDot = results.some(e => e.name === '.');
@@ -369,6 +396,7 @@ export class DefaultFileManager implements FileManager {
 
     const name = this.virtualFiles[idx].name;
     this.virtualFiles.splice(idx, 1);
+    this.virtualFileCache.delete(name.toUpperCase());
     if (this.onFileDelete) this.onFileDelete(name);
     return true;
   }
@@ -411,14 +439,20 @@ export class DefaultFileManager implements FileManager {
     } else {
       this.virtualFiles.push({ name: storeName, size: data.length });
     }
+    // Update in-memory cache
+    const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    this.virtualFileCache.set(storeName.toUpperCase(), ab);
     if (this.onFileSave) {
-      this.onFileSave(storeName, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer);
+      this.onFileSave(storeName, ab);
     }
   }
 
   removeVirtualFile(srcRelPath: string, srcName: string): void {
     const idx = this.virtualFiles.findIndex(f => !this.vfIsFolder(f.name) && this.vfToRelPath(f.name) === srcRelPath);
-    if (idx >= 0) this.virtualFiles.splice(idx, 1);
+    if (idx >= 0) {
+      this.virtualFileCache.delete(this.virtualFiles[idx].name.toUpperCase());
+      this.virtualFiles.splice(idx, 1);
+    }
     if (this.onFileDelete) this.onFileDelete(srcName);
   }
 }

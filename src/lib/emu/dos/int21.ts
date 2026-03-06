@@ -1,8 +1,18 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
-import type { DirEntry, OpenFile } from '../file-manager';
 import { dosResolvePath } from './path';
 import { teletypeOutput } from './video';
+import {
+  dosSetDTA, dosGetDTA,
+  dosCreateFile, dosOpenFile, dosCloseFile, dosReadFile, dosWriteFile,
+  dosDeleteFile, dosSeekFile, dosFileAttributes, dosIoctl,
+  dosDupHandle, dosForceDupHandle,
+  dosFindFirst, dosFindNext,
+  dosRenameFile, dosFileDateTime,
+  dosMkdir, dosRmdir,
+  dosCreateTempFile, dosCreateNewFile,
+  dosLockFile, dosSetHandleCount, dosFlushBuffer, dosExtendedOpen,
+} from './file';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
 const CF = 0x001;
@@ -105,11 +115,9 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x1A: { // Set DTA address (DS:DX)
-      const dsBase = cpu.segBase(cpu.ds);
-      emu._dosDTA = dsBase + cpu.getReg16(EDX);
+    case 0x1A: // Set DTA address (DS:DX)
+      dosSetDTA(cpu, emu);
       break;
-    }
 
     case 0x1C: { // Get drive info (DL=drive, 0=default)
       // Return: AL=sectors/cluster, CX=bytes/sector, DX=total clusters, DS:BX→media ID byte
@@ -145,14 +153,9 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x2F: { // Get DTA → ES:BX
-      const dta = emu._dosDTA || 0;
-      // For 16-bit: return segment:offset
-      // Put linear address for now (works with our segment base setup)
-      cpu.setReg16(EBX, dta & 0xFFFF);
-      cpu.es = (dta >>> 4) & 0xFFFF;
+    case 0x2F: // Get DTA → ES:BX
+      dosGetDTA(cpu, emu);
       break;
-    }
 
     case 0x30: { // Get DOS version → AL=major, AH=minor
       // AL on entry: 0=standard, 1=get true version
@@ -201,153 +204,29 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x3C: { // Create file (CX=attributes, DS:DX=filename)
-      const dsBase = cpu.segBase(cpu.ds);
-      const nameAddr = dsBase + cpu.getReg16(EDX);
-      let name = '';
-      for (let i = 0; i < 128; i++) {
-        const ch = cpu.mem.readU8(nameAddr + i);
-        if (ch === 0) break;
-        name += String.fromCharCode(ch);
-      }
-      const resolved = dosResolvePath(emu, name);
-      const handle = emu._dosNextHandle++;
-      const emptyData = new Uint8Array(0);
-      emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true });
-      emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
-      cpu.setReg16(EAX, handle);
-      cpu.setFlag(CF, false);
+    case 0x3C: // Create file (CX=attributes, DS:DX=filename)
+      dosCreateFile(cpu, emu);
       break;
-    }
 
-    case 0x3D: { // Open file (AL=mode, DS:DX=filename)
-      const dsBase = cpu.segBase(cpu.ds);
-      const nameAddr = dsBase + cpu.getReg16(EDX);
-      let name = '';
-      for (let i = 0; i < 128; i++) {
-        const ch = cpu.mem.readU8(nameAddr + i);
-        if (ch === 0) break;
-        name += String.fromCharCode(ch);
-      }
-      const resolved = dosResolvePath(emu, name);
-      const fileInfo = emu.fs.findFile(resolved, emu.additionalFiles);
-      if (fileInfo) {
-        // File found in virtual FS — need to fetch data (may be async)
-        const handle = emu._dosNextHandle++;
-        const dataPromise = emu.fs.fetchFileData(fileInfo, emu.additionalFiles, resolved);
-        dataPromise.then((buf) => {
-          const data = buf ? new Uint8Array(buf) : new Uint8Array(0);
-          emu._dosFiles.set(handle, { data, pos: 0, name });
-          emu.handles.set(handle, 'file', { path: resolved, access: 0x80000000, pos: 0, data, size: data.length, modified: false });
-          cpu.setReg16(EAX, handle);
-          cpu.setFlag(CF, false);
-          if (emu._dosFileOpenPending) {
-            emu._dosFileOpenPending = false;
-            emu.waitingForMessage = false;
-            if (emu.running && !emu.halted) {
-              requestAnimationFrame(emu.tick);
-            }
-          }
-        });
-        // If it's an already-resolved promise (additionalFiles/externalFiles), it will
-        // complete synchronously in microtask. Otherwise, suspend.
-        // We detect this by checking if the handle was populated after the .then() setup.
-        // Use a microtask check: set pending, clear in .then if sync.
-        emu._dosFileOpenPending = true;
-        // Give microtask a chance to resolve synchronously
-        Promise.resolve().then(() => {
-          if (emu._dosFileOpenPending && !emu._dosFiles.has(handle)) {
-            // Truly async — suspend emulation
-            emu.waitingForMessage = true;
-          } else {
-            emu._dosFileOpenPending = false;
-          }
-        });
-        break;
-      }
-      // Fallback: try the loaded EXE data (EDIT.COM reads itself for resources)
-      if (emu._dosExeData) {
-        const handle = emu._dosNextHandle++;
-        emu._dosFiles.set(handle, { data: emu._dosExeData, pos: 0, name });
-        cpu.setReg16(EAX, handle);
-        cpu.setFlag(CF, false);
-      } else {
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 2); // file not found
-      }
+    case 0x3D: // Open file (AL=mode, DS:DX=filename)
+      dosOpenFile(cpu, emu);
       break;
-    }
 
-    case 0x3E: { // Close file
-      const h = cpu.getReg16(EBX);
-      emu._dosFiles.delete(h);
-      const of = emu.handles.get<OpenFile>(h);
-      if (of) emu.fs.persistOnClose(of);
-      emu.handles.free(h);
-      cpu.setFlag(CF, false);
+    case 0x3E: // Close file
+      dosCloseFile(cpu, emu);
       break;
-    }
 
-    case 0x3F: { // Read file (BX=handle, CX=count, DS:DX=buffer)
-      const h = cpu.getReg16(EBX);
-      const count = cpu.getReg16(ECX);
-      const dsBase = cpu.segBase(cpu.ds);
-      const bufAddr = dsBase + cpu.getReg16(EDX);
-      if (h <= 2) {
-        // stdin — return 0 bytes for now
-        cpu.setReg16(EAX, 0);
-        cpu.setFlag(CF, false);
-      } else {
-        const f = emu._dosFiles.get(h);
-        if (f) {
-          const avail = Math.min(count, f.data.length - f.pos);
-          for (let i = 0; i < avail; i++) {
-            cpu.mem.writeU8(bufAddr + i, f.data[f.pos + i]);
-          }
-          f.pos += avail;
-          cpu.setReg16(EAX, avail);
-          cpu.setFlag(CF, false);
-        } else {
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 6); // invalid handle
-        }
-      }
+    case 0x3F: // Read file (BX=handle, CX=count, DS:DX=buffer)
+      dosReadFile(cpu, emu);
       break;
-    }
 
-    case 0x42: { // Seek file (BX=handle, AL=origin, CX:DX=offset)
-      const h = cpu.getReg16(EBX);
-      const origin = al;
-      const offset = (cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX);
-      const f = emu._dosFiles.get(h);
-      if (f) {
-        if (origin === 0) f.pos = offset;           // SEEK_SET
-        else if (origin === 1) f.pos += offset;      // SEEK_CUR
-        else if (origin === 2) f.pos = f.data.length + offset; // SEEK_END
-        f.pos = Math.max(0, Math.min(f.pos, f.data.length));
-        const of = emu.handles.get<OpenFile>(h);
-        if (of) of.pos = f.pos;
-        cpu.setReg16(EDX, (f.pos >>> 16) & 0xFFFF);
-        cpu.setReg16(EAX, f.pos & 0xFFFF);
-        cpu.setFlag(CF, false);
-      } else {
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 6);
-      }
+    case 0x42: // Seek file (BX=handle, AL=origin, CX:DX=offset)
+      dosSeekFile(cpu, emu);
       break;
-    }
 
-    case 0x43: { // Get/Set file attributes
-      if (al === 0x00) {
-        // Get file attributes — return normal file
-        cpu.setReg16(ECX, 0x0020); // archive bit
-        cpu.setFlag(CF, false);
-      } else {
-        // Set file attributes — succeed
-        cpu.setFlag(CF, false);
-      }
+    case 0x43: // Get/Set file attributes
+      dosFileAttributes(cpu, emu);
       break;
-    }
 
     case 0x47: { // Get current directory (DL=drive, DS:SI → 64-byte buffer)
       const dsBase = cpu.segBase(cpu.ds);
@@ -377,115 +256,21 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x4E: { // FindFirst (CX=attributes, DS:DX=filespec)
-      const dsBase = cpu.segBase(cpu.ds);
-      const specAddr = dsBase + cpu.getReg16(EDX);
-      let spec = '';
-      for (let i = 0; i < 128; i++) {
-        const ch = cpu.mem.readU8(specAddr + i);
-        if (ch === 0) break;
-        spec += String.fromCharCode(ch);
-      }
-      const resolvedSpec = dosResolvePath(emu, spec);
-      const entries = emu.fs.getVirtualDirListing(resolvedSpec, emu.additionalFiles);
-      if (entries.length > 0) {
-        emu._dosFindState = { entries, index: 0, pattern: spec };
-        writeDtaEntry(cpu, emu, entries[0]);
-        cpu.setFlag(CF, false);
-      } else {
-        emu._dosFindState = null;
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 18); // no more files
-      }
+    case 0x4E: // FindFirst (CX=attributes, DS:DX=filespec)
+      dosFindFirst(cpu, emu);
       break;
-    }
 
-    case 0x4F: { // FindNext
-      if (emu._dosFindState) {
-        emu._dosFindState.index++;
-        if (emu._dosFindState.index < emu._dosFindState.entries.length) {
-          writeDtaEntry(cpu, emu, emu._dosFindState.entries[emu._dosFindState.index]);
-          cpu.setFlag(CF, false);
-        } else {
-          emu._dosFindState = null;
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 18); // no more files
-        }
-      } else {
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 18);
-      }
+    case 0x4F: // FindNext
+      dosFindNext(cpu, emu);
       break;
-    }
 
-    case 0x40: { // Write to file handle (BX=handle, CX=count, DS:DX=buffer)
-      const handle = cpu.getReg16(EBX);
-      const count = cpu.getReg16(ECX);
-      const dsBase = cpu.segBase(cpu.ds);
-      const bufAddr = dsBase + cpu.getReg16(EDX);
-      if (handle === 1 || handle === 2) {
-        // stdout/stderr → console
-        for (let i = 0; i < count; i++) {
-          teletypeOutput(cpu, emu, cpu.mem.readU8(bufAddr + i));
-        }
-        cpu.setReg16(EAX, count);
-        cpu.setFlag(CF, false);
-      } else {
-        const f = emu._dosFiles.get(handle);
-        if (f) {
-          // Grow buffer if needed
-          const needed = f.pos + count;
-          if (needed > f.data.length) {
-            const newData = new Uint8Array(needed);
-            newData.set(f.data);
-            f.data = newData;
-          }
-          for (let i = 0; i < count; i++) {
-            f.data[f.pos + i] = cpu.mem.readU8(bufAddr + i);
-          }
-          f.pos += count;
-          // Sync to handle table OpenFile
-          const of = emu.handles.get<OpenFile>(handle);
-          if (of) {
-            of.data = f.data;
-            of.pos = f.pos;
-            of.size = f.data.length;
-            of.modified = true;
-          }
-          cpu.setReg16(EAX, count);
-          cpu.setFlag(CF, false);
-        } else {
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 6); // invalid handle
-        }
-      }
+    case 0x40: // Write to file handle (BX=handle, CX=count, DS:DX=buffer)
+      dosWriteFile(cpu, emu);
       break;
-    }
 
-    case 0x44: { // IOCTL
-      const subFunc = al;
-      if (subFunc === 0x00) {
-        // Get device info for handle BX
-        const handle = cpu.getReg16(EBX);
-        if (handle <= 4) {
-          cpu.setReg16(EDX, 0x80D3); // character device, stdin/stdout/stderr/stdaux/stdprn
-          cpu.setFlag(CF, false);
-        } else if (emu._dosFiles.has(handle) || emu.handles.getType(handle) === 'file') {
-          cpu.setReg16(EDX, 0x0000); // disk file (bit 7=0)
-          cpu.setFlag(CF, false);
-        } else {
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 6);
-        }
-      } else if (subFunc === 0x01) {
-        // Set device info for handle BX — just accept it
-        cpu.setFlag(CF, false);
-      } else {
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 1); // invalid function
-      }
+    case 0x44: // IOCTL
+      dosIoctl(cpu, emu);
       break;
-    }
 
     case 0x48: { // Allocate memory (BX=paragraphs)
       const paras = cpu.getReg16(EBX);
@@ -880,58 +665,25 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x39: { // Create subdirectory (mkdir) DS:DX=path
-      // Succeed silently — no real filesystem to create dirs in
-      cpu.setFlag(CF, false);
+    case 0x39: // Create subdirectory (mkdir) DS:DX=path
+      dosMkdir(cpu, emu);
       break;
-    }
 
-    case 0x3A: { // Remove subdirectory (rmdir) DS:DX=path
-      cpu.setFlag(CF, false);
+    case 0x3A: // Remove subdirectory (rmdir) DS:DX=path
+      dosRmdir(cpu, emu);
       break;
-    }
 
-    case 0x41: { // Delete file (DS:DX=filename)
-      // Succeed silently
-      cpu.setFlag(CF, false);
+    case 0x41: // Delete file (DS:DX=filename)
+      dosDeleteFile(cpu, emu);
       break;
-    }
 
-    case 0x45: { // Duplicate file handle (BX=handle) → AX=new handle
-      const srcH = cpu.getReg16(EBX);
-      const srcFile = emu.handles.get<OpenFile>(srcH);
-      if (srcFile) {
-        const newH = emu.handles.alloc('file', { ...srcFile });
-        // Also copy DOS file state if present
-        const dosF = emu._dosFiles.get(srcH);
-        if (dosF) emu._dosFiles.set(newH, { data: dosF.data, pos: dosF.pos, name: dosF.name });
-        cpu.setReg16(EAX, newH);
-        cpu.setFlag(CF, false);
-      } else {
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 6); // invalid handle
-      }
+    case 0x45: // Duplicate file handle (BX=handle) → AX=new handle
+      dosDupHandle(cpu, emu);
       break;
-    }
 
-    case 0x46: { // Force duplicate handle (BX=src, CX=dst)
-      const srcH = cpu.getReg16(EBX);
-      const dstH = cpu.getReg16(ECX);
-      const srcFile = emu.handles.get<OpenFile>(srcH);
-      if (srcFile) {
-        // Close dst if open, then make it point to same file
-        const dstFile = emu.handles.get<OpenFile>(dstH);
-        if (dstFile) emu.fs.persistOnClose(dstFile);
-        emu.handles.set(dstH, 'file', { ...srcFile });
-        const dosF = emu._dosFiles.get(srcH);
-        if (dosF) emu._dosFiles.set(dstH, { data: dosF.data, pos: dosF.pos, name: dosF.name });
-        cpu.setFlag(CF, false);
-      } else {
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 6);
-      }
+    case 0x46: // Force duplicate handle (BX=src, CX=dst)
+      dosForceDupHandle(cpu, emu);
       break;
-    }
 
     case 0x4B: { // EXEC — Load and Execute Program
       // AL=00 Load+Execute, AL=01 Load overlay, AL=03 Load only
@@ -967,26 +719,13 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       cpu.setReg8(EAX, emu._dosVerifyFlag ? 1 : 0);
       break;
 
-    case 0x56: { // Rename file (DS:DX=old, ES:DI=new)
-      // Succeed silently — virtual FS doesn't track renames
-      cpu.setFlag(CF, false);
+    case 0x56: // Rename file (DS:DX=old, ES:DI=new)
+      dosRenameFile(cpu, emu);
       break;
-    }
 
-    case 0x57: { // Get/set file date and time (BX=handle)
-      if (al === 0x00) {
-        // Get: return a fixed date/time
-        const DOS_TIME = (12 << 11) | (0 << 5) | 0; // 12:00:00
-        const DOS_DATE = ((2000 - 1980) << 9) | (1 << 5) | 1; // 2000-01-01
-        cpu.setReg16(ECX, DOS_TIME);
-        cpu.setReg16(EDX, DOS_DATE);
-        cpu.setFlag(CF, false);
-      } else {
-        // Set — accept silently
-        cpu.setFlag(CF, false);
-      }
+    case 0x57: // Get/set file date and time (BX=handle)
+      dosFileDateTime(cpu, emu);
       break;
-    }
 
     case 0x58: { // Get/set memory allocation strategy
       if (al === 0x00) {
@@ -1018,135 +757,29 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x5A: { // Create temporary file (CX=attr, DS:DX=path prefix)
-      const dsBase = cpu.segBase(cpu.ds);
-      const prefixAddr = dsBase + cpu.getReg16(EDX);
-      let prefix = '';
-      for (let i = 0; i < 128; i++) {
-        const ch = cpu.mem.readU8(prefixAddr + i);
-        if (ch === 0) break;
-        prefix += String.fromCharCode(ch);
-      }
-      // Append a pseudo-random temp name
-      const tmpName = prefix + 'TMP' + ((Date.now() & 0xFFFF).toString(16)).toUpperCase() + '.TMP';
-      const resolved = dosResolvePath(emu, tmpName);
-      const handle = emu._dosNextHandle++;
-      const emptyData = new Uint8Array(0);
-      emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
-      emu._dosFiles.set(handle, { data: emptyData, pos: 0, name: tmpName });
-      // Write the full temp path back to DS:DX buffer
-      for (let i = 0; i < tmpName.length; i++) {
-        cpu.mem.writeU8(prefixAddr + i, tmpName.charCodeAt(i));
-      }
-      cpu.mem.writeU8(prefixAddr + tmpName.length, 0);
-      cpu.setReg16(EAX, handle);
-      cpu.setFlag(CF, false);
+    case 0x5A: // Create temporary file (CX=attr, DS:DX=path prefix)
+      dosCreateTempFile(cpu, emu);
       break;
-    }
 
-    case 0x5B: { // Create new file (fail if exists) CX=attr, DS:DX=filename
-      const dsBase = cpu.segBase(cpu.ds);
-      const nameAddr = dsBase + cpu.getReg16(EDX);
-      let name = '';
-      for (let i = 0; i < 128; i++) {
-        const ch = cpu.mem.readU8(nameAddr + i);
-        if (ch === 0) break;
-        name += String.fromCharCode(ch);
-      }
-      const resolved = dosResolvePath(emu, name);
-      // Check if file already exists
-      const existing = emu.fs.findFile(resolved, emu.additionalFiles);
-      if (existing) {
-        cpu.setFlag(CF, true);
-        cpu.setReg16(EAX, 80); // ERROR_FILE_EXISTS
-      } else {
-        const handle = emu._dosNextHandle++;
-        const emptyData = new Uint8Array(0);
-        emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
-        emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
-        cpu.setReg16(EAX, handle);
-        cpu.setFlag(CF, false);
-      }
+    case 0x5B: // Create new file (fail if exists) CX=attr, DS:DX=filename
+      dosCreateNewFile(cpu, emu);
       break;
-    }
 
-    case 0x5C: { // Lock/unlock file region (AL=0 lock, AL=1 unlock)
-      // BX=handle, CX:DX=offset, SI:DI=length
-      // Succeed silently — no real locking needed in emulator
-      cpu.setFlag(CF, false);
+    case 0x5C: // Lock/unlock file region
+      dosLockFile(cpu, emu);
       break;
-    }
 
-    case 0x67: { // Set handle count (BX=new count)
-      // Accept silently — we don't have a fixed handle table limit
-      cpu.setFlag(CF, false);
+    case 0x67: // Set handle count
+      dosSetHandleCount(cpu, emu);
       break;
-    }
 
-    case 0x68: { // Flush buffer (BX=handle)
-      const h = cpu.getReg16(EBX);
-      const of = emu.handles.get<OpenFile>(h);
-      if (of && of.modified) {
-        emu.fs.persistOnClose(of);
-      }
-      cpu.setFlag(CF, false);
+    case 0x68: // Flush buffer (BX=handle)
+      dosFlushBuffer(cpu, emu);
       break;
-    }
 
-    case 0x6C: { // Extended open/create (DOS 4.0+)
-      // BX=mode, CX=attr, DX=action, DS:SI=filename
-      const dsBase = cpu.segBase(cpu.ds);
-      const nameAddr = dsBase + cpu.getReg16(ESI);
-      let name = '';
-      for (let i = 0; i < 128; i++) {
-        const ch = cpu.mem.readU8(nameAddr + i);
-        if (ch === 0) break;
-        name += String.fromCharCode(ch);
-      }
-      const resolved = dosResolvePath(emu, name);
-      const action = cpu.getReg16(EDX);
-      const existing = emu.fs.findFile(resolved, emu.additionalFiles);
-
-      if (existing) {
-        // File exists — check action bits 0-3
-        const ACTION_OPEN = 0x01;
-        const ACTION_REPLACE = 0x02;
-        if (action & ACTION_REPLACE) {
-          // Truncate and open
-          const handle = emu._dosNextHandle++;
-          const emptyData = new Uint8Array(0);
-          emu.handles.set(handle, 'file', { path: resolved, access: cpu.getReg16(EBX) & 0xFF, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
-          emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
-          cpu.setReg16(EAX, handle);
-          cpu.setReg16(ECX, 3); // CX=3: file existed, was replaced
-          cpu.setFlag(CF, false);
-        } else if (action & ACTION_OPEN) {
-          // Open existing — delegate to 0x3D logic
-          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF0000) | (0x3D << 8) | (cpu.getReg16(EBX) & 0xFF);
-          cpu.setReg16(EDX, cpu.getReg16(ESI)); // point DX to the filename
-          return handleInt21(cpu, emu);
-        } else {
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 80); // ERROR_FILE_EXISTS
-        }
-      } else {
-        // File doesn't exist — check action bits 4-7
-        const ACTION_CREATE = 0x10;
-        if (action & ACTION_CREATE) {
-          const handle = emu._dosNextHandle++;
-          const emptyData = new Uint8Array(0);
-          emu.handles.set(handle, 'file', { path: resolved, access: cpu.getReg16(EBX) & 0xFF, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
-          emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
-          cpu.setReg16(EAX, handle);
-          cpu.setReg16(ECX, 2); // CX=2: file did not exist, was created
-          cpu.setFlag(CF, false);
-        } else {
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 2); // ERROR_FILE_NOT_FOUND
-        }
-      }
+    case 0x6C: // Extended open/create (DOS 4.0+)
+      dosExtendedOpen(cpu, emu);
       break;
-    }
 
     default:
       console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
@@ -1155,34 +788,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
   }
   return true;
-}
-
-/** Write a DOS DTA entry for FindFirst/FindNext results.
- *  DTA layout (43 bytes): offset 0x00-0x14=reserved, 0x15=attr, 0x16-0x17=time,
- *  0x18-0x19=date, 0x1A-0x1D=size, 0x1E-0x2A=filename (13 bytes, null-terminated) */
-function writeDtaEntry(_cpu: CPU, emu: Emulator, entry: DirEntry): void {
-  const dta = emu._dosDTA;
-  if (!dta) return;
-  const mem = emu.memory;
-  // Clear DTA
-  for (let i = 0; i < 43; i++) mem.writeU8(dta + i, 0);
-  // Attribute byte at offset 0x15
-  const FILE_ATTR_DIRECTORY = 0x10;
-  const FILE_ATTR_ARCHIVE = 0x20;
-  mem.writeU8(dta + 0x15, entry.isDir ? FILE_ATTR_DIRECTORY : FILE_ATTR_ARCHIVE);
-  // Time at 0x16 (00:00:00)
-  mem.writeU16(dta + 0x16, 0);
-  // Date at 0x18 (2000-01-01 in DOS format)
-  const DOS_DATE_2000 = ((2000 - 1980) << 9) | (1 << 5) | 1;
-  mem.writeU16(dta + 0x18, DOS_DATE_2000);
-  // File size at 0x1A (32-bit)
-  mem.writeU32(dta + 0x1A, entry.size);
-  // Filename at 0x1E (up to 12 chars + null, 8.3 format)
-  const name = entry.name.toUpperCase().substring(0, 12);
-  for (let i = 0; i < name.length; i++) {
-    mem.writeU8(dta + 0x1E + i, name.charCodeAt(i));
-  }
-  mem.writeU8(dta + 0x1E + name.length, 0);
 }
 
 /**
