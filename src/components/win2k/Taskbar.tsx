@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import type { MenuItem } from '../../lib/pe/types';
 import { MenuDropdown } from './MenuBar';
+import { t } from '../../lib/regional-settings';
 
 interface TaskbarApp {
   id: number;
@@ -18,6 +19,7 @@ interface TaskbarProps {
   onCloseApp: (id: number) => void;
   onMinimizeAll?: () => void;
   onShowWelcome?: () => void;
+  onShowRegionalSettings?: () => void;
   onResetToDefault?: () => void;
   onShutDown?: () => void;
 }
@@ -42,7 +44,7 @@ interface ContextMenu {
   y: number;
 }
 
-export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeApp, onCloseApp, onMinimizeAll, onShowWelcome, onResetToDefault, onShutDown }: TaskbarProps) {
+export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeApp, onCloseApp, onMinimizeAll, onShowWelcome, onShowRegionalSettings, onResetToDefault, onShutDown }: TaskbarProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [startOpen, setStartOpen] = useState(false);
@@ -105,23 +107,25 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
             fontWeight: 'bold',
           }}
         >
-          <span style={{ lineHeight: '16px' }}>Start</span>
+          <span style={{ lineHeight: '16px' }}>{t().start}</span>
         </div>
         {startOpen && startPos && (
           <div onPointerDown={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
               items={[
-                { id: 1, text: 'Welcome', isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
-                { id: 4, text: 'GitHub Project', isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 1, text: t().welcome, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 5, text: t().regionalSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 4, text: t().githubProject, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
-                { id: 3, text: 'Reset to Default...', isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
-                { id: 2, text: 'Shut Down...', isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 3, text: t().resetToDefault, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 2, text: t().shutDown, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
               ]}
               x={startPos.x}
               y={startPos.y}
               onCommand={(id) => {
                 setStartOpen(false);
                 if (id === 1) onShowWelcome?.();
+                else if (id === 5) onShowRegionalSettings?.();
                 else if (id === 4) window.open('https://github.com/lqs/retrotick', '_blank');
                 else if (id === 2) onShutDown?.();
                 else if (id === 3) onResetToDefault?.();
@@ -185,7 +189,7 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
         const items: MenuItem[] = [
-          mi(CMD_MINIMIZE_ALL, 'Minimize All Windows', { isGrayed: runningApps.length === 0 }),
+          mi(CMD_MINIMIZE_ALL, t().minimizeAllWindows, { isGrayed: runningApps.length === 0 }),
         ];
         return (
           <div onPointerDown={(e: Event) => e.stopPropagation()}>
@@ -209,10 +213,10 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
         const items: MenuItem[] = [
-          mi(CMD_RESTORE, 'Restore', { isGrayed: !contextApp.minimized }),
-          mi(CMD_MINIMIZE, 'Minimize', { isGrayed: !!contextApp.minimized }),
+          mi(CMD_RESTORE, t().restore, { isGrayed: !contextApp.minimized }),
+          mi(CMD_MINIMIZE, t().minimize, { isGrayed: !!contextApp.minimized }),
           { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
-          mi(CMD_CLOSE, 'Close', { isDefault: true }),
+          mi(CMD_CLOSE, t().close, { isDefault: true }),
         ];
         return (
           <div onPointerDown={(e: Event) => e.stopPropagation()}>

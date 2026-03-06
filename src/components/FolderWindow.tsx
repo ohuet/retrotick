@@ -10,6 +10,7 @@ import { parsePE, extractIcons } from '../lib/pe';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
 import { Button } from './win2k/Button';
+import { t } from '../lib/regional-settings';
 
 const WINDOW_STYLE = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
 const CLIENT_W = 500;
@@ -343,7 +344,7 @@ export function FolderWindow({
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
-              items={[mi(CMD_NEW_FOLDER, 'New Folder'), mi(CMD_REFRESH, 'Refresh')]}
+              items={[mi(CMD_NEW_FOLDER, t().newFolder), mi(CMD_REFRESH, t().refresh)]}
               x={bgContextMenu.x} y={bgContextMenu.y}
               onCommand={(id) => {
                 setBgContextMenu(null);
@@ -361,12 +362,12 @@ export function FolderWindow({
         const CMD_OPEN = 1, CMD_RENAME = 2, CMD_DELETE = 3, CMD_VIEW = 4;
         const { item } = contextMenu;
         const menuItems: MenuItem[] = [
-          mi(CMD_OPEN, 'Open', { isDefault: true }),
+          mi(CMD_OPEN, t().open, { isDefault: true }),
         ];
         if (!item.isFolder) menuItems.push(mi(CMD_VIEW, 'View Resources'));
-        menuItems.push(mi(CMD_RENAME, 'Rename'));
+        menuItems.push(mi(CMD_RENAME, t().rename));
         menuItems.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
-        menuItems.push(mi(CMD_DELETE, 'Delete'));
+        menuItems.push(mi(CMD_DELETE, t().delete_));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown

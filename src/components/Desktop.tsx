@@ -8,6 +8,7 @@ import { DesktopIcon, INTERNAL_MIME } from './DesktopIcon';
 import { MenuDropdown } from './win2k/MenuBar';
 import { Window, WS_CAPTION, WS_SYSMENU } from './win2k/Window';
 import { Button } from './win2k/Button';
+import { t } from '../lib/regional-settings';
 
 interface Props {
   onRunExe: (arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles: Map<string, ArrayBuffer> | undefined, exeName: string, commandLine?: string, onSetupEmulator?: (emu: Emulator) => void) => void;
@@ -283,9 +284,9 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
         const items: MenuItem[] = [
-          mi(CMD_NEW_FOLDER, 'New Folder'),
+          mi(CMD_NEW_FOLDER, t().newFolder),
           { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
-          mi(CMD_REFRESH, 'Refresh'),
+          mi(CMD_REFRESH, t().refresh),
         ];
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
@@ -311,17 +312,17 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
         });
         const items: MenuItem[] = [];
         if (contextMenu.isFolder) {
-          items.push(mi(CMD_OPEN, 'Open', { isDefault: true }));
-          items.push(mi(CMD_RENAME, 'Rename'));
+          items.push(mi(CMD_OPEN, t().open, { isDefault: true }));
+          items.push(mi(CMD_RENAME, t().rename));
           items.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
-          items.push(mi(CMD_DELETE, 'Delete'));
+          items.push(mi(CMD_DELETE, t().delete_));
         } else {
-          if (contextMenu.isExe) items.push(mi(CMD_OPEN, 'Open', { isDefault: true }));
+          if (contextMenu.isExe) items.push(mi(CMD_OPEN, t().open, { isDefault: true }));
           if (contextMenu.isScr && contextMenu.isExe) items.push(mi(CMD_CONFIGURE, 'Configure'));
           items.push(mi(CMD_VIEW, 'View Resources', { isDefault: !contextMenu.isExe }));
-          items.push(mi(CMD_RENAME, 'Rename'));
+          items.push(mi(CMD_RENAME, t().rename));
           items.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
-          items.push(mi(CMD_DELETE, 'Delete'));
+          items.push(mi(CMD_DELETE, t().delete_));
         }
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>

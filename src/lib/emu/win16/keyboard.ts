@@ -1,4 +1,5 @@
 import type { Emulator } from '../emulator';
+import { loadSettings, getKeyboardLayout, getLocalePreset } from '../../regional-settings';
 
 // Win16 KEYBOARD module
 
@@ -40,14 +41,23 @@ export function registerWin16Keyboard(emu: Emulator): void {
   // Ordinal 129: VkKeyScan(ch) — 2 bytes
   keyboard.register('ord_129', 2, () => {
     const ch = emu.readArg16(0) & 0xFF;
-    // Return virtual key in low byte, shift state in high byte
+    const layout = getKeyboardLayout(loadSettings().keyboardLayout);
+    const charStr = String.fromCharCode(ch);
+    const entry = layout.charToVK.get(charStr);
+    if (entry) {
+      return entry.vk | (entry.shift ? 0x0100 : 0);
+    }
+    // Fallback: letters
     if (ch >= 0x61 && ch <= 0x7A) return ch - 0x20; // a-z → A-Z vk
     if (ch >= 0x41 && ch <= 0x5A) return ch | 0x0100; // A-Z → shift+vk
     return ch;
   });
 
   // Ordinal 132: GetKBCodePage() — 0 bytes
-  keyboard.register('ord_132', 0, () => 437); // US code page
+  keyboard.register('ord_132', 0, () => {
+    const preset = getLocalePreset(loadSettings().localeId);
+    return preset.oemCodePage;
+  });
 
   // Ordinal 134: AnsiToOemBuff(lpAnsiStr, lpOemStr, nLength) — 10 bytes (4+4+2)
   keyboard.register('ord_134', 10, () => {

@@ -1,4 +1,5 @@
 import type { Emulator } from '../../emulator';
+import { loadSettings, getKeyboardLayout } from '../../../regional-settings';
 
 export function registerInput(emu: Emulator): void {
   const user32 = emu.registerDll('USER32.DLL');
@@ -62,15 +63,50 @@ export function registerInput(emu: Emulator): void {
     return 1;
   });
 
-  user32.register('MapVirtualKeyA', 2, () => 0);
+  // MapVirtualKeyA(uCode, uMapType)
+  const MAPVK_VK_TO_VSC = 0;
+  const MAPVK_VSC_TO_VK = 1;
+  const MAPVK_VK_TO_CHAR = 2;
+  user32.register('MapVirtualKeyA', 2, () => {
+    const uCode = emu.readArg(0);
+    const uMapType = emu.readArg(1);
+    const layout = getKeyboardLayout(loadSettings().keyboardLayout);
+    if (uMapType === MAPVK_VK_TO_CHAR) {
+      // Find the char produced by this VK (unshifted)
+      for (const [ch, info] of layout.charToVK) {
+        if (info.vk === uCode && !info.shift) return ch.charCodeAt(0);
+      }
+      return 0;
+    }
+    if (uMapType === MAPVK_VK_TO_VSC) {
+      // Simplified VK to scan code mapping
+      if (uCode >= 0x41 && uCode <= 0x5A) return uCode - 0x41 + 0x1E; // approx
+      if (uCode >= 0x30 && uCode <= 0x39) return uCode - 0x30 + 0x02; // digits
+      return 0;
+    }
+    if (uMapType === MAPVK_VSC_TO_VK) {
+      // Simplified scan code to VK
+      if (uCode >= 0x1E && uCode <= 0x37) return uCode - 0x1E + 0x41;
+      if (uCode >= 0x02 && uCode <= 0x0B) return uCode - 0x02 + 0x30;
+      return 0;
+    }
+    return 0;
+  });
   user32.register('GetKeyNameTextA', 3, () => 0);
+
+  // GetKeyboardLayout(idThread) — return HKL for configured layout
+  user32.register('GetKeyboardLayout', 1, () => {
+    const layout = getKeyboardLayout(loadSettings().keyboardLayout);
+    return layout.hkl;
+  });
 
   // GetKeyboardLayoutList(nBuff, lpList) - returns count of keyboard layouts
   user32.register('GetKeyboardLayoutList', 2, () => {
     const nBuff = emu.readArg(0);
     const lpList = emu.readArg(1);
+    const layout = getKeyboardLayout(loadSettings().keyboardLayout);
     if (nBuff > 0 && lpList) {
-      emu.memory.writeU32(lpList, 0x04090409); // US English
+      emu.memory.writeU32(lpList, layout.hkl);
     }
     return 1; // one layout
   });

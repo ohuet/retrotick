@@ -2,24 +2,25 @@ import { useState, useRef } from 'preact/hooks';
 import { Window, WS_CAPTION, WS_SYSMENU, WS_MINIMIZEBOX } from './win2k/Window';
 import { Button } from './win2k/Button';
 import { addFile } from '../lib/file-store';
+import { t } from '../lib/regional-settings';
 
 const FONT = '11px "Tahoma", sans-serif';
 const FONT_SMALL = '10px "Tahoma", sans-serif';
 
 interface ExampleGroup {
-  label: string;
+  labelKey: 'games' | 'programs' | 'screenSavers';
   items: { name: string; description: string }[];
 }
 
 const GROUPS: ExampleGroup[] = [
-  { label: 'Games', items: [
+  { labelKey: 'games', items: [
     { name: 'cards.dll', description: 'Cards (DLL)' },
     { name: 'freecell.exe', description: 'FreeCell' },
     { name: 'ski32.exe', description: 'SkiFree' },
     { name: 'sol.exe', description: 'Solitaire' },
     { name: 'winmine.exe', description: 'Minesweeper' },
   ]},
-  { label: 'Programs', items: [
+  { labelKey: 'programs', items: [
     { name: 'calc.exe', description: 'Calculator' },
     { name: 'clock.exe', description: 'Clock' },
     { name: 'cmd.exe', description: 'Command Prompt' },
@@ -30,7 +31,7 @@ const GROUPS: ExampleGroup[] = [
     { name: 'taskmgr.exe', description: 'Task Manager' },
     { name: 'welcome95.exe', description: 'Welcome to Windows 95' },
   ]},
-  { label: 'Screen Savers', items: [
+  { labelKey: 'screenSavers', items: [
     { name: 'ssmaze.scr', description: '3D Maze' },
     { name: 'sspipes.scr', description: '3D Pipes' },
     { name: 'ssbezier.scr', description: 'Bezier' },
@@ -89,7 +90,7 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
     <div style={{ position: 'absolute', inset: 0, zIndex, display: minimized ? 'none' : undefined, pointerEvents: 'none' }} onPointerDown={onFocus}>
       <div style={{ pointerEvents: 'auto', display: 'inline-block' }}>
         <Window
-          title="Welcome"
+          title={t().welcomeTitle}
           style={WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX}
           clientW={420}
           focused={focused}
@@ -101,16 +102,16 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
         >
         <div style={{ background: '#D4D0C8', padding: '10px 12px' }}>
           <div style={{ fontSize: '16px', fontFamily: 'Tahoma, sans-serif', fontWeight: 'bold', marginBottom: '4px', lineHeight: '1.4', color: '#000', textShadow: '1px 1px 0 #FFF, -1px -1px 0 #808080' }}>
-            Welcome to RetroTick
+            {t().welcomeHeading}
           </div>
           <div style={{ font: FONT, marginBottom: '4px', lineHeight: '1.4' }}>
-            Drag and drop any EXE or DLL onto the desktop, or add these example programs:
+            {t().welcomeIntro}
           </div>
           <div style={{ borderTop: '1px solid #808080', borderBottom: '1px solid #FFF', margin: '6px 0 5px' }} />
           <div style={{ display: 'flex', gap: '12px' }}>
             {GROUPS.map(group => (
-              <div key={group.label} style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ font: FONT, fontWeight: 'bold', marginBottom: '2px' }}>{group.label}</div>
+              <div key={group.labelKey} style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: FONT, fontWeight: 'bold', marginBottom: '2px' }}>{t()[group.labelKey]}</div>
                 {group.items.map(ex => {
                   const st = status.get(ex.name);
                   return (
@@ -128,11 +129,11 @@ export function WelcomeWindow({ onClose, onFocus, onMinimize, zIndex, focused, m
           <div style={{ borderTop: '1px solid #808080', borderBottom: '1px solid #FFF', margin: '6px 0 5px' }} />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ font: FONT_SMALL, color: '#808080', lineHeight: '1.3', flex: 1, marginRight: '12px' }}>
-              These programs are property of their respective owners and are provided for demonstration only.
+              {t().welcomeDisclaimer}
             </div>
             <div style={{ width: '100px', height: '23px', flexShrink: 0 }} onClick={downloading || allDone ? undefined : downloadAll}>
               <Button fontCSS={FONT} isDefault disabled={downloading || allDone}>
-                {downloading ? 'Adding...' : allDone ? 'All Added' : 'Add All'}
+                {downloading ? t().adding : allDone ? t().allAdded : t().addAll}
               </Button>
             </div>
           </div>
