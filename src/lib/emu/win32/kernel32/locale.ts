@@ -1,10 +1,12 @@
 import type { Emulator } from '../../emulator';
+import { loadSettings, getLocalePreset } from '../../../regional-settings';
 
 export function registerLocale(emu: Emulator): void {
   const kernel32 = emu.registerDll('KERNEL32.DLL');
 
   kernel32.register('GetACP', 0, () => {
-    return 1252; // Western European
+    const preset = getLocalePreset(loadSettings().localeId);
+    return preset.ansiCodePage;
   });
 
   kernel32.register('GetCPInfo', 2, () => {
@@ -92,19 +94,38 @@ export function registerLocale(emu: Emulator): void {
     return 0;
   });
 
+  function getLocaleDefaults(): Record<number, string> {
+    const settings = loadSettings();
+    const preset = getLocalePreset(settings.localeId);
+    return {
+      0x0001: '0',                      // LOCALE_ILANGUAGE
+      0x0002: preset.name,              // LOCALE_SLANGUAGE
+      0x000C: preset.listSep,           // LOCALE_SLIST
+      0x000D: preset.measure,           // LOCALE_IMEASURE
+      0x000E: settings.decimalSep,      // LOCALE_SDECIMAL
+      0x000F: settings.thousandsSep,     // LOCALE_STHOUSAND
+      0x0010: preset.grouping,          // LOCALE_SGROUPING
+      0x0011: preset.iDigits,           // LOCALE_IDIGITS
+      0x0012: preset.iLZero,            // LOCALE_ILZERO
+      0x001D: preset.dateSep,           // LOCALE_SDATE
+      0x001E: preset.timeSep,           // LOCALE_STIME
+      0x001F: settings.shortDateFmt,     // LOCALE_SSHORTDATE
+      0x0020: settings.longDateFmt,     // LOCALE_SLONGDATE
+      0x0023: preset.iTime,             // LOCALE_ITIME
+      0x0025: preset.iTLZero,           // LOCALE_ITLZERO
+      0x0028: preset.am,               // LOCALE_S1159
+      0x0029: preset.pm,               // LOCALE_S2359
+      0x1003: settings.timeFmt,         // LOCALE_STIMEFORMAT
+      0x1005: '0',                      // LOCALE_ITIMEMARKPOSN
+    };
+  }
+
   kernel32.register('GetLocaleInfoA', 4, () => {
     const _lcid = emu.readArg(0);
     const lcType = emu.readArg(1);
     const buf = emu.readArg(2);
     const cchBuf = emu.readArg(3);
-    const defaults: Record<number, string> = {
-      0x0001: '0', 0x0002: 'English (United States)',
-      0x000C: ';', 0x000D: '0', 0x000E: '.', 0x000F: ',', 0x0010: '3;0',
-      0x0011: '2', 0x0012: '1',
-      0x001D: '/', 0x001E: ':',
-      0x001F: 'M/d/yyyy', 0x0028: 'AM', 0x0029: 'PM',
-      0x0020: 'dddd, MMMM dd, yyyy', 0x0023: '0', 0x0025: '1', 0x1003: 'h:mm:ss tt', 0x1005: '0',
-    };
+    const defaults = getLocaleDefaults();
     const str = defaults[lcType & 0xFFFF] || '';
     if (!str) return 0;
     if (cchBuf === 0) return str.length + 1;
@@ -121,28 +142,7 @@ export function registerLocale(emu: Emulator): void {
     const lcType = emu.readArg(1);
     const buf = emu.readArg(2);
     const cchBuf = emu.readArg(3);
-    // Return simple defaults for common locale types
-    const defaults: Record<number, string> = {
-      0x0001: '0',     // LOCALE_ILANGUAGE
-      0x0002: 'English (United States)', // LOCALE_SLANGUAGE
-      0x000C: ';',     // LOCALE_SLIST
-      0x000D: '0',     // LOCALE_IMEASURE
-      0x000E: '.',     // LOCALE_SDECIMAL
-      0x000F: ',',     // LOCALE_STHOUSAND
-      0x0010: '3;0',   // LOCALE_SGROUPING
-      0x0011: '2',     // LOCALE_IDIGITS
-      0x0012: '1',     // LOCALE_ILZERO
-      0x001D: '/',     // LOCALE_SDATE
-      0x001E: ':',     // LOCALE_STIME
-      0x001F: 'M/d/yyyy', // LOCALE_SSHORTDATE
-      0x0020: 'dddd, MMMM dd, yyyy', // LOCALE_SLONGDATE
-      0x0023: '0',     // LOCALE_ITIME (0=12hr)
-      0x0025: '1',     // LOCALE_ITLZERO (leading zeros)
-      0x0028: 'AM',    // LOCALE_S1159
-      0x0029: 'PM',    // LOCALE_S2359
-      0x1003: 'h:mm:ss tt', // LOCALE_STIMEFORMAT
-      0x1005: '0',     // LOCALE_ITIMEMARKPOSN (0=suffix)
-    };
+    const defaults = getLocaleDefaults();
     const str = defaults[lcType & 0xFFFF] || '';
     if (cchBuf === 0) return str.length + 1; // query size
     if (buf && cchBuf > 0) {
@@ -165,12 +165,13 @@ export function registerLocale(emu: Emulator): void {
 
     const valueStr = emu.memory.readUTF16String(lpValue);
 
-    // Parse format or use defaults
+    // Parse format or use locale defaults
+    const settings = loadSettings();
     let numDigits = 0;
     let leadingZero = 1;
     let grouping = 3;
-    let decSep = '.';
-    let thousandSep = ',';
+    let decSep = settings.decimalSep;
+    let thousandSep = settings.thousandsSep;
     let negOrder = 1;
 
     if (lpFormat) {
@@ -232,15 +233,206 @@ export function registerLocale(emu: Emulator): void {
     return formatted.length + 1;
   });
 
-  kernel32.register('GetOEMCP', 0, () => 437);
-  kernel32.register('GetUserDefaultLCID', 0, () => 0x0409);
-  kernel32.register('GetSystemDefaultLCID', 0, () => 0x0409);
-  kernel32.register('GetThreadLocale', 0, () => 0x0409);
+  kernel32.register('GetOEMCP', 0, () => {
+    const preset = getLocalePreset(loadSettings().localeId);
+    return preset.oemCodePage;
+  });
+  kernel32.register('GetUserDefaultLCID', 0, () => loadSettings().localeId);
+  kernel32.register('GetSystemDefaultLCID', 0, () => loadSettings().localeId);
+  kernel32.register('GetThreadLocale', 0, () => loadSettings().localeId);
   kernel32.register('IsDBCSLeadByte', 1, () => 0);
   kernel32.register('IsDBCSLeadByteEx', 2, () => 0);
-  kernel32.register('GetUserDefaultLangID', 0, () => 0x0409);
-  kernel32.register('GetDateFormatW', 6, () => 0);
-  kernel32.register('GetTimeFormatW', 6, () => 0);
+  kernel32.register('GetUserDefaultLangID', 0, () => loadSettings().localeId & 0xFFFF);
+
+  // --- Date/Time formatting helpers ---
+
+  const DATE_SHORTDATE = 0x00000001;
+  const DATE_LONGDATE  = 0x00000002;
+  const TIME_NOSECONDS = 0x00000002;
+  const TIME_FORCE24HOURFORMAT = 0x00000008;
+
+  /** Read a SYSTEMTIME struct (16 bytes) or return current time if ptr is 0 */
+  function readSystemTime(ptr: number): { year: number; month: number; dow: number; day: number; hour: number; min: number; sec: number } {
+    if (ptr === 0) {
+      const now = new Date();
+      return { year: now.getFullYear(), month: now.getMonth() + 1, dow: now.getDay(), day: now.getDate(), hour: now.getHours(), min: now.getMinutes(), sec: now.getSeconds() };
+    }
+    return {
+      year: emu.memory.readU16(ptr),
+      month: emu.memory.readU16(ptr + 2),
+      dow: emu.memory.readU16(ptr + 4),
+      day: emu.memory.readU16(ptr + 6),
+      hour: emu.memory.readU16(ptr + 8),
+      min: emu.memory.readU16(ptr + 10),
+      sec: emu.memory.readU16(ptr + 12),
+    };
+  }
+
+  /** Format a date string using Win32 date picture format (d, dd, ddd, dddd, M, MM, MMM, MMMM, y, yy, yyyy) */
+  function formatDatePicture(fmt: string, st: { year: number; month: number; dow: number; day: number }, preset: import('../../../regional-settings').LocalePreset): string {
+    let result = '';
+    let i = 0;
+    while (i < fmt.length) {
+      const ch = fmt[i];
+      if (ch === "'") {
+        // Quoted literal
+        i++;
+        while (i < fmt.length && fmt[i] !== "'") { result += fmt[i]; i++; }
+        i++; // skip closing quote
+      } else if (ch === 'd') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 'd') { count++; i++; }
+        if (count === 1) result += String(st.day);
+        else if (count === 2) result += String(st.day).padStart(2, '0');
+        else if (count === 3) {
+          // ddd = abbreviated day name; dow: 0=Sun in JS Date, but SYSTEMTIME also 0=Sun
+          const idx = st.dow === 0 ? 6 : st.dow - 1; // convert to Mon=0..Sun=6
+          result += preset.dayAbbr[idx];
+        } else {
+          const idx = st.dow === 0 ? 6 : st.dow - 1;
+          result += preset.dayNames[idx];
+        }
+      } else if (ch === 'M') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 'M') { count++; i++; }
+        if (count === 1) result += String(st.month);
+        else if (count === 2) result += String(st.month).padStart(2, '0');
+        else if (count === 3) result += preset.monthAbbr[st.month - 1];
+        else result += preset.monthNames[st.month - 1];
+      } else if (ch === 'y') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 'y') { count++; i++; }
+        if (count <= 2) result += String(st.year % 100).padStart(2, '0');
+        else result += String(st.year);
+      } else {
+        result += ch;
+        i++;
+      }
+    }
+    return result;
+  }
+
+  /** Format a time string using Win32 time picture format (h, hh, H, HH, m, mm, s, ss, t, tt) */
+  function formatTimePicture(fmt: string, st: { hour: number; min: number; sec: number }, preset: import('../../../regional-settings').LocalePreset, flags: number): string {
+    let result = '';
+    let i = 0;
+    const force24 = !!(flags & TIME_FORCE24HOURFORMAT);
+    while (i < fmt.length) {
+      const ch = fmt[i];
+      if (ch === "'") {
+        i++;
+        while (i < fmt.length && fmt[i] !== "'") { result += fmt[i]; i++; }
+        i++;
+      } else if (ch === 'h') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 'h') { count++; i++; }
+        if (force24) {
+          result += count >= 2 ? String(st.hour).padStart(2, '0') : String(st.hour);
+        } else {
+          const h12 = st.hour % 12 || 12;
+          result += count >= 2 ? String(h12).padStart(2, '0') : String(h12);
+        }
+      } else if (ch === 'H') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 'H') { count++; i++; }
+        result += count >= 2 ? String(st.hour).padStart(2, '0') : String(st.hour);
+      } else if (ch === 'm') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 'm') { count++; i++; }
+        result += count >= 2 ? String(st.min).padStart(2, '0') : String(st.min);
+      } else if (ch === 's') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 's') { count++; i++; }
+        if (!(flags & TIME_NOSECONDS)) {
+          result += count >= 2 ? String(st.sec).padStart(2, '0') : String(st.sec);
+        }
+      } else if (ch === 't') {
+        let count = 0;
+        while (i < fmt.length && fmt[i] === 't') { count++; i++; }
+        if (!force24) {
+          const marker = st.hour < 12 ? preset.am : preset.pm;
+          result += count >= 2 ? marker : marker.charAt(0);
+        }
+      } else {
+        // Handle ':' preceding or following seconds when TIME_NOSECONDS
+        if (ch === ':' && (flags & TIME_NOSECONDS) && i + 1 < fmt.length && fmt[i + 1] === 's') {
+          i++; // skip the colon, the 's' handler will skip itself
+        } else {
+          result += ch;
+          i++;
+        }
+      }
+    }
+    return result;
+  }
+
+  // GetDateFormatW(LCID, DWORD dwFlags, SYSTEMTIME*, LPCWSTR lpFormat, LPWSTR, int)
+  kernel32.register('GetDateFormatW', 6, () => {
+    const _lcid = emu.readArg(0);
+    const dwFlags = emu.readArg(1);
+    const lpDate = emu.readArg(2);
+    const lpFormat = emu.readArg(3);
+    const lpBuf = emu.readArg(4);
+    const cchBuf = emu.readArg(5);
+
+    const settings = loadSettings();
+    const preset = getLocalePreset(settings.localeId);
+    const st = readSystemTime(lpDate);
+
+    let fmt: string;
+    if (lpFormat) {
+      fmt = emu.memory.readUTF16String(lpFormat);
+    } else if (dwFlags & DATE_LONGDATE) {
+      fmt = settings.longDateFmt;
+    } else {
+      fmt = settings.shortDateFmt;
+    }
+
+    const result = formatDatePicture(fmt, st, preset);
+
+    if (cchBuf === 0) return result.length + 1;
+    if (lpBuf && cchBuf > 0) {
+      const toWrite = result.substring(0, cchBuf - 1);
+      for (let j = 0; j < toWrite.length; j++) {
+        emu.memory.writeU16(lpBuf + j * 2, toWrite.charCodeAt(j));
+      }
+      emu.memory.writeU16(lpBuf + toWrite.length * 2, 0);
+    }
+    return result.length + 1;
+  });
+
+  // GetTimeFormatW(LCID, DWORD dwFlags, SYSTEMTIME*, LPCWSTR lpFormat, LPWSTR, int)
+  kernel32.register('GetTimeFormatW', 6, () => {
+    const _lcid = emu.readArg(0);
+    const dwFlags = emu.readArg(1);
+    const lpTime = emu.readArg(2);
+    const lpFormat = emu.readArg(3);
+    const lpBuf = emu.readArg(4);
+    const cchBuf = emu.readArg(5);
+
+    const settings = loadSettings();
+    const preset = getLocalePreset(settings.localeId);
+    const st = readSystemTime(lpTime);
+
+    let fmt: string;
+    if (lpFormat) {
+      fmt = emu.memory.readUTF16String(lpFormat);
+    } else {
+      fmt = settings.timeFmt;
+    }
+
+    const result = formatTimePicture(fmt, st, preset, dwFlags);
+
+    if (cchBuf === 0) return result.length + 1;
+    if (lpBuf && cchBuf > 0) {
+      const toWrite = result.substring(0, cchBuf - 1);
+      for (let j = 0; j < toWrite.length; j++) {
+        emu.memory.writeU16(lpBuf + j * 2, toWrite.charCodeAt(j));
+      }
+      emu.memory.writeU16(lpBuf + toWrite.length * 2, 0);
+    }
+    return result.length + 1;
+  });
   kernel32.register('FormatMessageW', 7, () => {
     const FORMAT_MESSAGE_FROM_STRING = 0x00000400;
     const FORMAT_MESSAGE_FROM_HMODULE = 0x00000800;
@@ -367,8 +559,9 @@ export function registerLocale(emu: Emulator): void {
     return 1; // TRUE — locale is valid
   });
 
-  // GetUserDefaultUILanguage: return 0x0409 (en-US)
-  kernel32.register('GetUserDefaultUILanguage', 0, () => 0x0409);
+  // GetUserDefaultUILanguage / GetSystemDefaultUILanguage: return configured locale
+  kernel32.register('GetUserDefaultUILanguage', 0, () => loadSettings().localeId & 0xFFFF);
+  kernel32.register('GetSystemDefaultUILanguage', 0, () => loadSettings().localeId & 0xFFFF);
 
   // SetThreadUILanguage: return the language passed in
   kernel32.register('SetThreadUILanguage', 1, () => {
@@ -416,19 +609,71 @@ export function registerLocale(emu: Emulator): void {
   // EnumSystemLocalesA(LOCALE_ENUMPROCA, DWORD) — return TRUE without calling callback
   kernel32.register('EnumSystemLocalesA', 2, () => 1);
 
-  // GetDateFormatA(LCID, DWORD, SYSTEMTIME*, LPCSTR, LPSTR, int) — return empty string
+  // GetDateFormatA(LCID, DWORD, SYSTEMTIME*, LPCSTR lpFormat, LPSTR, int)
   kernel32.register('GetDateFormatA', 6, () => {
-    const buf = emu.readArg(4);
-    const cch = emu.readArg(5);
-    if (buf && cch > 0) emu.memory.writeU8(buf, 0);
-    return 1;
+    const _lcid = emu.readArg(0);
+    const dwFlags = emu.readArg(1);
+    const lpDate = emu.readArg(2);
+    const lpFormat = emu.readArg(3);
+    const lpBuf = emu.readArg(4);
+    const cchBuf = emu.readArg(5);
+
+    const settings = loadSettings();
+    const preset = getLocalePreset(settings.localeId);
+    const st = readSystemTime(lpDate);
+
+    let fmt: string;
+    if (lpFormat) {
+      fmt = emu.memory.readCString(lpFormat);
+    } else if (dwFlags & DATE_LONGDATE) {
+      fmt = settings.longDateFmt;
+    } else {
+      fmt = settings.shortDateFmt;
+    }
+
+    const result = formatDatePicture(fmt, st, preset);
+
+    if (cchBuf === 0) return result.length + 1;
+    if (lpBuf && cchBuf > 0) {
+      const toWrite = result.substring(0, cchBuf - 1);
+      for (let j = 0; j < toWrite.length; j++) {
+        emu.memory.writeU8(lpBuf + j, toWrite.charCodeAt(j) & 0xFF);
+      }
+      emu.memory.writeU8(lpBuf + toWrite.length, 0);
+    }
+    return result.length + 1;
   });
 
-  // GetTimeFormatA(LCID, DWORD, SYSTEMTIME*, LPCSTR, LPSTR, int) — return empty string
+  // GetTimeFormatA(LCID, DWORD, SYSTEMTIME*, LPCSTR lpFormat, LPSTR, int)
   kernel32.register('GetTimeFormatA', 6, () => {
-    const buf = emu.readArg(4);
-    const cch = emu.readArg(5);
-    if (buf && cch > 0) emu.memory.writeU8(buf, 0);
-    return 1;
+    const _lcid = emu.readArg(0);
+    const dwFlags = emu.readArg(1);
+    const lpTime = emu.readArg(2);
+    const lpFormat = emu.readArg(3);
+    const lpBuf = emu.readArg(4);
+    const cchBuf = emu.readArg(5);
+
+    const settings = loadSettings();
+    const preset = getLocalePreset(settings.localeId);
+    const st = readSystemTime(lpTime);
+
+    let fmt: string;
+    if (lpFormat) {
+      fmt = emu.memory.readCString(lpFormat);
+    } else {
+      fmt = settings.timeFmt;
+    }
+
+    const result = formatTimePicture(fmt, st, preset, dwFlags);
+
+    if (cchBuf === 0) return result.length + 1;
+    if (lpBuf && cchBuf > 0) {
+      const toWrite = result.substring(0, cchBuf - 1);
+      for (let j = 0; j < toWrite.length; j++) {
+        emu.memory.writeU8(lpBuf + j, toWrite.charCodeAt(j) & 0xFF);
+      }
+      emu.memory.writeU8(lpBuf + toWrite.length, 0);
+    }
+    return result.length + 1;
   });
 }

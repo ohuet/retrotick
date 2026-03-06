@@ -18,6 +18,7 @@ import { EmulatorView } from './EmulatorView';
 import { ResourceViewerWindow } from './ResourceViewerWindow';
 import { FolderWindow } from './FolderWindow';
 import { WelcomeWindow } from './WelcomeWindow';
+import { RegionalSettingsWindow } from './RegionalSettingsWindow';
 import { Desktop } from './Desktop';
 import { Taskbar } from './win2k/Taskbar';
 import { MessageBox, MB_YESNO, MB_ICONQUESTION, IDYES } from './win2k/MessageBox';
@@ -25,6 +26,7 @@ import { ProcessRegistry } from '../lib/emu/emulator';
 import type { Emulator } from '../lib/emu/emulator';
 import { displayName } from '../lib/file-store';
 import { detectPELanguageId, langToHtmlLang } from '../lib/lang';
+import { t } from '../lib/regional-settings';
 
 interface ResourceViewerApp {
   id: number;
@@ -86,8 +88,10 @@ export function App() {
   const [appLangs, setAppLangs] = useState<Map<number, string | null>>(new Map());
   const [minimizedApps, setMinimizedApps] = useState<Set<number>>(new Set());
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem('welcome-dismissed'));
+  const [showRegionalSettings, setShowRegionalSettings] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ text: string; onYes: () => void } | null>(null);
   const welcomeId = useRef(-1);
+  const regionalSettingsId = useRef(-2);
   const nextAppId = useRef(1);
   const processRegistry = useRef(new ProcessRegistry()).current;
   const closeHandlers = useRef(new Map<number, () => void>());
@@ -202,6 +206,12 @@ export function App() {
       setFocusedAppId(prev => prev === id ? null : prev);
       return;
     }
+    if (id === regionalSettingsId.current) {
+      setShowRegionalSettings(false);
+      setMinimizedApps(prev => { const s = new Set(prev); s.delete(id); return s; });
+      setFocusedAppId(prev => prev === id ? null : prev);
+      return;
+    }
     const handler = closeHandlers.current.get(id);
     if (handler) handler();
     else handleStopApp(id);
@@ -254,9 +264,15 @@ export function App() {
     })),
     ...(showWelcome ? [{
       id: welcomeId.current,
-      title: 'Welcome',
+      title: t().welcomeTitle,
       iconUrl: null as string | null | undefined,
       minimized: minimizedApps.has(welcomeId.current),
+    }] : []),
+    ...(showRegionalSettings ? [{
+      id: regionalSettingsId.current,
+      title: t().regionalSettings,
+      iconUrl: null as string | null | undefined,
+      minimized: minimizedApps.has(regionalSettingsId.current),
     }] : []),
   ];
 
@@ -329,6 +345,16 @@ export function App() {
             minimized={minimizedApps.has(welcomeId.current)}
           />
         )}
+        {showRegionalSettings && (
+          <RegionalSettingsWindow
+            onClose={() => { setShowRegionalSettings(false); setMinimizedApps(prev => { const s = new Set(prev); s.delete(regionalSettingsId.current); return s; }); setFocusedAppId(prev => prev === regionalSettingsId.current ? null : prev); }}
+            onFocus={() => focusApp(regionalSettingsId.current)}
+            onMinimize={() => handleTaskbarMinimize(regionalSettingsId.current)}
+            zIndex={getZIndex(regionalSettingsId.current)}
+            focused={focusedAppId === regionalSettingsId.current}
+            minimized={minimizedApps.has(regionalSettingsId.current)}
+          />
+        )}
       </div>
       <Taskbar
         runningApps={allApps}
@@ -337,22 +363,24 @@ export function App() {
         onMinimizeApp={handleTaskbarMinimize}
         onCloseApp={handleRequestClose}
         onShowWelcome={() => { setShowWelcome(true); focusApp(welcomeId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(welcomeId.current); return s; }); }}
+        onShowRegionalSettings={() => { setShowRegionalSettings(true); focusApp(regionalSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(regionalSettingsId.current); return s; }); }}
         onMinimizeAll={() => {
           const ids = new Set([
             ...runningApps.map(a => a.id),
             ...resourceViewers.map(v => v.id),
             ...openFolders.map(f => f.id),
             ...(showWelcome ? [welcomeId.current] : []),
+            ...(showRegionalSettings ? [regionalSettingsId.current] : []),
           ]);
           setMinimizedApps(ids);
           setFocusedAppId(null);
         }}
         onResetToDefault={() => setConfirmDialog({
-          text: 'This will remove all files and reset to the default state. Continue?',
+          text: t().confirmReset,
           onYes: () => { localStorage.clear(); indexedDB.deleteDatabase('exeviewer'); location.reload(); },
         })}
         onShutDown={() => setConfirmDialog({
-          text: 'Are you sure you want to shut down?',
+          text: t().confirmShutDown,
           onYes: () => { setConfirmDialog(null); window.location.href = 'https://github.com/lqs/retrotick'; },
         })}
       />

@@ -514,6 +514,7 @@ export class Emulator {
   glSyncYieldedThisFrame = false;
   glSyncAwaitingSwap = false;
   keyStates = new Set<number>(); // Currently pressed virtual key codes
+  configuredLcid = 0x0409; // Set from regional settings at load time
   windowDCs = new Map<number, number>();
   private timers = new Map<string, number>();
 

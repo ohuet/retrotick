@@ -596,7 +596,7 @@ export function registerText(emu: Emulator): void {
     return p;
   });
 
-  user32.register('GetKeyboardLayout', 1, () => 0x04090409); // US English
+  // GetKeyboardLayout is registered in input.ts
 
   // GetTabbedTextExtentA(hDC, lpString, chCount, nTabPositions, lpnTabStopPositions) → DWORD
   // Return MAKELONG(width, height), stub as 8x8

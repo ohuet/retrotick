@@ -929,18 +929,25 @@ function findResourceInDir(emu: Emulator, imageBase: number, resRva: number, typ
         };
       }
 
-      // Level 3: Language — prefer English (0x0409) or neutral (0x0000), fallback to first
+      // Level 3: Language — prefer configured locale, then same primary language, then English, then neutral
       const dir3 = base + (off2 & 0x7FFFFFFF);
       const numNamed3 = emu.memory.readU16(dir3 + 12);
       const numId3 = emu.memory.readU16(dir3 + 14);
       const totalLangs = numNamed3 + numId3;
 
       if (totalLangs > 0) {
-        let bestIdx = 0; // default to first entry
+        const cfgLcid = emu.configuredLcid;
+        const cfgPrimary = cfgLcid & 0x3FF;
+        let bestIdx = 0;
+        let bestScore = 1; // default: first found (score 1)
         for (let k = 0; k < totalLangs; k++) {
           const langId = emu.memory.readU32(dir3 + 16 + k * 8);
-          if (langId === 0x0409 || (langId & 0x3FF) === 0x09) { bestIdx = k; break; } // English
-          if (langId === 0) { bestIdx = k; } // neutral
+          let score = 1;
+          if (langId === cfgLcid) score = 5;                              // exact match
+          else if ((langId & 0x3FF) === cfgPrimary) score = 4;            // same primary language
+          else if (langId === 0x0409 || (langId & 0x3FF) === 0x09) score = 3; // English fallback
+          else if (langId === 0) score = 2;                               // neutral
+          if (score > bestScore) { bestScore = score; bestIdx = k; }
         }
         const off3 = emu.memory.readU32(dir3 + 16 + bestIdx * 8 + 4);
         if (off3 & 0x80000000) continue;
