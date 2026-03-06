@@ -2,13 +2,27 @@ import { useRef, useEffect, useCallback, useState } from 'preact/hooks';
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 
-// Windows console 16-color palette
-const CONSOLE_COLORS = [
+// Default Windows console 16-color palette (fallback for Win32 programs)
+const DEFAULT_CONSOLE_COLORS = [
   '#000000', '#000080', '#008000', '#008080',
   '#800000', '#800080', '#808000', '#C0C0C0',
   '#808080', '#0000FF', '#00FF00', '#00FFFF',
   '#FF0000', '#FF00FF', '#FFFF00', '#FFFFFF',
 ];
+
+/** Build 16-color palette from VGA ATC registers → DAC palette */
+function getVgaConsoleColors(emu: Emulator): string[] {
+  const vga = emu.vga;
+  const colors: string[] = [];
+  for (let i = 0; i < 16; i++) {
+    const dacIndex = vga.atcRegs[i] & 0xFF;
+    const r = Math.round(vga.palette[dacIndex * 3 + 0] * 255 / 63);
+    const g = Math.round(vga.palette[dacIndex * 3 + 1] * 255 / 63);
+    const b = Math.round(vga.palette[dacIndex * 3 + 2] * 255 / 63);
+    colors.push(`rgb(${r},${g},${b})`);
+  }
+  return colors;
+}
 
 // Browser e.code → AT keyboard hardware scancode (make code)
 const CODE_TO_SCANCODE: Record<string, number> = {
@@ -136,6 +150,9 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       if (canvas && fb) {
         const ctx = canvas.getContext('2d');
         if (ctx) ctx.putImageData(fb, 0, 0);
+      } else {
+        // Canvas not mounted yet (mode just switched) — trigger re-render
+        render();
       }
     };
     render();
@@ -153,21 +170,30 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     if (focused) inputRef.current?.focus();
   }, [focused]);
 
+  // Build palette: use VGA registers for DOS, fallback for Win32
+  const COLORS = emu.isDOS ? getVgaConsoleColors(emu) : DEFAULT_CONSOLE_COLORS;
+
+  // Cursor shape from CRTC registers
+  const cursorStartScanline = emu.vga.crtcRegs[0x0A] & 0x1F;
+  const cursorEndScanline = emu.vga.crtcRegs[0x0B] & 0x1F;
+  const cursorDisabled = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
+  const charH = emu.charHeight || 16;
+  const cursorBlink = Math.floor(Date.now() / 500) % 2 === 0;
+  const cursorActive = cursorBlink && !cursorDisabled && cursorStartScanline <= cursorEndScanline;
+
   // Build DOM content from console buffer
-  const cursorVisible = Math.floor(Date.now() / 500) % 2 === 0;
   const rows: preact.JSX.Element[] = [];
   for (let row = 0; row < ROWS; row++) {
     const spans: preact.JSX.Element[] = [];
     // Group consecutive cells with same attributes for efficiency
-    let runStart = 0;
     let runFg = -1;
     let runBg = -1;
     let runChars = '';
 
     const flushRun = () => {
       if (runChars.length === 0) return;
-      const style: Record<string, string> = { color: CONSOLE_COLORS[runFg] };
-      if (runBg !== 0) style.backgroundColor = CONSOLE_COLORS[runBg];
+      const style: Record<string, string> = { color: COLORS[runFg] };
+      if (runBg !== 0) style.backgroundColor = COLORS[runBg];
       spans.push(<span style={style}>{runChars}</span>);
       runChars = '';
     };
@@ -179,23 +205,22 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       if (cell && cell.char === 0) continue;
       const fg = cell ? (cell.attr & 0x0F) : 7;
       const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
-      const isCursor = cursorVisible && row === emu.consoleCursorY && col === emu.consoleCursorX;
+      const isCursor = row === emu.consoleCursorY && col === emu.consoleCursorX;
       const ch = (cell && cell.char > 0x20)
         ? (emu.isDOS && cell.char <= 0xFF ? cp437ToChar(cell.char) : String.fromCharCode(cell.char))
         : '\u00A0';
       const wide = cell && cell.char > 0x20 && isFullwidth(cell.char);
 
-      if (isCursor) {
+      if (isCursor && cursorActive) {
         flushRun();
+        // Render cursor using CSS gradient to cover start→end scanlines
+        const cursorColor = COLORS[fg === 0 ? 7 : fg];
+        const topPct = (cursorStartScanline / charH * 100).toFixed(1);
+        const bottomPct = (Math.min(cursorEndScanline + 1, charH) / charH * 100).toFixed(1);
         spans.push(
           <span style={{
-            color: CONSOLE_COLORS[fg],
-            backgroundColor: CONSOLE_COLORS[bg],
-            textDecoration: 'underline',
-            textDecorationStyle: 'solid',
-            textDecorationThickness: '2px',
-            textDecorationColor: cursorVisible ? CONSOLE_COLORS[fg === 0 ? 7 : fg] : CONSOLE_COLORS[bg],
-            textUnderlineOffset: '0px',
+            color: COLORS[fg],
+            background: `linear-gradient(to bottom, ${COLORS[bg]} ${topPct}%, ${cursorColor} ${topPct}%, ${cursorColor} ${bottomPct}%, ${COLORS[bg]} ${bottomPct}%)`,
           }}>{ch}</span>
         );
         runFg = -1;
@@ -207,11 +232,11 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
         if (wide) {
           // Fullwidth char: render as its own span with double width
           const style: Record<string, string> = {
-            color: CONSOLE_COLORS[fg],
+            color: COLORS[fg],
             display: 'inline-block',
             width: '2ch',
           };
-          if (bg !== 0) style.backgroundColor = CONSOLE_COLORS[bg];
+          if (bg !== 0) style.backgroundColor = COLORS[bg];
           spans.push(<span style={style}>{ch}</span>);
           runFg = -1;
           runBg = -1;
@@ -574,7 +599,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const gfxHeight = gfxMode.height;
 
   return (
-    <div style={{ position: 'relative', width: '640px', height: isGfx ? '400px' : `${ROWS * lineHeight}px`, background: '#000' }} onPointerUp={handleClick}>
+    <div style={{ position: 'relative', width: '640px', height: '480px', background: '#000' }} onPointerUp={handleClick}>
       {isGfx ? (
         <canvas
           ref={canvasRef}
@@ -582,7 +607,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
           height={gfxHeight}
           style={{
             width: '640px',
-            height: '400px',
+            height: '480px',
             imageRendering: 'pixelated',
           }}
         />
@@ -603,7 +628,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             lineHeight: `${lineHeight}px`,
             letterSpacing: '0px',
             transformOrigin: 'top left',
-            transform: `scaleX(${scaleX})`,
+            transform: `scaleX(${scaleX}) scaleY(${480 / (ROWS * lineHeight)})`,
           }}
         >
           {rows}

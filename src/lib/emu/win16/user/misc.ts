@@ -992,6 +992,12 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('ord_241', 14, () => 0); // stub: return NULL (dialog not created)
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Ordinal 243: GetDialogBaseUnits() — 0 bytes
+  // Returns LOWORD=x base unit, HIWORD=y base unit.
+  // ───────────────────────────────────────────────────────────────────────────
+  user.register('ord_243', 0, () => ((16 << 16) | 8));
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 308: DefDlgProc(hDlg, msg, wParam, lParam) — 10 bytes (2+2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
   user.register('ord_308', 10, () => 0); // stub: return 0

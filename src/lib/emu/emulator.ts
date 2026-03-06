@@ -338,6 +338,21 @@ export class Emulator {
   /** Pending hardware interrupts to fire at next tick */
   _pendingHwInts: number[] = [];
 
+  // PIC (Programmable Interrupt Controller) state
+  _picMasterMask = 0x00;  // IMR: 0 = enabled, 1 = masked
+  _picSlaveMask = 0x00;
+  _picMasterICW = 0;      // ICW sequence counter (0 = ready for OCW)
+  _picSlaveICW = 0;
+
+  // PIT (Programmable Interval Timer) state
+  _pitCounters = [0xFFFF, 0x0012, 0xFFFF]; // Counter 0/1/2 reload values
+  _pitLatched = [false, false, false];
+  _pitLatchValues = [0, 0, 0];
+  _pitReadHigh = [false, false, false];     // Byte toggle for 16-bit reads
+  _pitModes = [3, 2, 3];                   // Counter modes (default: mode 3 for 0/2, mode 2 for 1)
+  _pitAccessModes = [3, 3, 3];             // 1=LSB, 2=MSB, 3=LSB then MSB
+  _pitWriteHigh = [false, false, false];    // Byte toggle for 16-bit writes
+
   // VGA state
   vga = new VGAState();
   videoMode = 0x03;
@@ -1158,37 +1173,175 @@ export class Emulator {
   /** Read an I/O port value */
   portIn(port: number): number {
     if (isVGAPort(port)) return this.vga.portRead(port);
-    if (port === 0x60) {
-      const status = this._ioPorts.get(0x64) ?? 0;
-      if ((status & 0x01) !== 0) {
-        // Real 8042 behavior: first read consumes output buffer.
-        const value = this._ioPorts.get(0x60) ?? 0xFF;
-        this._ioPorts.set(0x64, status & ~0x01);
-        // Compatibility replay for chained BIOS INT 09h handler.
-        this._kbdReplayValue = value;
-        this._kbdReplayPending = true;
-        this._kbdDataReadsLeft = 1;
-        if (this.isDOS) this._dosHwKeyReadThisTick = true;
-        return value;
+    switch (port) {
+      case 0x20: // PIC master — ISR/IRR (simplified: return 0)
+        return 0;
+      case 0x21: // PIC master IMR
+        return this._picMasterMask;
+      case 0xA0: // PIC slave — ISR/IRR
+        return 0;
+      case 0xA1: // PIC slave IMR
+        return this._picSlaveMask;
+      case 0x40: case 0x41: case 0x42: { // PIT counter read
+        const ch = port - 0x40;
+        if (this._pitLatched[ch]) {
+          // Return latched value
+          const val = this._pitLatchValues[ch];
+          const accessMode = this._pitAccessModes[ch];
+          if (accessMode === 3) { // LSB then MSB
+            if (!this._pitReadHigh[ch]) {
+              this._pitReadHigh[ch] = true;
+              return val & 0xFF;
+            } else {
+              this._pitReadHigh[ch] = false;
+              this._pitLatched[ch] = false;
+              return (val >> 8) & 0xFF;
+            }
+          } else if (accessMode === 1) { // LSB only
+            this._pitLatched[ch] = false;
+            return val & 0xFF;
+          } else { // MSB only
+            this._pitLatched[ch] = false;
+            return (val >> 8) & 0xFF;
+          }
+        }
+        // Not latched: return running counter estimate
+        // Use performance.now() to derive a rough counter value
+        const freq = 1193182; // PIT base frequency
+        const reload = this._pitCounters[ch] || 0x10000;
+        const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
+        const count = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+        const accessMode = this._pitAccessModes[ch];
+        if (accessMode === 1) return count & 0xFF;
+        if (accessMode === 2) return (count >> 8) & 0xFF;
+        if (!this._pitReadHigh[ch]) {
+          this._pitReadHigh[ch] = true;
+          return count & 0xFF;
+        } else {
+          this._pitReadHigh[ch] = false;
+          return (count >> 8) & 0xFF;
+        }
       }
-      // Allow one extra read while IRQ1 handler is in-flight for chained
-      // handlers that both read port 0x60 (hook + BIOS).
-      if (this._kbdReplayPending && this._int09ReturnCS >= 0 && this._kbdDataReadsLeft > 0) {
-        this._kbdDataReadsLeft--;
-        if (this.isDOS) this._dosHwKeyReadThisTick = true;
-        return this._kbdReplayValue;
+      case 0x60: {
+        const status = this._ioPorts.get(0x64) ?? 0;
+        if ((status & 0x01) !== 0) {
+          // Real 8042 behavior: first read consumes output buffer.
+          const value = this._ioPorts.get(0x60) ?? 0xFF;
+          this._ioPorts.set(0x64, status & ~0x01);
+          // Compatibility replay for chained BIOS INT 09h handler.
+          this._kbdReplayValue = value;
+          this._kbdReplayPending = true;
+          this._kbdDataReadsLeft = 1;
+          if (this.isDOS) this._dosHwKeyReadThisTick = true;
+          return value;
+        }
+        // Allow one extra read while IRQ1 handler is in-flight for chained
+        // handlers that both read port 0x60 (hook + BIOS).
+        if (this._kbdReplayPending && this._int09ReturnCS >= 0 && this._kbdDataReadsLeft > 0) {
+          this._kbdDataReadsLeft--;
+          if (this.isDOS) this._dosHwKeyReadThisTick = true;
+          return this._kbdReplayValue;
+        }
+        return 0xFF;
       }
-      return 0xFF;
+      case 0x61: { // System control port B
+        const val = this._ioPorts.get(0x61) ?? 0;
+        // Bit 4: toggles with refresh cycles (programs use for timing)
+        // Bit 5: timer 2 output (speaker gate)
+        return val ^ 0x10; // Toggle refresh bit on each read
+      }
+      case 0x64: // Keyboard controller status
+        return this._ioPorts.get(0x64) ?? 0;
+      default:
+        return this._ioPorts.get(port) ?? 0xFF;
     }
-    return this._ioPorts.get(port) ?? 0xFF;
   }
 
   /** Write to an I/O port */
   portOut(port: number, value: number): void {
     if (isVGAPort(port)) {
       this.vga.portWrite(port, value);
-    } else {
-      this._ioPorts.set(port, value);
+      return;
+    }
+    switch (port) {
+      case 0x20: // PIC master command
+        if (value === 0x20) break; // EOI — acknowledged
+        if (value & 0x10) this._picMasterICW = 1; // ICW1 starts init sequence
+        break;
+      case 0x21: // PIC master data (IMR or ICW2-4)
+        if (this._picMasterICW > 0) {
+          this._picMasterICW++; // Consume ICW2, ICW3, ICW4
+          if (this._picMasterICW > 4) this._picMasterICW = 0;
+        } else {
+          this._picMasterMask = value;
+        }
+        break;
+      case 0xA0: // PIC slave command
+        if (value === 0x20) break; // EOI
+        if (value & 0x10) this._picSlaveICW = 1;
+        break;
+      case 0xA1: // PIC slave data (IMR or ICW2-4)
+        if (this._picSlaveICW > 0) {
+          this._picSlaveICW++;
+          if (this._picSlaveICW > 4) this._picSlaveICW = 0;
+        } else {
+          this._picSlaveMask = value;
+        }
+        break;
+      case 0x40: case 0x41: case 0x42: { // PIT counter write
+        const ch = port - 0x40;
+        const accessMode = this._pitAccessModes[ch];
+        if (accessMode === 1) { // LSB only
+          this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
+        } else if (accessMode === 2) { // MSB only
+          this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
+        } else { // LSB then MSB
+          if (!this._pitWriteHigh[ch]) {
+            this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
+            this._pitWriteHigh[ch] = true;
+          } else {
+            this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
+            this._pitWriteHigh[ch] = false;
+          }
+        }
+        break;
+      }
+      case 0x43: { // PIT control word
+        const ch = (value >> 6) & 3;
+        if (ch === 3) {
+          // Read-back command (just latch all requested counters)
+          for (let i = 0; i < 3; i++) {
+            if (!(value & (2 << i))) continue; // Counter not selected
+            if (!(value & 0x20)) { // Latch count
+              this._pitLatched[i] = true;
+              const reload = this._pitCounters[i] || 0x10000;
+              const freq = 1193182;
+              const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
+              this._pitLatchValues[i] = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+            }
+          }
+          break;
+        }
+        const accessMode = (value >> 4) & 3;
+        if (accessMode === 0) {
+          // Latch command
+          this._pitLatched[ch] = true;
+          const reload = this._pitCounters[ch] || 0x10000;
+          const freq = 1193182;
+          const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
+          this._pitLatchValues[ch] = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+        } else {
+          this._pitAccessModes[ch] = accessMode;
+          this._pitModes[ch] = (value >> 1) & 7;
+          this._pitWriteHigh[ch] = false;
+          this._pitReadHigh[ch] = false;
+          this._pitLatched[ch] = false;
+        }
+        break;
+      }
+      default:
+        this._ioPorts.set(port, value);
+        break;
     }
   }
 

@@ -50,7 +50,10 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
         const seg = (vec1C >>> 16) & 0xFFFF;
         const off = vec1C & 0xFFFF;
         const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
-        cpu.push16(cpu.getFlags() & 0xFFFF);
+        // Real BIOS INT 08h handler does STI before chaining to INT 1Ch,
+        // so FLAGS pushed for INT 1Ch have IF=1. This allows INT 1Ch handlers
+        // to IRET back to an IF=1 context, enabling nested interrupts.
+        cpu.push16((cpu.getFlags() | 0x0200) & 0xFFFF);
         cpu.push16(cpu.cs);
         cpu.push16(returnIP);
         cpu.setFlags(cpu.getFlags() & ~0x0300);

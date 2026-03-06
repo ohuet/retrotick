@@ -12,6 +12,7 @@ const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
 // Flag bits
 const CF = 0x001;
 const ZF = 0x040;
+const IF = 0x200;
 const DF = 0x400;
 const OF = 0x800;
 
@@ -298,6 +299,139 @@ export function cpuStep(cpu: CPU): void {
         // CF and OF are set if result overflows signed 32-bit range
         const of = r64 !== BigInt(result);
         cpu.setFlags((cpu.getFlags() & ~(CF | OF)) | (of ? CF | OF : 0));
+      }
+      break;
+    }
+
+    // INSB — Input byte from port DX into ES:DI
+    case 0x6C: {
+      const port = cpu.getReg16(EDX);
+      const rep = prefixF3 || prefixF2;
+      const delta = cpu.getFlag(DF) ? -1 : 1;
+      const doOne = () => {
+        const val = cpu.emu?.portIn(port) ?? 0xFF;
+        const addr = cpu._addrSize16
+          ? (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0
+          : cpu.reg[EDI] >>> 0;
+        cpu.mem.writeU8(addr, val);
+        if (cpu._addrSize16) {
+          cpu.reg[EDI] = (cpu.reg[EDI] & ~0xFFFF) | (((cpu.reg[EDI] & 0xFFFF) + delta) & 0xFFFF);
+        } else {
+          cpu.reg[EDI] = (cpu.reg[EDI] + delta) | 0;
+        }
+      };
+      if (rep) {
+        while ((cpu._addrSize16 ? (cpu.reg[ECX] & 0xFFFF) : cpu.reg[ECX]) !== 0) {
+          doOne();
+          if (cpu._addrSize16) {
+            cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | (((cpu.reg[ECX] & 0xFFFF) - 1) & 0xFFFF);
+          } else {
+            cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
+          }
+        }
+      } else {
+        doOne();
+      }
+      break;
+    }
+
+    // INSW/INSD — Input word/dword from port DX into ES:DI
+    case 0x6D: {
+      const port = cpu.getReg16(EDX);
+      const unitSize = opSize === 16 ? 2 : 4;
+      const rep = prefixF3 || prefixF2;
+      const delta = cpu.getFlag(DF) ? -unitSize : unitSize;
+      const doOne = () => {
+        const val = cpu.emu?.portIn(port) ?? (unitSize === 2 ? 0xFFFF : 0xFFFFFFFF);
+        const addr = cpu._addrSize16
+          ? (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0
+          : cpu.reg[EDI] >>> 0;
+        if (unitSize === 2) cpu.mem.writeU16(addr, val & 0xFFFF);
+        else cpu.mem.writeU32(addr, val >>> 0);
+        if (cpu._addrSize16) {
+          cpu.reg[EDI] = (cpu.reg[EDI] & ~0xFFFF) | (((cpu.reg[EDI] & 0xFFFF) + delta) & 0xFFFF);
+        } else {
+          cpu.reg[EDI] = (cpu.reg[EDI] + delta) | 0;
+        }
+      };
+      if (rep) {
+        while ((cpu._addrSize16 ? (cpu.reg[ECX] & 0xFFFF) : cpu.reg[ECX]) !== 0) {
+          doOne();
+          if (cpu._addrSize16) {
+            cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | (((cpu.reg[ECX] & 0xFFFF) - 1) & 0xFFFF);
+          } else {
+            cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
+          }
+        }
+      } else {
+        doOne();
+      }
+      break;
+    }
+
+    // OUTSB — Output byte from DS:SI to port DX
+    case 0x6E: {
+      const port = cpu.getReg16(EDX);
+      const rep = prefixF3 || prefixF2;
+      const delta = cpu.getFlag(DF) ? -1 : 1;
+      const doOne = () => {
+        const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
+        const addr = cpu._addrSize16
+          ? (cpu.segBase(segSel) + (cpu.reg[ESI] & 0xFFFF)) >>> 0
+          : cpu.reg[ESI] >>> 0;
+        const val = cpu.mem.readU8(addr);
+        cpu.emu?.portOut(port, val);
+        if (cpu._addrSize16) {
+          cpu.reg[ESI] = (cpu.reg[ESI] & ~0xFFFF) | (((cpu.reg[ESI] & 0xFFFF) + delta) & 0xFFFF);
+        } else {
+          cpu.reg[ESI] = (cpu.reg[ESI] + delta) | 0;
+        }
+      };
+      if (rep) {
+        while ((cpu._addrSize16 ? (cpu.reg[ECX] & 0xFFFF) : cpu.reg[ECX]) !== 0) {
+          doOne();
+          if (cpu._addrSize16) {
+            cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | (((cpu.reg[ECX] & 0xFFFF) - 1) & 0xFFFF);
+          } else {
+            cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
+          }
+        }
+      } else {
+        doOne();
+      }
+      break;
+    }
+
+    // OUTSW/OUTSD — Output word/dword from DS:SI to port DX
+    case 0x6F: {
+      const port = cpu.getReg16(EDX);
+      const unitSize = opSize === 16 ? 2 : 4;
+      const rep = prefixF3 || prefixF2;
+      const delta = cpu.getFlag(DF) ? -unitSize : unitSize;
+      const doOne = () => {
+        const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
+        const addr = cpu._addrSize16
+          ? (cpu.segBase(segSel) + (cpu.reg[ESI] & 0xFFFF)) >>> 0
+          : cpu.reg[ESI] >>> 0;
+        const val = unitSize === 2 ? cpu.mem.readU16(addr) : cpu.mem.readU32(addr);
+        cpu.emu?.portOut(port, val);
+        if (cpu._addrSize16) {
+          cpu.reg[ESI] = (cpu.reg[ESI] & ~0xFFFF) | (((cpu.reg[ESI] & 0xFFFF) + delta) & 0xFFFF);
+        } else {
+          cpu.reg[ESI] = (cpu.reg[ESI] + delta) | 0;
+        }
+      };
+      if (rep) {
+        while ((cpu._addrSize16 ? (cpu.reg[ECX] & 0xFFFF) : cpu.reg[ECX]) !== 0) {
+          doOne();
+          if (cpu._addrSize16) {
+            cpu.reg[ECX] = (cpu.reg[ECX] & ~0xFFFF) | (((cpu.reg[ECX] & 0xFFFF) - 1) & 0xFFFF);
+          } else {
+            cpu.reg[ECX] = (cpu.reg[ECX] - 1) | 0;
+          }
+        }
+      } else {
+        doOne();
       }
       break;
     }
@@ -1068,8 +1202,14 @@ export function cpuStep(cpu: CPU): void {
       cpu.flagsCache |= CF;
       break;
 
-    // CLI / STI (no-op in emulator)
-    case 0xFA: case 0xFB:
+    // CLI — clear interrupt flag
+    case 0xFA:
+      cpu.flagsCache &= ~IF;
+      break;
+
+    // STI — set interrupt flag
+    case 0xFB:
+      cpu.flagsCache |= IF;
       break;
 
     // CLD

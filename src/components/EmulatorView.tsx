@@ -1320,7 +1320,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         setWindowTitle(emu.consoleTitle);
         onTitleChange?.(emu.consoleTitle);
         setWindowStyle(WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX);
-        setCanvasSize({ w: 640, h: 400 });
+        setCanvasSize({ w: 640, h: 480 });
         onReady?.();
       }
 
@@ -1907,7 +1907,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         title={windowTitle}
         style={windowStyle}
         clientW={isConsole ? 640 : canvasSize.w}
-        clientH={isConsole ? 400 : canvasSize.h}
+        clientH={isConsole ? 480 : canvasSize.h}
         iconUrl={iconUrl}
         focused={parentFocused}
         maximized={maximized}

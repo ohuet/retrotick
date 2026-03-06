@@ -182,11 +182,21 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
 
     // BDA (BIOS Data Area) at 0040:0000
     // Video info
-    emu.memory.writeU16(0x0449, 0x03); // current video mode
-    emu.memory.writeU16(0x044A, 80);   // screen columns
-    emu.memory.writeU16(0x0450, 0);    // cursor position page 0
-    emu.memory.writeU16(0x0462, 0);    // active display page
+    emu.memory.writeU8(0x0449, 0x03);    // current video mode
+    emu.memory.writeU16(0x044A, 80);    // screen columns
+    emu.memory.writeU16(0x044C, 80 * 25 * 2); // page size in bytes
+    emu.memory.writeU16(0x044E, 0);     // current page offset
+    emu.memory.writeU16(0x0450, 0);     // cursor position page 0
+    emu.memory.writeU8(0x0460, 15);     // cursor end scanline
+    emu.memory.writeU8(0x0461, 14);     // cursor start scanline
+    emu.memory.writeU8(0x0462, 0);      // active display page
     emu.memory.writeU16(0x0463, 0x3D4); // CRTC base port
+    emu.memory.writeU8(0x0465, 0x29);   // CRT mode control (80-col text, color)
+    emu.memory.writeU8(0x0466, 0x30);   // CGA color palette
+    emu.memory.writeU8(0x0484, 24);     // rows - 1
+    emu.memory.writeU16(0x0485, 16);    // character height
+    emu.memory.writeU8(0x0487, 0x60);   // EGA/VGA feature: bits 6-5=11 (256K+ RAM)
+    emu.memory.writeU8(0x0489, 0x21);   // VGA DDA: bit 0=VGA active, bits 6-5=01 (400 scan lines)
     // Keyboard buffer (circular buffer at 0040:001E-003D, 16 words)
     emu.memory.writeU16(0x041A, 0x1E); // buffer head (offset within seg 40h)
     emu.memory.writeU16(0x041C, 0x1E); // buffer tail (same = empty)
@@ -209,6 +219,26 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.memory.writeU8(biosCfg + 6, 0x00); // feature byte 3
     emu.memory.writeU8(biosCfg + 7, 0x00); // feature byte 4
     emu.memory.writeU8(biosCfg + 8, 0x00); // feature byte 5
+    // VGA Static Functionality Table at F000:0700
+    // Used by INT 10h AH=1Bh — QBasic reads this to determine supported video modes
+    const sftBase = 0xF0000 + 0x0700;
+    emu.memory.writeU8(sftBase + 0x00, 0xFF); // Modes 0-7 supported
+    emu.memory.writeU8(sftBase + 0x01, 0xE0); // Modes D,E,F supported (8-C not standard VGA)
+    emu.memory.writeU8(sftBase + 0x02, 0x0F); // Modes 10,11,12,13 supported
+    emu.memory.writeU8(sftBase + 0x03, 0x00); // Reserved
+    emu.memory.writeU8(sftBase + 0x04, 0x00); // Reserved
+    emu.memory.writeU8(sftBase + 0x05, 0x00); // Reserved
+    emu.memory.writeU8(sftBase + 0x06, 0x00); // Reserved
+    emu.memory.writeU8(sftBase + 0x07, 0x07); // Scan lines for text: 200, 350, 400
+    emu.memory.writeU8(sftBase + 0x08, 0x02); // Character blocks available in text mode
+    emu.memory.writeU8(sftBase + 0x09, 0x08); // Max active character blocks
+    emu.memory.writeU8(sftBase + 0x0A, 0xE7); // Misc flags: all modes, gray sum, font load, palette, cursor emu, EGA pal, color reg, color page
+    emu.memory.writeU8(sftBase + 0x0B, 0x0F); // Misc flags 2: light pen, save/restore, blink, DCC
+    emu.memory.writeU8(sftBase + 0x0C, 0x00); // Reserved
+    emu.memory.writeU8(sftBase + 0x0D, 0x00); // Reserved
+    emu.memory.writeU8(sftBase + 0x0E, 0x00); // Save area function flags
+    emu.memory.writeU8(sftBase + 0x0F, 0x00); // Reserved
+
     // Equipment list (0040:0010) — bit 0=floppy, bits 4-5=video mode (10=80col color)
     emu.memory.writeU16(0x0410, 0x0021);
     // Memory size in KB (0040:0013) — 640KB

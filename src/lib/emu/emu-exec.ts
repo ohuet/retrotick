@@ -1,7 +1,7 @@
 import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
-import { syncMode13h } from './dos/vga';
+import { syncGraphics } from './dos/vga';
 
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
@@ -498,7 +498,10 @@ export function emuTick(emu: Emulator): void {
         const off = vec & 0xFFFF;
         emu._ioPorts.set(0x64, (emu._ioPorts.get(0x64) ?? 0) | 0x01);
         const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
-        emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
+        // On real hardware, interrupts only fire when IF=1, so pushed FLAGS
+        // always have IF=1. We deliver regardless of IF, so force IF=1 in
+        // the saved FLAGS so IRET restores an interrupt-enabled context.
+        emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
         emu.cpu.push16(emu.cpu.cs);
         emu.cpu.push16(returnIP);
         // Hardware interrupt entry clears IF+TF until IRET restores FLAGS.
@@ -680,7 +683,7 @@ export function emuTick(emu: Emulator): void {
   // Sync video memory for DOS mode (picks up direct B800:0000 writes)
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
-      if (emu.videoMode === 0x13) syncMode13h(emu);
+      syncGraphics(emu);
     } else {
       syncVideoMemory(emu);
     }

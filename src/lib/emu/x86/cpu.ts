@@ -26,7 +26,7 @@ export class CPU {
   lazyResult = 0;
   lazyA = 0;
   lazyB = 0;
-  flagsCache = 0x0002; // bit 1 always set
+  flagsCache = 0x0202; // bit 1 always set, IF=1 (interrupts enabled)
   flagsValid = true;
 
   // SSE/SSE2 XMM registers (8 x 128-bit, stored as pairs of Float64)

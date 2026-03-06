@@ -180,6 +180,9 @@ export class Memory {
   private _cSeg: Uint8Array = null!;
   private _cDV: DataView = null!;
 
+  // VGA planar memory hook: when set, intercepts reads/writes to A0000-AFFFF
+  vgaPlanar: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null = null;
+
   private seg(addr: number): Uint8Array {
     const key = addr >>> SEG_BITS;
     if (key === this._cKey) return this._cSeg;
@@ -203,6 +206,7 @@ export class Memory {
   }
 
   readU8(addr: number): number {
+    if (this.vgaPlanar && (addr >>> 16) === 0xA) return this.vgaPlanar.planarRead(addr & 0xFFFF);
     return this.seg(addr)[addr & SEG_MASK];
   }
 
@@ -238,6 +242,7 @@ export class Memory {
   }
 
   writeU8(addr: number, val: number): void {
+    if (this.vgaPlanar && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
   }
 
@@ -266,6 +271,19 @@ export class Memory {
   // Signed write aliases — identical bit pattern to unsigned writes
   writeI16(addr: number, val: number): void { this.writeU16(addr, val); }
   writeI32(addr: number, val: number): void { this.writeU32(addr, val); }
+
+  fill(addr: number, len: number, val: number): void {
+    let remaining = len;
+    let cur = addr;
+    while (remaining > 0) {
+      const seg = this.seg(cur);
+      const off = cur & SEG_MASK;
+      const chunk = Math.min(remaining, SEG_SIZE - off);
+      seg.fill(val, off, off + chunk);
+      cur += chunk;
+      remaining -= chunk;
+    }
+  }
 
   copyFrom(addr: number, data: Uint8Array): void {
     for (let i = 0; i < data.length; i++) {
