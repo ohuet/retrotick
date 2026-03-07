@@ -30,16 +30,13 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
     if (lpRect) {
       const targetHwnd = hWnd || emu.mainWindow;
       if (targetHwnd === emu.mainWindow && emu.canvas) {
-        console.log(`[WIN16] GetClientRect hwnd=0x${targetHwnd.toString(16)} → ${emu.canvas.width}x${emu.canvas.height} (canvas)`);
         h.writeRect(lpRect, 0, 0, emu.canvas.width, emu.canvas.height);
       } else {
         const wnd = emu.handles.get<WindowInfo>(targetHwnd);
         if (wnd) {
           const { cw, ch } = getClientSize(wnd.style, !!wnd.hMenu, wnd.width, wnd.height, true);
-          console.log(`[WIN16] GetClientRect hwnd=0x${targetHwnd.toString(16)} → ${cw}x${ch} (wnd ${wnd.width}x${wnd.height})`);
           h.writeRect(lpRect, 0, 0, cw, ch);
         } else {
-          console.log(`[WIN16] GetClientRect hwnd=0x${targetHwnd.toString(16)} → 640x480 (fallback)`);
           h.writeRect(lpRect, 0, 0, 640, 480);
         }
       }
@@ -138,7 +135,7 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   // ───────────────────────────────────────────────────────────────────────────
   user.register('ValidateRect', 8, () => {
     const [hWnd, _lpRect, bErase] = emu.readPascalArgs16([2, 4, 2]);
-    console.log(`[WIN16] InvalidateRect hwnd=0x${hWnd.toString(16)} erase=${bErase}`);
+    // console.log(`[WIN16] InvalidateRect hwnd=0x${hWnd.toString(16)} erase=${bErase}`);
     if (hWnd) {
       const wnd = emu.handles.get<WindowInfo>(hWnd);
       if (wnd) {

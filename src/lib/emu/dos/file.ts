@@ -26,13 +26,23 @@ function readDsDxString(cpu: CPU, maxLen = 128): string {
 export function dosSetDTA(cpu: CPU, emu: Emulator): void {
   const dsBase = cpu.segBase(cpu.ds);
   emu._dosDTA = dsBase + cpu.getReg16(EDX);
+  // Save segment:offset pair for GetDTA (needed in protected mode)
+  emu._dosDtaSeg = cpu.ds;
+  emu._dosDtaOfs = cpu.getReg16(EDX);
 }
 
 /** 0x2F: Get DTA → ES:BX */
 export function dosGetDTA(cpu: CPU, emu: Emulator): void {
-  const dta = emu._dosDTA || 0;
-  cpu.setReg16(EBX, dta & 0xFFFF);
-  cpu.es = (dta >>> 4) & 0xFFFF;
+  if (emu._dosDtaSeg !== undefined) {
+    // Protected mode: return saved selector:offset pair
+    cpu.es = emu._dosDtaSeg;
+    cpu.setReg16(EBX, emu._dosDtaOfs!);
+  } else {
+    // Real mode fallback
+    const dta = emu._dosDTA || 0;
+    cpu.setReg16(EBX, dta & 0xFFFF);
+    cpu.es = (dta >>> 4) & 0xFFFF;
+  }
 }
 
 /** 0x3C: Create file (CX=attributes, DS:DX=filename) */
@@ -366,7 +376,17 @@ export function dosForceDupHandle(cpu: CPU, emu: Emulator): void {
 export function dosFindFirst(cpu: CPU, emu: Emulator): void {
   const spec = readDsDxString(cpu);
   const resolvedSpec = dosResolvePath(emu, spec);
-  const entries = emu.fs.getVirtualDirListing(resolvedSpec, emu.additionalFiles);
+  const attrMask = cpu.getReg16(ECX);
+  const allEntries = emu.fs.getVirtualDirListing(resolvedSpec, emu.additionalFiles);
+  // DOS FindFirst attribute filtering:
+  // Normal files (attr 0x00/0x20) always match. Directory (0x10), hidden (0x02),
+  // system (0x04) entries only match if the corresponding bit is set in CX.
+  const FILE_ATTR_DIRECTORY = 0x10;
+  const entries = allEntries.filter(e => {
+    if (e.isDir) return !!(attrMask & FILE_ATTR_DIRECTORY);
+    return true; // normal/archive files always match
+  });
+  console.log(`[DOS] FindFirst: spec="${spec}" resolved="${resolvedSpec}" CX=0x${attrMask.toString(16)} entries=${entries.length}/${allEntries.length} DTA=0x${(emu._dosDTA||0).toString(16)}`, entries.map(e => `${e.name}${e.isDir?'/':''}`));
   if (entries.length > 0) {
     emu._dosFindState = { entries, index: 0, pattern: spec };
     writeDtaEntry(cpu, emu, entries[0]);

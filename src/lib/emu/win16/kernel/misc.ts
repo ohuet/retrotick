@@ -126,6 +126,11 @@ export function registerKernelMisc(kernel: Win16Module, emu: Emulator, _state: K
   // --- Ordinal 160: EMSCopy — 0 bytes ---
   kernel.register('EMSCopy', 0, () => 0, 160);
 
+  // --- Ordinal 158: IsWinOldApTask(hTask) — 2 bytes ---
+  kernel.register('IsWinOldApTask', 2, () => 0, 158);
+  // --- Ordinal 328: IsSharedSelector(sel) — 2 bytes ---
+  kernel.register('IsSharedSelector', 2, () => 0, 328);
+
   // ---- WinNT/WOW extensions ----
   // --- Ordinal 262: WOWWaitForMsgAndEvent(word) — 2 bytes ---
   kernel.register('WOWWaitForMsgAndEvent', 2, () => 0, 262);

@@ -11,3 +11,4 @@ export { registerWin16Sound } from './sound';
 export { registerWin16Ver } from './ver';
 export { registerWin16Commctrl } from './commctrl';
 export { registerWin16Sconfig } from './sconfig';
+export { registerWin16Lzexpand } from './lzexpand';
