@@ -20,6 +20,16 @@ function readDsDxString(cpu: CPU, maxLen = 128): string {
   return s;
 }
 
+/** Allocate the lowest available DOS file handle (recycles closed handles). */
+function allocDosHandle(emu: Emulator): number {
+  if (emu._dosFreedHandles.length > 0) {
+    // Return the smallest freed handle (DOS returns lowest available)
+    emu._dosFreedHandles.sort((a, b) => a - b);
+    return emu._dosFreedHandles.shift()!;
+  }
+  return emu._dosNextHandle++;
+}
+
 // ---- INT 21h file handlers ----
 
 /** 0x1A: Set DTA address (DS:DX) */
@@ -49,7 +59,7 @@ export function dosGetDTA(cpu: CPU, emu: Emulator): void {
 export function dosCreateFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
   const resolved = dosResolvePath(emu, name);
-  const handle = emu._dosNextHandle++;
+  const handle = allocDosHandle(emu);
   const emptyData = new Uint8Array(0);
   emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
   emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
@@ -61,6 +71,7 @@ export function dosCreateFile(cpu: CPU, emu: Emulator): void {
   }
   cpu.setReg16(EAX, handle);
   cpu.setFlag(CF, false);
+  console.log(`[DOS] Create "${name}" -> h=${handle}`);
 }
 
 /** Try to get file data synchronously (additionalFiles / externalFiles / cached virtual). */
@@ -88,11 +99,12 @@ function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulator, res
 function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string): void {
   const fs = emu.fs;
   const fileInfo = fs.findFile(resolved, emu.additionalFiles);
+  console.log(`[DOS] findFile("${resolved}") -> ${fileInfo ? `"${fileInfo.name}" src=${fileInfo.source} size=${fileInfo.size}` : 'null'}`);
   if (fileInfo) {
     // Try synchronous path first (additionalFiles / externalFiles are in memory)
     const syncData = getSyncFileData(fs, fileInfo, emu, resolved);
     if (syncData) {
-      const handle = emu._dosNextHandle++;
+      const handle = allocDosHandle(emu);
       const data = syncData;
       emu._dosFiles.set(handle, { data, pos: 0, name });
       emu.handles.set(handle, 'file', { path: resolved, access: 0x80000000, pos: 0, data, size: data.length, modified: false });
@@ -120,16 +132,8 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
     emu.waitingForMessage = true;
     return;
   }
-  // Fallback: try the loaded EXE data (EDIT.COM reads itself for resources)
-  if (emu._dosExeData) {
-    const handle = emu._dosNextHandle++;
-    emu._dosFiles.set(handle, { data: emu._dosExeData, pos: 0, name });
-    cpu.setReg16(EAX, handle);
-    cpu.setFlag(CF, false);
-  } else {
-    cpu.setFlag(CF, true);
-    cpu.setReg16(EAX, 2); // file not found
-  }
+  cpu.setFlag(CF, true);
+  cpu.setReg16(EAX, 2); // file not found
 }
 
 /** 0x3D: Open file (AL=mode, DS:DX=filename) */
@@ -137,15 +141,19 @@ export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
   const resolved = dosResolvePath(emu, name);
   openFileByPath(cpu, emu, name, resolved);
+  console.log(`[DOS] Open "${name}" -> CF=${cpu.getFlags()&1} AX=0x${cpu.getReg16(0).toString(16)}`);
 }
 
 /** 0x3E: Close file */
 export function dosCloseFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
+  const f = emu._dosFiles.get(h);
+  console.log(`[DOS] Close h=${h} "${f?.name}"`);
   emu._dosFiles.delete(h);
   const of = emu.handles.get<OpenFile>(h);
   if (of) emu.fs.persistOnClose(of);
   emu.handles.free(h);
+  if (h >= 5) emu._dosFreedHandles.push(h);
   cpu.setFlag(CF, false);
 }
 
@@ -168,9 +176,12 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
       f.pos += avail;
       cpu.setReg16(EAX, avail);
       cpu.setFlag(CF, false);
+      const preview = Array.from(f.data.slice(f.pos - avail, f.pos - avail + Math.min(avail, 16))).map(b => b.toString(16).padStart(2,'0')).join(' ');
+      console.log(`[DOS] Read h=${h} "${f.name}" req=${count} got=${avail} pos=${f.pos}/${f.data.length} [${preview}]`);
     } else {
       cpu.setFlag(CF, true);
       cpu.setReg16(EAX, 6); // invalid handle
+      console.log(`[DOS] Read h=${h} INVALID HANDLE req=${count}`);
     }
   }
 }
@@ -210,9 +221,12 @@ export function dosWriteFile(cpu: CPU, emu: Emulator): void {
       }
       cpu.setReg16(EAX, count);
       cpu.setFlag(CF, false);
+      const wPreview = Array.from(f.data.slice(f.pos - count, f.pos - count + Math.min(count, 16))).map(b => b.toString(16).padStart(2,'0')).join(' ');
+      console.log(`[DOS] Write h=${handle} "${f.name}" count=${count} pos=${f.pos}/${f.data.length} [${wPreview}]`);
     } else {
       cpu.setFlag(CF, true);
       cpu.setReg16(EAX, 6); // invalid handle
+      console.log(`[DOS] Write h=${handle} INVALID HANDLE count=${count}`);
     }
   }
 }
@@ -236,6 +250,7 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
     else if (origin === 1) f.pos += offset;      // SEEK_CUR
     else if (origin === 2) f.pos = f.data.length + offset; // SEEK_END
     f.pos = Math.max(0, Math.min(f.pos, f.data.length));
+    console.log(`[DOS] Seek h=${h} "${f.name}" origin=${origin} offset=${offset} -> pos=${f.pos}/${f.data.length}`);
     const of = emu.handles.get<OpenFile>(h);
     if (of) of.pos = f.pos;
     cpu.setReg16(EDX, (f.pos >>> 16) & 0xFFFF);
@@ -491,7 +506,7 @@ export function dosCreateTempFile(cpu: CPU, emu: Emulator): void {
   }
   const tmpName = prefix + 'TMP' + ((Date.now() & 0xFFFF).toString(16)).toUpperCase() + '.TMP';
   const resolved = dosResolvePath(emu, tmpName);
-  const handle = emu._dosNextHandle++;
+  const handle = allocDosHandle(emu);
   const emptyData = new Uint8Array(0);
   emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
   emu._dosFiles.set(handle, { data: emptyData, pos: 0, name: tmpName });
@@ -516,7 +531,7 @@ export function dosCreateNewFile(cpu: CPU, emu: Emulator): void {
     cpu.setFlag(CF, true);
     cpu.setReg16(EAX, 80); // ERROR_FILE_EXISTS
   } else {
-    const handle = emu._dosNextHandle++;
+    const handle = allocDosHandle(emu);
     const emptyData = new Uint8Array(0);
     emu.handles.set(handle, 'file', { path: resolved, access: 0x40000000, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
     emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
@@ -569,7 +584,7 @@ export function dosExtendedOpen(cpu: CPU, emu: Emulator): void {
 
   if (existing) {
     if (action & ACTION_REPLACE) {
-      const handle = emu._dosNextHandle++;
+      const handle = allocDosHandle(emu);
       const emptyData = new Uint8Array(0);
       emu.handles.set(handle, 'file', { path: resolved, access: cpu.getReg16(EBX) & 0xFF, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
       emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
@@ -585,7 +600,7 @@ export function dosExtendedOpen(cpu: CPU, emu: Emulator): void {
     }
   } else {
     if (action & ACTION_CREATE) {
-      const handle = emu._dosNextHandle++;
+      const handle = allocDosHandle(emu);
       const emptyData = new Uint8Array(0);
       emu.handles.set(handle, 'file', { path: resolved, access: cpu.getReg16(EBX) & 0xFF, pos: 0, data: emptyData, size: 0, modified: true } as OpenFile);
       emu._dosFiles.set(handle, { data: emptyData, pos: 0, name });
