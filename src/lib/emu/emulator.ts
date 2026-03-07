@@ -253,9 +253,8 @@ export class Win16Module {
 
   register(name: string, stackBytes: number, handler: (emu: Emulator) => number | undefined, ordinal?: number): void {
     const ordKey = ordinal !== undefined ? `${this.module}:ord_${ordinal}` : `${this.module}:${name}`;
-    if (this.emu.apiDefs.has(ordKey)) {
-      throw new Error(`Win16Module.register: duplicate API definition for ${ordKey}`);
-    }
+    // If a binary DLL already registered a FAR JMP handler for this ordinal, keep it
+    if (this.emu.apiDefs.has(ordKey)) return;
     const wrapped = (emu: Emulator) => {
       return handler(emu);
     };
