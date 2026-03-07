@@ -447,9 +447,9 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
   console.log(`[NE] API thunks: ${apiMap.size} entries, thunk range: 0x${THUNK_LINEAR_BASE.toString(16)}-0x${thunkAddr.toString(16)}`);
 
   // Map 1-based NE-header indices to actual selectors
-  const codeSegSelector = segments[entryCS - 1].selector;
-  const stackSegSelector = segments[entrySS - 1].selector;
-  const dataSegSelector = autoDataSeg ? segments[autoDataSeg - 1].selector : 0;
+  const codeSegSelector = segments[entryCS - 1]?.selector ?? 0;
+  const stackSegSelector = entrySS ? (segments[entrySS - 1]?.selector ?? 0) : 0;
+  const dataSegSelector = autoDataSeg ? (segments[autoDataSeg - 1]?.selector ?? 0) : 0;
 
   return {
     segments,
