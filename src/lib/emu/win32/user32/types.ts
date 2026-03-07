@@ -58,6 +58,8 @@ export interface WindowInfo {
   lbItemData?: number[];
   lbSelectedIndex?: number;       // single-select: current selection (-1 = none)
   lbSelectedIndices?: Set<number>; // multi-select: set of selected indices
+  lbTopIndex?: number;             // first visible item index
+  lbItemHeight?: number;           // item height in pixels
   // ListView state
   listColumns?: ListViewColumn[];
   listItems?: ListViewItem[];

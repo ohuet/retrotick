@@ -19,7 +19,21 @@ const LB16_GETTEXTLEN    = 0x040B;
 const LB16_GETCOUNT      = 0x040C;
 const LB16_SETITEMDATA   = 0x041A;
 const LB16_GETITEMDATA   = 0x0419;
+const LB16_SELECTSTRING  = 0x040D;
+const LB16_DIR           = 0x040E;
+const LB16_GETTOPINDEX   = 0x040F;
 const LB16_FINDSTRING    = 0x0410;
+const LB16_GETSELCOUNT   = 0x0411;
+const LB16_GETSELITEMS   = 0x0412;
+const LB16_SETTABSTOPS   = 0x0413;
+const LB16_SETHORIZONTALEXTENT = 0x0415;
+const LB16_SETCOLUMNWIDTH = 0x0416;
+const LB16_SETTOPINDEX   = 0x0418;
+const LB16_SELITEMRANGE  = 0x041B;
+const LB16_SETITEMHEIGHT = 0x041F;
+const LB16_GETITEMHEIGHT = 0x0420;
+const LB16_GETITEMRECT   = 0x0422;
+const LB16_FINDSTRINGEXACT = 0x0423;
 const LB16_ERR = -1;
 
 export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
@@ -80,6 +94,54 @@ export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: 
     if (wParam >= wnd.lbItems.length) return LB16_ERR;
     return wnd.lbItemData![wParam] ?? 0;
   }
+  if (message === LB16_DIR) {
+    // LB_DIR: wParam = attributes, lParam = far ptr to filespec
+    // Attributes: 0x0010 = DDL_DIRECTORY, 0x4000 = DDL_DRIVES, 0x8000 = DDL_EXCLUSIVE
+    const DDL_DIRECTORY = 0x0010;
+    const DDL_DRIVES = 0x4000;
+    const DDL_EXCLUSIVE = 0x8000;
+    const addr = emu.resolveFarPtr(lParam);
+    const filespec = addr ? emu.memory.readCString(addr) : '*.*';
+    const attrs = wParam & 0xFFFF;
+
+    if (attrs & DDL_DRIVES) {
+      // Add drive letters: [-a-], [-b-], [-c-]
+      wnd.lbItems.push('[-a-]'); wnd.lbItemData!.push(0);
+      wnd.lbItems.push('[-b-]'); wnd.lbItemData!.push(0);
+      wnd.lbItems.push('[-c-]'); wnd.lbItemData!.push(0);
+    }
+    if (!(attrs & DDL_EXCLUSIVE) || !(attrs & DDL_DRIVES)) {
+      // List files matching filespec
+      const entries = emu.fs.getVirtualDirListing(emu.resolvePath(filespec), emu.additionalFiles);
+      for (const entry of entries) {
+        if (entry.isDir) {
+          if (attrs & DDL_DIRECTORY) {
+            wnd.lbItems.push(`[${entry.name.toLowerCase()}]`);
+            wnd.lbItemData!.push(0);
+          }
+        } else {
+          wnd.lbItems.push(entry.name.toLowerCase());
+          wnd.lbItemData!.push(0);
+        }
+      }
+    }
+    return wnd.lbItems.length > 0 ? wnd.lbItems.length - 1 : LB16_ERR;
+  }
+  if (message === LB16_SELECTSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.lbItems.length;
+    for (let n = 0; n < wnd.lbItems.length; n++) {
+      const i = (start + n) % wnd.lbItems.length;
+      if (wnd.lbItems[i].toLowerCase().startsWith(search)) {
+        wnd.lbSelectedIndex = i;
+        return i;
+      }
+    }
+    return LB16_ERR;
+  }
+  if (message === LB16_GETTOPINDEX) return wnd.lbTopIndex ?? 0;
+  if (message === LB16_SETTOPINDEX) { wnd.lbTopIndex = wParam; return 0; }
   if (message === LB16_FINDSTRING) {
     const addr = emu.resolveFarPtr(lParam);
     const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
@@ -89,6 +151,60 @@ export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: 
       if (wnd.lbItems[i].toLowerCase().startsWith(search)) return i;
     }
     return LB16_ERR;
+  }
+  if (message === LB16_FINDSTRINGEXACT) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.lbItems.length;
+    for (let n = 0; n < wnd.lbItems.length; n++) {
+      const i = (start + n) % wnd.lbItems.length;
+      if (wnd.lbItems[i].toLowerCase() === search) return i;
+    }
+    return LB16_ERR;
+  }
+  if (message === LB16_GETSELCOUNT) {
+    return wnd.lbSelectedIndices?.size ?? (wnd.lbSelectedIndex !== undefined ? 1 : 0);
+  }
+  if (message === LB16_GETSELITEMS) {
+    const maxItems = wParam;
+    const bufAddr = emu.resolveFarPtr(lParam);
+    let count = 0;
+    if (wnd.lbSelectedIndices) {
+      for (const idx of wnd.lbSelectedIndices) {
+        if (count >= maxItems) break;
+        emu.memory.writeU16(bufAddr + count * 2, idx);
+        count++;
+      }
+    }
+    return count;
+  }
+  if (message === LB16_SETTABSTOPS) return 1; // stub
+  if (message === LB16_SETHORIZONTALEXTENT) return 0; // stub
+  if (message === LB16_SETCOLUMNWIDTH) return 0; // stub
+  if (message === LB16_SELITEMRANGE) {
+    if (!wnd.lbSelectedIndices) wnd.lbSelectedIndices = new Set();
+    const first = lParam & 0xFFFF;
+    const last = (lParam >>> 16) & 0xFFFF;
+    for (let i = first; i <= last; i++) {
+      if (wParam) wnd.lbSelectedIndices.add(i);
+      else wnd.lbSelectedIndices.delete(i);
+    }
+    return 0;
+  }
+  if (message === LB16_SETITEMHEIGHT) { wnd.lbItemHeight = lParam & 0xFFFF; return 0; }
+  if (message === LB16_GETITEMHEIGHT) return wnd.lbItemHeight ?? 16;
+  if (message === LB16_GETITEMRECT) {
+    const idx = wParam;
+    const rectAddr = emu.resolveFarPtr(lParam);
+    if (rectAddr) {
+      const ih = wnd.lbItemHeight ?? 16;
+      const top = (wnd.lbTopIndex ?? 0);
+      emu.memory.writeU16(rectAddr, 0); // left
+      emu.memory.writeU16(rectAddr + 2, ((idx - top) * ih) & 0xFFFF); // top
+      emu.memory.writeU16(rectAddr + 4, wnd.width || 100); // right
+      emu.memory.writeU16(rectAddr + 6, (((idx - top) + 1) * ih) & 0xFFFF); // bottom
+    }
+    return 0;
   }
   if (message === LB16_SETSEL) {
     if (!wnd.lbSelectedIndices) wnd.lbSelectedIndices = new Set();

@@ -321,6 +321,8 @@ export class Emulator {
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;
   _dosDTA = 0;
+  _dosDtaSeg?: number;
+  _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();

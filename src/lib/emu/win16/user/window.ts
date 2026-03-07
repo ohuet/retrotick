@@ -262,9 +262,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   user.register('IsWindow', 2, () => {
     const hWnd = emu.readArg16(0);
-    const result = emu.handles.getType(hWnd) === 'window' ? 1 : 0;
-    console.log(`[WIN16] IsWindow(0x${hWnd.toString(16)}) → ${result}`);
-    return result;
+    return emu.handles.getType(hWnd) === 'window' ? 1 : 0;
   }, 47);
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -330,7 +328,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     if (wnd) {
       wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
       wnd.width = w; wnd.height = height;
-      console.log(`[WIN16] MoveWindow hwnd=0x${hWnd.toString(16)} class="${wnd.classInfo?.className}" x=${wnd.x} y=${wnd.y} w=${w} h=${height}`);
+      // console.log(`[WIN16] MoveWindow hwnd=0x${hWnd.toString(16)} class="${wnd.classInfo?.className}" x=${wnd.x} y=${wnd.y} w=${w} h=${height}`);
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
       if (hWnd === emu.mainWindow) {
         emu.setupCanvasSize(cw, ch);
@@ -562,7 +560,31 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   user.register('EndDeferWindowPos', 2, () => 1);   // EndDeferWindowPos
 
   // Ordinal 262: GetWindow(hWnd, uCmd) — 4 bytes
-  user.register('GetWindow', 4, () => 0, 262);
+  user.register('GetWindow', 4, () => {
+    const [hWnd, uCmd] = emu.readPascalArgs16([2, 2]);
+    const GW_HWNDFIRST = 0, GW_HWNDLAST = 1, GW_HWNDNEXT = 2, GW_HWNDPREV = 3, GW_OWNER = 4, GW_CHILD = 5;
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    if (!wnd) return 0;
+    if (uCmd === GW_CHILD) {
+      return wnd.childList?.[0] ?? 0;
+    }
+    if (uCmd === GW_OWNER) {
+      return wnd.parent || 0;
+    }
+    // For sibling navigation, find in parent's childList
+    if (wnd.parent) {
+      const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+      const siblings = parentWnd?.childList;
+      if (siblings) {
+        const idx = siblings.indexOf(hWnd);
+        if (uCmd === GW_HWNDNEXT) return idx >= 0 && idx + 1 < siblings.length ? siblings[idx + 1] : 0;
+        if (uCmd === GW_HWNDPREV) return idx > 0 ? siblings[idx - 1] : 0;
+        if (uCmd === GW_HWNDFIRST) return siblings[0] ?? 0;
+        if (uCmd === GW_HWNDLAST) return siblings[siblings.length - 1] ?? 0;
+      }
+    }
+    return 0;
+  }, 262);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 266: SetMessageQueue(cMsg) — 2 bytes

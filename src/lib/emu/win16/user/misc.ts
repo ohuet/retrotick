@@ -99,7 +99,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
 
   // Ordinal 61: SetScrollPos(hWnd, nBar, nPos, bRedraw) — 8 bytes
   user.register('GetClassName', 8, () => {
-    const [hWnd, nBar, nPos] = emu.readPascalArgs16([2, 2, 2]);
+    const [hWnd, nBar, nPos, _bRedraw] = emu.readPascalArgs16([2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) return 0;
     if (!wnd.scrollInfo) wnd.scrollInfo = [
@@ -122,7 +122,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
 
   // Ordinal 64: SetScrollRange(hWnd, nBar, nMinPos, nMaxPos, bRedraw) — 10 bytes
   user.register('SetScrollRange', 10, () => {
-    const [hWnd, nBar, nMinPos, nMaxPos] = emu.readPascalArgs16([2, 2, 2, 2]);
+    const [hWnd, nBar, nMinPos, nMaxPos, _bRedraw] = emu.readPascalArgs16([2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) return 1;
     if (!wnd.scrollInfo) wnd.scrollInfo = [
@@ -157,8 +157,8 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 71: ShowCursor(bShow) — 2 bytes
   user.register('ShowCursor', 2, () => 1, 71);
 
-  // Ordinal 93: GetScrollRange(hWnd, nBar, lpMinPos, lpMaxPos) — 10 bytes
-  user.register('GetDlgItemText', 10, () => {
+  // Ordinal 93: GetScrollRange(hWnd, nBar, lpMinPos, lpMaxPos) — 12 bytes
+  user.register('GetDlgItemText', 12, () => {
     const [hWnd, nBar, lpMinPos, lpMaxPos] = emu.readPascalArgs16([2, 2, 4, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const bar = nBar & 1;
@@ -325,11 +325,27 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 228: GetNextDlgTabItem — 6 bytes
   user.register('GetNextDlgTabItem', 6, () => 0, 228);
 
-  // Ordinal 229: GetTopWindow — 2 bytes
-  user.register('GetTopWindow', 2, () => 0, 229);
+  // Ordinal 229: GetTopWindow(hWnd) — 2 bytes
+  user.register('GetTopWindow', 2, () => {
+    const hWnd = emu.readPascalArgs16([2])[0];
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    return wnd?.childList?.[0] ?? 0;
+  }, 229);
 
-  // Ordinal 230: GetNextWindow — 4 bytes
-  user.register('GetNextWindow', 4, () => 0, 230);
+  // Ordinal 230: GetNextWindow(hWnd, uCmd) — 4 bytes
+  user.register('GetNextWindow', 4, () => {
+    const [hWnd, uCmd] = emu.readPascalArgs16([2, 2]);
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    if (!wnd?.parent) return 0;
+    const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+    const siblings = parentWnd?.childList;
+    if (!siblings) return 0;
+    const idx = siblings.indexOf(hWnd);
+    if (idx < 0) return 0;
+    // GW_HWNDNEXT=2, GW_HWNDPREV=3
+    if (uCmd === 3) return idx > 0 ? siblings[idx - 1] : 0;
+    return idx + 1 < siblings.length ? siblings[idx + 1] : 0;
+  }, 230);
 
   // Ordinal 234: UnhookWindowsHook — 6 bytes
   user.register('UnhookWindowsHook', 6, () => 0, 234);
@@ -346,8 +362,12 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 269: GlobalDeleteAtom — 2 bytes
   user.register('GlobalDeleteAtom', 2, () => 0, 269);
 
-  // Ordinal 277: GetDlgCtrlID — 2 bytes
-  user.register('GetDlgCtrlID', 2, () => 0, 277);
+  // Ordinal 277: GetDlgCtrlID(hWnd) — 2 bytes
+  user.register('GetDlgCtrlID', 2, () => {
+    const hWnd = emu.readPascalArgs16([2])[0];
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    return wnd?.controlId ?? 0;
+  }, 277);
 
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 278: GetDesktopHwnd() — 0 bytes
@@ -1206,16 +1226,18 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
         for (const entry of entries) {
           if (entry.isDir && (uFileType & DDL_DIRECTORY)) {
             lbWnd.lbItems.push(`[${entry.name.toLowerCase()}]`);
+            lbWnd.lbItemData!.push(0);
           } else if (!entry.isDir) {
             lbWnd.lbItems.push(entry.name.toLowerCase());
+            lbWnd.lbItemData!.push(0);
           }
         }
       }
 
       // Add drive entries
       if (uFileType & DDL_DRIVES) {
-        // Only add C: since that's our only valid drive
         lbWnd.lbItems.push('[-c-]');
+        lbWnd.lbItemData!.push(0);
       }
     }
 
@@ -1338,7 +1360,29 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('InSendMessage', 0, () => 0, 192);
 
   // DlgDirSelectComboBox(hDlg, lpString, nIDComboBox) — 8 bytes
-  user.register('DlgDirSelectComboBox', 8, () => 0, 194);
+  user.register('DlgDirSelectComboBox', 8, () => {
+    const [hDlg, lpString, nIDComboBox] = emu.readPascalArgs16([2, 4, 2]);
+    const outAddr = emu.resolveFarPtr(lpString);
+    const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
+    const cbHwnd = dlgWnd?.children?.get(nIDComboBox);
+    const cbWnd = cbHwnd ? emu.handles.get<WindowInfo>(cbHwnd) : null;
+    const sel = cbWnd?.cbSelectedIndex ?? cbWnd?.lbSelectedIndex ?? 0;
+    const items = cbWnd?.cbItems || cbWnd?.lbItems || [];
+    const item = items[sel] || '';
+    let result = item;
+    let isDrive = false;
+    if (item.startsWith('[-') && item.endsWith('-]')) {
+      result = item.substring(2, item.length - 2) + ':';
+      isDrive = true;
+    } else if (item.startsWith('[') && item.endsWith(']')) {
+      result = item.substring(1, item.length - 1);
+    }
+    if (outAddr) {
+      for (let i = 0; i < result.length; i++) emu.memory.writeU8(outAddr + i, result.charCodeAt(i));
+      emu.memory.writeU8(outAddr + result.length, 0);
+    }
+    return isDrive ? 1 : 0;
+  }, 194);
 
   // DlgDirListComboBox(hDlg, lpPathSpec, nIDComboBox, nIDStaticPath, uFileType) — 12 bytes
   user.register('DlgDirListComboBox', 12, () => {
@@ -1366,14 +1410,17 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
         for (const entry of entries) {
           if (entry.isDir && (uFileType & DDL_DIRECTORY)) {
             cbWnd.lbItems.push(`[${entry.name.toLowerCase()}]`);
+            cbWnd.lbItemData!.push(0);
           } else if (!entry.isDir) {
             cbWnd.lbItems.push(entry.name.toLowerCase());
+            cbWnd.lbItemData!.push(0);
           }
         }
       }
 
       if (uFileType & DDL_DRIVES) {
         cbWnd.lbItems.push('[-c-]');
+        cbWnd.lbItemData!.push(0);
       }
     }
 
