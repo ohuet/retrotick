@@ -605,6 +605,7 @@ export function emuTick(emu: Emulator): void {
 
     const prevEip = eip;
     emu.cpu.step();
+    emu._pitInsnCount++;
     if (emu.isDOS) {
       const curDosKeyBufferLen = emu.dosKeyBuffer.length;
       if (dosYieldAfterKeyAt < 0 && curDosKeyBufferLen < prevDosKeyBufferLen) {
