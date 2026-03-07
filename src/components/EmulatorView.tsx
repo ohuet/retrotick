@@ -1213,32 +1213,39 @@ function FindDialog({ findTerm, onTermChange, onFindNext, onClose, focused, pare
   parentRef?: { current: HTMLDivElement | null };
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [pos, setPos] = useState<{ x: number; y: number } | undefined>(undefined);
-  const measureRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-  useLayoutEffect(() => {
-    if (pos || !measureRef.current) return;
-    const r = measureRef.current.getBoundingClientRect();
+  const [initPos] = useState<{ x: number; y: number }>(() => {
     const p = parentRef?.current?.getBoundingClientRect();
     const cx = p ? p.left + p.width / 2 : window.innerWidth / 2;
     const cy = p ? p.top + 60 : 80;
-    setPos({ x: Math.max(0, cx - r.width / 2), y: cy });
-  }, [pos, parentRef]);
+    return { x: Math.max(0, cx - 175), y: cy };
+  });
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Enter') { e.preventDefault(); onFindNext(); }
     if (e.key === 'Escape') { e.preventDefault(); onClose(); }
   };
+
+  const btnStyle = {
+    minWidth: '72px', height: '23px',
+    background: '#D4D0C8', cursor: 'var(--win2k-cursor)',
+    border: '1px solid', borderColor: '#FFF #404040 #404040 #FFF',
+    boxShadow: 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080',
+    fontFamily: '"Tahoma", "MS Sans Serif", sans-serif', fontSize: '11px',
+  };
+
   return (
-    <div ref={measureRef} style={{ position: 'fixed', left: pos ? `${pos.x}px` : '-9999px', top: pos ? `${pos.y}px` : '0', zIndex: 10000 }}>
+    <div style={{ position: 'fixed', left: '0', top: '0', zIndex: 10000 }}>
       <Window
         title="Find"
         style={WS_CAPTION | WS_SYSMENU}
-        clientW={320}
+        clientW={370}
         clientH={56}
         focused={focused}
         onClose={onClose}
+        draggable
+        initialPos={initPos}
       >
         <div style={{ padding: '8px', display: 'flex', gap: '8px', alignItems: 'center', fontFamily: '"Tahoma", "MS Sans Serif", sans-serif', fontSize: '11px' }}>
           <label style={{ whiteSpace: 'nowrap' }}>Find what:</label>
@@ -1248,16 +1255,16 @@ function FindDialog({ findTerm, onTermChange, onFindNext, onClose, focused, pare
             value={findTerm}
             onInput={(e) => onTermChange((e.target as HTMLInputElement).value)}
             onKeyDown={handleKeyDown}
-            style={{ flex: 1, height: '21px', border: '1px solid #7f9db9', padding: '1px 4px', fontFamily: 'inherit', fontSize: 'inherit' }}
+            style={{ flex: 1, height: '21px', border: '1px solid #7f9db9', padding: '1px 4px', fontFamily: 'inherit', fontSize: 'inherit', background: '#FFF' }}
           />
           <button
             onClick={onFindNext}
             disabled={!findTerm}
-            style={{ minWidth: '72px', height: '23px', fontFamily: 'inherit', fontSize: 'inherit' }}
+            style={btnStyle}
           >Find Next</button>
           <button
             onClick={onClose}
-            style={{ minWidth: '72px', height: '23px', fontFamily: 'inherit', fontSize: 'inherit' }}
+            style={btnStyle}
           >Cancel</button>
         </div>
       </Window>
@@ -1721,7 +1728,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     if (!emu) return;
     const wnd = emu.handles.get<WindowInfo>(commonDialog.editHwnd);
     if (!wnd) return;
-    const text = wnd.title || '';
+    const text = wnd.domInput?.value || wnd.title || '';
     const startPos = (emu.findState?.term === findTerm) ? (emu.findState.lastIndex + 1) : 0;
     const idx = text.toLowerCase().indexOf(findTerm.toLowerCase(), startPos);
     if (idx >= 0) {
@@ -1729,13 +1736,25 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       wnd.editSelStart = idx;
       wnd.editSelEnd = idx + findTerm.length;
       if (wnd.domInput) {
-        wnd.domInput.selectionStart = idx;
-        wnd.domInput.selectionEnd = idx + findTerm.length;
+        wnd.domInput.focus();
+        wnd.domInput.setSelectionRange(idx, idx + findTerm.length);
       }
       emu.notifyControlOverlays();
     } else {
       emu.findState = { term: findTerm, lastIndex: -1 };
       alert('Cannot find "' + findTerm + '"');
+    }
+    // Sync search term to FINDREPLACEW struct so menu "Find Next" (F3) also works
+    if (emu.findReplacePtr) {
+      const lpBuf = emu.memory.readU32(emu.findReplacePtr + 0x10); // lpstrFindWhat
+      const bufLen = emu.memory.readU16(emu.findReplacePtr + 0x18); // wFindWhatLen
+      if (lpBuf && bufLen > 0) {
+        const maxChars = Math.min(findTerm.length, Math.floor(bufLen / 2) - 1);
+        for (let i = 0; i < maxChars; i++) {
+          emu.memory.writeU16(lpBuf + i * 2, findTerm.charCodeAt(i));
+        }
+        emu.memory.writeU16(lpBuf + maxChars * 2, 0);
+      }
     }
   }, [commonDialog, findTerm]);
 

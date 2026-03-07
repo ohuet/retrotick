@@ -117,11 +117,17 @@ export function registerWin16Commdlg(emu: Emulator): void {
     return undefined;
   }, 2);
 
-  // Ordinal 5: ChooseFont(lpCf) — 4 bytes (segptr)
-  commdlg.register('ChooseFont', 4, () => 0, 5);
+  // Ordinal 5: ChooseColor(lpCc) — 4 bytes (segptr)
+  commdlg.register('ChooseColor', 4, () => 0, 5);
+
+  // Ordinal 6: FileOpenDlgProc — internal dialog proc, stub
+  commdlg.register('FileOpenDlgProc', 0, () => 0, 6);
+
+  // Ordinal 7: FileSaveDlgProc — internal dialog proc, stub
+  commdlg.register('FileSaveDlgProc', 0, () => 0, 7);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Ordinal 6: FindText(lpFr) — 4 bytes (segptr)
+  // Ordinal 11: FindText(lpFr) — 4 bytes (segptr)
   // Win16 FINDREPLACE struct:
   //   +0:  lStructSize (4)
   //   +4:  hwndOwner (2)
@@ -164,27 +170,26 @@ export function registerWin16Commdlg(emu: Emulator): void {
       },
     });
     return undefined;
-  }, 6);
+  }, 11);
 
-  // Ordinal 7: ReplaceText(lpFr) — 4 bytes (segptr)
-  commdlg.register('ReplaceText', 4, () => 0, 7);
+  // Ordinal 12: ReplaceText(lpFr) — 4 bytes (segptr)
+  commdlg.register('ReplaceText', 4, () => 0, 12);
 
-  // Ordinal 11: CommDlgExtendedError() — 0 bytes
-  commdlg.register('CommDlgExtendedError', 0, () => 0, 11);
+  // Ordinal 13: FindTextDlgProc — internal dialog proc, stub
+  commdlg.register('FindTextDlgProc', 0, () => 0, 13);
 
-  // Ordinal 13: PrintDlg(lpPd) — 4 bytes (segptr)
-  // Returns 0 = user cancelled
-  commdlg.register('PrintDlg', 4, () => 0, 13);
-
-  // Ordinal 15: ChooseFont(lpCf) — 4 bytes (segptr) — duplicate ordinal 5 alias
+  // Ordinal 15: ChooseFont(lpCf) — 4 bytes (segptr)
   commdlg.register('ChooseFont', 4, () => 0, 15);
 
+  // Ordinal 20: PrintDlg(lpPd) — 4 bytes (segptr)
+  // Returns 0 = user cancelled
+  commdlg.register('PrintDlg', 4, () => 0, 20);
+
   // Ordinal 26: CommDlgExtendedError() — 0 bytes
-  // Returns 0 = no error (user cancelled), non-zero = error code
   commdlg.register('CommDlgExtendedError', 0, () => 0, 26);
 
-  // Ordinal 27: ChooseColor — stub (return 0 = cancelled)
-  commdlg.register('ChooseColor', 4, () => 0, 27);
+  // Ordinal 27: GetFileTitle(lpszFile, lpszTitle, cbBuf) — 10 bytes (4+4+2)
+  commdlg.register('GetFileTitle', 10, () => 0, 27);
 
   // Ordinal 28: WEP(word) — DLL exit procedure
   commdlg.register('WEP', 2, () => 1, 28);

@@ -32,6 +32,16 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   }, 88);
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Ordinal 89: CreateDialog(hInst, lpTemplate, hWndParent, dlgProc) — 12 bytes (2+4+2+4)
+  // Creates a modeless dialog box. Returns dialog HWND or 0 on failure.
+  // ───────────────────────────────────────────────────────────────────────────
+  user.register('CreateDialog', 12, () => {
+    const [_hInst, _lpTemplate, _hWndParent, _dlgProc] = emu.readPascalArgs16([2, 4, 2, 4]);
+    // Stub — modeless dialogs not yet supported
+    return 0;
+  }, 89);
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 90: IsDialogMessage(hDlg, lpMsg) — 6 bytes (2+4)
   // ───────────────────────────────────────────────────────────────────────────
   user.register('IsDialogMessage', 6, () => 0, 90);

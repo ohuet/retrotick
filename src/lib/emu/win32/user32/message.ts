@@ -579,6 +579,11 @@ export function registerMessage(emu: Emulator): void {
         if (end > text.length) end = text.length;
         wnd.editSelStart = start;
         wnd.editSelEnd = end;
+        // Sync selection to DOM textarea
+        if (wnd.domInput) {
+          wnd.domInput.selectionStart = start;
+          wnd.domInput.selectionEnd = end;
+        }
         return 0;
       }
       if (message === EM_REPLACESEL) {
