@@ -533,6 +533,10 @@ export class Emulator {
   capturedWindow = 0;
   focusedWindow = 0;
   findState?: { term: string; lastIndex: number };
+  // Exposed from wndproc.ts for RegisterWindowMessage dedup
+  registerWindowMessage?: (name: string) => number;
+  // Active FINDREPLACEW struct pointer for FindTextW/ReplaceTextW
+  findReplacePtr = 0;
   // GL sync-yield guard: avoid double-yield when apps call both glFinish and SwapBuffers per frame.
   glSyncYieldedThisFrame = false;
   glSyncAwaitingSwap = false;
