@@ -1,5 +1,6 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
+import { XMS_STUB_SEG, XMS_STUB_OFF } from './xms';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, EDI = 7;
 const CF = 0x001;
@@ -109,7 +110,20 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
   }
 
   if (ax === 0x4300) {
-    cpu.setReg8(EAX, 0x00); // XMS not installed
+    cpu.setReg8(EAX, 0x80); // XMS driver installed
+    return true;
+  }
+
+  if (ax === 0x4310) {
+    // Get XMS driver entry point → ES:BX
+    cpu.es = XMS_STUB_SEG;
+    cpu.setReg16(EBX, XMS_STUB_OFF);
+    return true;
+  }
+
+  if (ah === 0x15) {
+    // MSCDEX — CD-ROM not installed
+    cpu.setReg16(EBX, 0); // 0 CD-ROM drive letters
     return true;
   }
 

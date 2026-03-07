@@ -322,7 +322,7 @@ export class Emulator {
   _dosLoadSegment = 0;
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
-  _dosExeData: Uint8Array | null = null; // raw executable bytes for self-open
+  _dosFreedHandles: number[] = []; // recycled handle pool
   _dosIntVectors = new Map<number, number>();
   _dosBiosDefaultVectors = new Map<number, number>();
   _dosLoLAddr = 0;
@@ -353,6 +353,7 @@ export class Emulator {
   _pitModes = [3, 2, 3];                   // Counter modes (default: mode 3 for 0/2, mode 2 for 1)
   _pitAccessModes = [3, 3, 3];             // 1=LSB, 2=MSB, 3=LSB then MSB
   _pitWriteHigh = [false, false, false];    // Byte toggle for 16-bit writes
+  _pitInsnCount = 0;                        // instruction counter for PIT timing in DOS mode
 
   // VGA state
   vga = new VGAState();
@@ -447,6 +448,14 @@ export class Emulator {
   stopped = false;
   _sysmsgTablesAddr = 0;
   _perfCounter = 0;
+
+  // XMS (Extended Memory Specification) state
+  _xmsHandles = new Map<number, { base: number; size: number; lockCount: number }>();
+  _xmsNextHandle = 1;
+  _xmsBaseAddr = 0x110000; // linear address for XMS pool (above HMA)
+  _xmsNextAddr = 0x110000;
+  _xmsTotalKB = 16384;     // 16MB total XMS
+  _xmsFreeBlocks: { base: number; size: number }[] = [];
 
   // Threading
   threads: Thread[] = [];
@@ -1210,12 +1219,16 @@ export class Emulator {
             return (val >> 8) & 0xFF;
           }
         }
-        // Not latched: return running counter estimate
-        // Use performance.now() to derive a rough counter value
+        // Not latched: return running counter estimate.
+        // In DOS mode, derive from instruction count to simulate ~33MHz CPU
+        // (prevents Turbo Pascal CRT unit fast-CPU calibration overflow).
+        // In Win32 mode, use wall-clock time.
         const freq = 1193182; // PIT base frequency
         const reload = this._pitCounters[ch] || 0x10000;
-        const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
-        const count = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+        const INSNS_PER_PIT_TICK = 28; // ~33MHz / 1.19MHz ≈ 28
+        const count = this.isDOS
+          ? (reload - Math.floor(this._pitInsnCount / INSNS_PER_PIT_TICK) % reload) & 0xFFFF
+          : (() => { const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq); return (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF; })();
         const accessMode = this._pitAccessModes[ch];
         if (accessMode === 1) return count & 0xFF;
         if (accessMode === 2) return (count >> 8) & 0xFF;

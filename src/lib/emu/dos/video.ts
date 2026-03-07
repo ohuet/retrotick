@@ -482,7 +482,6 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
   const al = cpu.reg[EAX] & 0xFF;
   const cols = emu.screenCols;
   const rows = emu.screenRows;
-
   switch (ah) {
     case 0x00: // Set video mode
       setVideoMode(cpu, emu, al);
@@ -844,7 +843,7 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
       switch (bl12) {
         case 0x10: // Get EGA info
           cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x0003; // BH=0 (color), BL=3 (256K)
-          cpu.setReg16(ECX, 0);
+          cpu.setReg16(ECX, 0x0009); // CH=0 (feature bits), CL=9 (VGA color switch settings)
           break;
         case 0x30: // Select vertical resolution (scan lines)
           // AL=0: 200, AL=1: 350, AL=2: 400
