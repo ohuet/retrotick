@@ -5,6 +5,115 @@ import { emuCompleteThunk16 } from '../../emu-exec';
 
 // Win16 USER module — Message loop & dispatch
 
+// Win16 LB_ messages (WM_USER + offset, different from Win32 0x018x!)
+const LB16_ADDSTRING     = 0x0401;
+const LB16_INSERTSTRING  = 0x0402;
+const LB16_DELETESTRING  = 0x0403;
+const LB16_RESETCONTENT  = 0x0405;
+const LB16_SETSEL        = 0x0406;
+const LB16_SETCURSEL     = 0x0407;
+const LB16_GETSEL        = 0x0408;
+const LB16_GETCURSEL     = 0x0409;
+const LB16_GETTEXT       = 0x040A;
+const LB16_GETTEXTLEN    = 0x040B;
+const LB16_GETCOUNT      = 0x040C;
+const LB16_SETITEMDATA   = 0x041A;
+const LB16_GETITEMDATA   = 0x0419;
+const LB16_FINDSTRING    = 0x0410;
+const LB16_ERR = -1;
+
+export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
+  if (!wnd.lbItems) { wnd.lbItems = []; wnd.lbItemData = []; }
+
+  if (message === LB16_ADDSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const text = addr ? emu.memory.readCString(addr) : '';
+    wnd.lbItems.push(text);
+    wnd.lbItemData!.push(0);
+    return wnd.lbItems.length - 1;
+  }
+  if (message === LB16_INSERTSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const text = addr ? emu.memory.readCString(addr) : '';
+    const idx = wParam === 0xFFFF || wParam >= wnd.lbItems.length ? wnd.lbItems.length : wParam;
+    wnd.lbItems.splice(idx, 0, text);
+    wnd.lbItemData!.splice(idx, 0, 0);
+    return idx;
+  }
+  if (message === LB16_DELETESTRING) {
+    if (wParam >= wnd.lbItems.length) return LB16_ERR;
+    wnd.lbItems.splice(wParam, 1);
+    wnd.lbItemData!.splice(wParam, 1);
+    return wnd.lbItems.length;
+  }
+  if (message === LB16_RESETCONTENT) {
+    wnd.lbItems.length = 0;
+    wnd.lbItemData!.length = 0;
+    return 0;
+  }
+  if (message === LB16_GETCOUNT) return wnd.lbItems.length;
+  if (message === LB16_GETCURSEL) return wnd.lbSelectedIndex ?? LB16_ERR;
+  if (message === LB16_SETCURSEL) {
+    wnd.lbSelectedIndex = wParam === 0xFFFF ? undefined : wParam;
+    return wParam === 0xFFFF ? LB16_ERR : wParam;
+  }
+  if (message === LB16_GETTEXT) {
+    if (wParam >= wnd.lbItems.length) return LB16_ERR;
+    const text = wnd.lbItems[wParam];
+    const addr = emu.resolveFarPtr(lParam);
+    if (addr) {
+      for (let i = 0; i < text.length; i++) emu.memory.writeU8(addr + i, text.charCodeAt(i) & 0xFF);
+      emu.memory.writeU8(addr + text.length, 0);
+    }
+    return text.length;
+  }
+  if (message === LB16_GETTEXTLEN) {
+    if (wParam >= wnd.lbItems.length) return LB16_ERR;
+    return wnd.lbItems[wParam].length;
+  }
+  if (message === LB16_SETITEMDATA) {
+    if (wParam >= wnd.lbItems.length) return LB16_ERR;
+    wnd.lbItemData![wParam] = lParam;
+    return 0;
+  }
+  if (message === LB16_GETITEMDATA) {
+    if (wParam >= wnd.lbItems.length) return LB16_ERR;
+    return wnd.lbItemData![wParam] ?? 0;
+  }
+  if (message === LB16_FINDSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.lbItems.length;
+    for (let n = 0; n < wnd.lbItems.length; n++) {
+      const i = (start + n) % wnd.lbItems.length;
+      if (wnd.lbItems[i].toLowerCase().startsWith(search)) return i;
+    }
+    return LB16_ERR;
+  }
+  if (message === LB16_SETSEL) {
+    if (!wnd.lbSelectedIndices) wnd.lbSelectedIndices = new Set();
+    if (wParam) {
+      if (lParam === -1) { for (let i = 0; i < wnd.lbItems.length; i++) wnd.lbSelectedIndices.add(i); }
+      else wnd.lbSelectedIndices.add(lParam & 0xFFFF);
+    } else {
+      if (lParam === -1) wnd.lbSelectedIndices.clear();
+      else wnd.lbSelectedIndices.delete(lParam & 0xFFFF);
+    }
+    return 0;
+  }
+  if (message === LB16_GETSEL) {
+    return wnd.lbSelectedIndices?.has(wParam) ? 1 : 0;
+  }
+  // WM_SETTEXT / WM_GETTEXT / WM_GETTEXTLENGTH
+  if (message === 0x000C) { // WM_SETTEXT
+    const addr = emu.resolveFarPtr(lParam);
+    wnd.title = addr ? emu.memory.readCString(addr) : '';
+    return 1;
+  }
+  if (message === 0x000E) return wnd.title?.length || 0; // WM_GETTEXTLENGTH
+  return 0;
+}
+
 export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Win16UserHelpers): void {
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 107: DefWindowProc(hWnd, msg, wParam, lParam_long) — 10 bytes (2+2+2+4)
@@ -231,7 +340,6 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   user.register('SendMessage', 10, () => {
     const [hWnd, message, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
-    console.log(`[WIN16] SendMessage hwnd=0x${hWnd.toString(16)} msg=0x${message.toString(16)} wParam=0x${wParam.toString(16)} lParam=0x${lParam.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd?.wndProc) {
       return emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
@@ -443,6 +551,11 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       if (message === EM_GETRECT || message === EM_SETRECT) return 0;
     }
 
+    // Handle messages for built-in LISTBOX controls
+    if (wnd && cn && cn.toUpperCase() === 'LISTBOX') {
+      return handleListBoxMessage16(emu, wnd, message, wParam, lParam);
+    }
+
     // Handle WM_MDICREATE for MDICLIENT windows
     const WM_MDICREATE = 0x0220;
     const WM_MDIGETACTIVE = 0x0229;
@@ -474,14 +587,17 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         const mdiClassName = classAddr ? emu.memory.readCString(classAddr) : '';
         const mdiTitle = titleAddr ? emu.memory.readCString(titleAddr) : '';
 
-        console.log(`[WIN16] WM_MDICREATE class="${mdiClassName}" title="${mdiTitle}" ${mdiCX}x${mdiCY} style=0x${mdiStyle.toString(16)}`);
+        const classInfo = emu.windowClasses.get(mdiClassName.toUpperCase());
+        console.log(`[WIN16] WM_MDICREATE class="${mdiClassName}" title="${mdiTitle}" ${mdiCX}x${mdiCY} style=0x${mdiStyle.toString(16)} wndProc=0x${(classInfo?.wndProc||0).toString(16)} cbExtra=${classInfo?.cbWndExtra||0} lParam=0x${mdiLParam.toString(16)}`);
 
         const WS_CHILD = 0x40000000;
         const WS_VISIBLE = 0x10000000;
         const WS_CLIPSIBLINGS = 0x04000000;
         const childStyle = mdiStyle | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
 
-        const classInfo = emu.windowClasses.get(mdiClassName.toUpperCase());
+        // Auto-size to MDIClient area when dimensions are 0 or CW_USEDEFAULT
+        const clientW = wnd.width || (emu.canvas?.width ?? 320);
+        const clientH = wnd.height || (emu.canvas?.height ?? 200);
         const childHwnd = emu.handles.alloc('window', {
           classInfo: classInfo || { className: mdiClassName, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
           title: mdiTitle,
@@ -489,8 +605,8 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           exStyle: 0,
           x: mdiX === 0x8000 ? 0 : mdiX,
           y: mdiY === 0x8000 ? 0 : mdiY,
-          width: mdiCX === 0x8000 ? 320 : mdiCX,
-          height: mdiCY === 0x8000 ? 200 : mdiCY,
+          width: (mdiCX === 0x8000 || mdiCX === 0) ? clientW : mdiCX,
+          height: (mdiCY === 0x8000 || mdiCY === 0) ? clientH : mdiCY,
           hMenu: 0,
           parent: hWnd,
           wndProc: classInfo?.wndProc || 0,
@@ -499,6 +615,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
           children: new Map(),
         });
+        { const w = emu.handles.get<WindowInfo>(childHwnd); if (w) w.hwnd = childHwnd; }
 
         // Register child in parent's childList
         if (!wnd.childList) wnd.childList = [];
@@ -510,7 +627,33 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         // Send WM_CREATE to child if it has a wndProc
         if (classInfo?.wndProc) {
           const savedSP = emu.cpu.reg[4] & 0xFFFF;
-          emu.callWndProc16(classInfo.wndProc, childHwnd, 0x0001, 0, 0);
+          // Build a minimal Win16 CREATESTRUCT on the heap for WM_CREATE lParam
+          // CREATESTRUCT16: lpCreateParams(4), hInstance(2), hMenu(2), hWndParent(2),
+          //   cy(2), cx(2), y(2), x(2), style(4), lpszName(4), lpszClass(4), dwExStyle(4)
+          const csAddr = emu.allocHeap(34);
+          emu.memory.writeU32(csAddr + 0, mdiLParam);     // lpCreateParams = MDICREATESTRUCT.lParam
+          emu.memory.writeU16(csAddr + 4, hOwner);         // hInstance
+          emu.memory.writeU16(csAddr + 6, 0);              // hMenu
+          emu.memory.writeU16(csAddr + 8, hWnd);           // hWndParent (MDIClient)
+          const childWnd = emu.handles.get<WindowInfo>(childHwnd)!;
+          emu.memory.writeU16(csAddr + 10, childWnd.height & 0xFFFF); // cy
+          emu.memory.writeU16(csAddr + 12, childWnd.width & 0xFFFF);  // cx
+          emu.memory.writeU16(csAddr + 14, childWnd.y & 0xFFFF);      // y
+          emu.memory.writeU16(csAddr + 16, childWnd.x & 0xFFFF);      // x
+          emu.memory.writeU32(csAddr + 18, childStyle);    // style
+          emu.memory.writeU32(csAddr + 22, szTitlePtr);    // lpszName
+          emu.memory.writeU32(csAddr + 26, szClassPtr);    // lpszClass
+          emu.memory.writeU32(csAddr + 30, 0);             // dwExStyle
+          // Convert to far pointer (DS:offset)
+          const csOff = csAddr - (emu.cpu.segBases.get(emu.cpu.ds) ?? 0);
+          const csFarPtr = ((emu.cpu.ds & 0xFFFF) << 16) | (csOff & 0xFFFF);
+          emu.callWndProc16(classInfo.wndProc, childHwnd, 0x0001, 0, csFarPtr);
+          emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
+
+          // Send WM_SIZE so child knows its dimensions
+          const WM_SIZE = 0x0005;
+          const sizeLParam = ((childWnd.height & 0xFFFF) << 16) | (childWnd.width & 0xFFFF);
+          emu.callWndProc16(classInfo.wndProc, childHwnd, WM_SIZE, 0, sizeLParam);
           emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
         }
 

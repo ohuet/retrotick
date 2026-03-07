@@ -24,24 +24,9 @@ export function registerKernelDos(kernel: Win16Module, emu: Emulator, state: Ker
   // Delegates to the shared INT 21h handler in dos-int.ts
   // Must return current DX:AX so emuCompleteThunk16 preserves the INT 21h results
   kernel.register('DOS3Call', 0, () => {
-    const ah = (emu.cpu.reg[0] >> 8) & 0xFF;
-    const al = emu.cpu.reg[0] & 0xFF;
-    const bl = emu.cpu.reg[3] & 0xFF;
-    const cl = emu.cpu.reg[1] & 0xFF;
-    const dsBase = emu.cpu.segBase(emu.cpu.ds);
-    const dx = emu.cpu.reg[2] & 0xFFFF;
-    if (ah === 0x44) {
-      console.log(`[DOS3Call] IOCTL AH=44 AL=${al.toString(16)} BL=${bl} CL=${cl.toString(16)} DS:DX=${emu.cpu.ds.toString(16)}:${dx.toString(16)}`);
-    } else if (ah !== 0x30) {
-      console.log(`[DOS3Call] AH=${ah.toString(16)} AL=${al.toString(16)} BL=${bl} DS:DX=${emu.cpu.ds.toString(16)}:${dx.toString(16)}`);
-    }
     handleInt21(emu.cpu, emu);
     const retAx = emu.cpu.reg[0] & 0xFFFF;
     const retDx = emu.cpu.reg[2] & 0xFFFF;
-    const cf = emu.cpu.getFlag(0x001);
-    if (ah === 0x44) {
-      console.log(`[DOS3Call] → AX=${retAx.toString(16)} DX=${retDx.toString(16)} CF=${cf?1:0}`);
-    }
     return (retDx << 16) | retAx;
   }, 102);
 

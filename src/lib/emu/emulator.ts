@@ -260,6 +260,9 @@ export class Win16Module {
       return handler(emu);
     };
     this.emu.apiDefs.set(ordKey, { handler: wrapped, stackBytes });
+    if (ordinal !== undefined) {
+      this.emu.ordinalNames.set(`${this.module}:${ordinal}`, name);
+    }
   }
 }
 
@@ -366,7 +369,8 @@ export class Emulator {
 
   // API dispatch
   apiDefs = new Map<string, ApiDef>();
-  thunkToApi = new Map<number, { dll: string; name: string; stackBytes: number }>();
+  ordinalNames = new Map<string, string>(); // "MODULE:ordinal" → human name
+  thunkToApi = new Map<number, { dll: string; name: string; stackBytes: number; displayName?: string }>();
   // Fast page-level filter: set of (addr >>> 12) for all thunk addresses.
   // If the page isn't in this set, we skip the Map lookup entirely.
   thunkPages = new Set<number>();
