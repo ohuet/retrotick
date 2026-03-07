@@ -234,7 +234,7 @@ export function registerMessage(emu: Emulator): void {
 
     // Track whether endPaint was called during WM_PAINT
     const trackPaint = message === WM_PAINT && hwnd === emu.mainWindow;
-    if (trackPaint) emu._dispatchPaintUsedBeginPaint = false;
+    if (trackPaint) { emu._dispatchPaintUsedBeginPaint = false; }
 
     // Call WndProc via stack frame replacement
     const ret = emu.callWndProc(wnd.wndProc, hwnd, message, wParam, lParam);

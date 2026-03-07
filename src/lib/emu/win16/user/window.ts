@@ -115,13 +115,11 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
 
     const className = resolveClassName16(emu, classNameRaw, lpClassName);
     const windowName = lpWindowName ? emu.memory.readCString(lpWindowName) : '';
-    console.log(`[WIN16] CreateWindow class="${className}" title="${windowName}" ${w}x${height}`);
 
     const classInfo = emu.windowClasses.get(className.toUpperCase());
     let effectiveMenu = hMenu;
     if (!effectiveMenu && classInfo?.menuName) {
       effectiveMenu = 1;
-      console.log(`[WIN16] CreateWindow: auto-loading menu from class menuName=0x${classInfo.menuName.toString(16)}`);
     }
     const hwnd = emu.handles.alloc('window', {
       classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
@@ -140,6 +138,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
       children: new Map(),
     });
+    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) w.hwnd = hwnd; }
 
     // Register child in parent's childList (mirrors Win32 create-window.ts)
     if (hWndParent) {
@@ -181,7 +180,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       emu.memory.writeU16(dsBase + 0x240, 0);
       const cw = emu.canvas.width, ch = emu.canvas.height;
       const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-      console.log(`[WIN16] CreateWindow: posting WM_SIZE to main after child 0x${hwnd.toString(16)} created`);
       emu.postMessage(emu.mainWindow, 0x0005, 0, lParam);
     }
 
@@ -193,7 +191,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   user.register('CloseWindow', 4, () => {
     const [hWnd, nCmdShow] = emu.readPascalArgs16([2, 2]);
-    console.log(`[WIN16] ShowWindow hwnd=0x${hWnd.toString(16)} nCmdShow=${nCmdShow} mainWindow=0x${emu.mainWindow.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) { console.log(`[WIN16] ShowWindow: wnd not found!`); return 0; }
 
@@ -228,9 +225,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
       const WM_SIZE = 0x0005;
       const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-      console.log(`[WIN16] ShowWindow posting WM_SIZE hwnd=0x${hWnd.toString(16)} cw=${cw} ch=${ch}`);
-      // Post instead of sync call so the browser can render the window before
-      // the WM_SIZE handler runs (which may contain lengthy animation loops).
       emu.postMessage(hWnd, WM_SIZE, 0, lParam);
     }
     // Notify control overlays so child controls (EDIT, BUTTON, etc.) get DOM elements
@@ -336,6 +330,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     if (wnd) {
       wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
       wnd.width = w; wnd.height = height;
+      console.log(`[WIN16] MoveWindow hwnd=0x${hWnd.toString(16)} class="${wnd.classInfo?.className}" x=${wnd.x} y=${wnd.y} w=${w} h=${height}`);
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
       if (hWnd === emu.mainWindow) {
         emu.setupCanvasSize(cw, ch);
@@ -343,7 +338,25 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
       const WM_SIZE = 0x0005;
       const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-      emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lParam);
+      if (wnd.wndProc) {
+        emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lParam);
+      }
+      // MDICLIENT: when resized, also resize MDI children to fill the new area
+      if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
+        for (const childHwnd of wnd.childList) {
+          const child = emu.handles.get<WindowInfo>(childHwnd);
+          if (child) {
+            child.x = 0; child.y = 0;
+            child.width = cw; child.height = ch;
+            child.needsPaint = true; child.needsErase = true;
+            if (child.wndProc) {
+              const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
+              emu.callWndProc16(child.wndProc, childHwnd, WM_SIZE, 0,
+                ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
+            }
+          }
+        }
+      }
       if (bRepaint) {
         wnd.needsPaint = true;
         wnd.needsErase = true;
@@ -513,8 +526,26 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         emu.onWindowChange?.(wnd);
       }
       const WM_SIZE = 0x0005;
-      emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0,
-        ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
+      if (wnd.wndProc) {
+        emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0,
+          ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
+      }
+      // MDICLIENT: resize MDI children to fill new area
+      if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
+        for (const childHwnd of wnd.childList) {
+          const child = emu.handles.get<WindowInfo>(childHwnd);
+          if (child) {
+            child.x = 0; child.y = 0;
+            child.width = cw; child.height = ch;
+            child.needsPaint = true; child.needsErase = true;
+            if (child.wndProc) {
+              const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
+              emu.callWndProc16(child.wndProc, childHwnd, WM_SIZE, 0,
+                ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
+            }
+          }
+        }
+      }
     }
     emu.notifyControlOverlays();
     return 1;
@@ -558,7 +589,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
 
     const className = resolveClassName16(emu, classNameRaw, lpClassName);
     const windowName = lpWindowName ? emu.memory.readCString(lpWindowName) : '';
-    console.log(`[WIN16] CreateWindowEx exStyle=0x${dwExStyle.toString(16)} class="${className}" title="${windowName}" ${w}x${height}`);
 
     const classInfo = emu.windowClasses.get(className.toUpperCase());
     const hwnd = emu.handles.alloc('window', {
@@ -578,6 +608,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
       children: new Map(),
     });
+    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) w.hwnd = hwnd; }
 
     // Register child in parent's childList (mirrors Win32 create-window.ts)
     if (hWndParent) {

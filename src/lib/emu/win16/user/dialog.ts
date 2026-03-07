@@ -336,10 +336,12 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
     wndProc: dlgProc,
     dlgProc,
     visible: true,
+    hwnd: 0, // set below
     extraBytes: new Uint8Array(40),
     children: new Map(),
     childList: [] as number[],
   } as WindowInfo);
+  { const w = emu.handles.get<WindowInfo>(hwnd); if (w) w.hwnd = hwnd; }
 
   // Create child controls
   for (const ctrl of dlg.controls) {
@@ -380,6 +382,7 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
       children: new Map(),
       hImage,
     } as WindowInfo);
+    { const cw = emu.handles.get<WindowInfo>(childHwnd); if (cw) cw.hwnd = childHwnd; }
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd) {
       wnd.children!.set(ctrl.id, childHwnd);
@@ -497,10 +500,10 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
     emu.cpu.reg[4] = espSave;
     emu.waitingForMessage = true;
 
-    // Rebuild overlays after WM_INITDIALOG so updated titles (from SetDlgItemText) are reflected
+    // Rebuild overlays after WM_INITDIALOG so updated titles, listbox items, etc. are reflected
     dialogInfo.overlays = (emu.handles.get<WindowInfo>(hwnd)?.childList ?? []).map(childHwnd => {
       const child = emu.handles.get<WindowInfo>(childHwnd)!;
-      return {
+      const overlay: any = {
         controlId: child.controlId ?? 0,
         childHwnd,
         className: child.classInfo?.className ?? 'STATIC',
@@ -517,6 +520,13 @@ function showWin16Dialog(emu: Emulator, lpTemplate: number, hWndParent: number, 
         trackMin: 0,
         trackMax: 0,
       };
+      if (child.lbItems) overlay.lbItems = child.lbItems;
+      if (child.lbSelectedIndex !== undefined) overlay.lbSelectedIndex = child.lbSelectedIndex;
+      if (child.lbSelectedIndices) overlay.lbSelectedIndices = Array.from(child.lbSelectedIndices);
+      if (child.cbItems) overlay.cbItems = child.cbItems;
+      if (child.cbSelectedIndex !== undefined) overlay.cbSelectedIndex = child.cbSelectedIndex;
+      if (child.hImage) overlay.hImage = child.hImage;
+      return overlay;
     });
   }
 

@@ -2,6 +2,7 @@ import type { Emulator, Win16Module } from '../../emulator';
 import type { WindowInfo } from '../../win32/user32/types';
 import type { Win16UserHelpers } from './index';
 import { emuCompleteThunk16 } from '../../emu-exec';
+import { handleListBoxMessage16 } from './message';
 
 // Win16 USER module — Miscellaneous APIs
 
@@ -171,24 +172,68 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('CheckRadioButton', 12, () => {
     const [hDlg, nIDDlgItem, wMsg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 2, 4]);
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
-    const childHwnd = dlgWnd?.children?.get(nIDDlgItem);
+    let childHwnd = dlgWnd?.children?.get(nIDDlgItem) ?? 0;
+    // Fallback: search childList by controlId
+    if (!childHwnd && dlgWnd?.childList) {
+      for (const ch of dlgWnd.childList) {
+        const cw = emu.handles.get<WindowInfo>(ch);
+        if (cw?.controlId === nIDDlgItem) { childHwnd = ch; break; }
+      }
+    }
+    if (!childHwnd) {
+      return 0;
+    }
+    const child = emu.handles.get<WindowInfo>(childHwnd);
+    if (!child) return 0;
+
+    // Forward to child's wndProc if it has one
+    if (child.wndProc) {
+      return emu.callWndProc16(child.wndProc, childHwnd, wMsg, wParam, lParam);
+    }
+
+    const cn = child.classInfo?.className?.toUpperCase();
+
+    // LISTBOX messages
+    if (cn === 'LISTBOX') {
+      return handleListBoxMessage16(emu, child, wMsg, wParam, lParam);
+    }
+
+    // STM_SETICON for STATIC controls
     const STM_SETICON = 0x0170;
     const WM_USER = 0x0400;
-    if ((wMsg === STM_SETICON || wMsg === WM_USER) && childHwnd) {
-      const child = emu.handles.get<WindowInfo>(childHwnd);
-      if (child && wParam) {
-        const icon = emu.handles.get<{ width?: number; height?: number }>(wParam);
-        if (icon) {
-          child.hImage = wParam;
-          // Auto-size SS_ICON controls to icon dimensions
-          if ((child.style & 0x1F) === 0x03 && child.width === 0 && child.height === 0) {
-            child.width = icon.width ?? 32;
-            child.height = icon.height ?? 32;
-          }
+    if ((wMsg === STM_SETICON || wMsg === WM_USER) && wParam) {
+      const icon = emu.handles.get<{ width?: number; height?: number }>(wParam);
+      if (icon) {
+        child.hImage = wParam;
+        if ((child.style & 0x1F) === 0x03 && child.width === 0 && child.height === 0) {
+          child.width = icon.width ?? 32;
+          child.height = icon.height ?? 32;
         }
       }
       return wParam;
     }
+
+    // WM_SETTEXT
+    if (wMsg === 0x000C) {
+      const addr = emu.resolveFarPtr(lParam);
+      child.title = addr ? emu.memory.readCString(addr) : '';
+      return 1;
+    }
+    // WM_GETTEXT
+    if (wMsg === 0x000D) {
+      const text = child.title || '';
+      const addr = emu.resolveFarPtr(lParam);
+      if (addr && wParam > 0) {
+        const maxCopy = Math.min(text.length, wParam - 1);
+        for (let i = 0; i < maxCopy; i++) emu.memory.writeU8(addr + i, text.charCodeAt(i) & 0xFF);
+        emu.memory.writeU8(addr + maxCopy, 0);
+        return maxCopy;
+      }
+      return 0;
+    }
+    // WM_GETTEXTLENGTH
+    if (wMsg === 0x000E) return child.title?.length || 0;
+
     return 0;
   }, 101);
 

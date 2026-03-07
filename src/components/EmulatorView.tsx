@@ -566,8 +566,14 @@ function renderControlOverlay(
     const sendLBNotify = (emu: Emulator, code: number) => {
       const parent = getParentHwnd(emu);
       if (!parent) return;
-      const wParam = ((code << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
-      emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+      if (emu.isNE) {
+        // Win16 WM_COMMAND: wParam=controlId, lParam=MAKELONG(childHwnd, notifyCode)
+        const lParam = ((code & 0xFFFF) << 16) | (ctrl.childHwnd & 0xFFFF);
+        emu.postMessage(parent, WM_COMMAND, ctrl.controlId, lParam);
+      } else {
+        const wParam = ((code << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
+        emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+      }
     };
 
     const onItemClick = (idx: number, e: MouseEvent) => {
@@ -591,6 +597,7 @@ function renderControlOverlay(
         wnd.lbSelectedIndex = idx;
       }
       sendLBNotify(emu, LBN_SELCHANGE);
+      emu.notifyControlOverlays();
       const mainWnd = emu.handles.get<WindowInfo>(getParentHwnd(emu));
       if (mainWnd) mainWnd.needsPaint = true;
     };

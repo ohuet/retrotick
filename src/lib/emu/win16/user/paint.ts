@@ -122,9 +122,15 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   user.register('UpdateWindow', 2, () => {
     const hWnd = emu.readArg16(0);
     if (hWnd) {
-      emu.postMessage(hWnd, 0x000F, 0, 0);
+      const wnd = emu.handles.get<WindowInfo>(hWnd);
+      if (wnd && wnd.needsPaint && wnd.wndProc) {
+        // UpdateWindow sends WM_PAINT synchronously (bypasses queue)
+        wnd.needsPaint = false;
+        wnd.needsErase = false;
+        return emu.callWndProc16(wnd.wndProc, hWnd, 0x000F, 0, 0);
+      }
     }
-    return 1;
+    return 0;
   }, 124);
 
   // ───────────────────────────────────────────────────────────────────────────

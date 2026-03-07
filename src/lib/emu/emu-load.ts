@@ -976,7 +976,7 @@ function findResourceInDir(emu: Emulator, imageBase: number, resRva: number, typ
         const cfgLcid = emu.configuredLcid;
         const cfgPrimary = cfgLcid & 0x3FF;
         let bestIdx = 0;
-        let bestScore = 1; // default: first found (score 1)
+        let bestScore = 0; // default: first found
         for (let k = 0; k < totalLangs; k++) {
           const langId = emu.memory.readU32(dir3 + 16 + k * 8);
           let score = 1;
