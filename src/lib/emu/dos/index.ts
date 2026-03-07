@@ -4,6 +4,7 @@ import { handleInt09, handleInt16 } from './keyboard';
 import { handleInt10 } from './video';
 import { handleInt21 } from './int21';
 import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt33 } from './misc';
+import { handleXms, XMS_INT } from './xms';
 
 export { handleInt21 } from './int21';
 export { syncVideoMemory } from './video';
@@ -77,6 +78,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       return true;
     case 0x1A: return handleInt1A(cpu, emu);
     case 0x2F: return handleInt2F(cpu, emu);
+    case XMS_INT: return handleXms(cpu, emu);
     default:
       if (cpu.realMode) {
         // No custom handler — just IRET
