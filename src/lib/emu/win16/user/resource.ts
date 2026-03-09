@@ -54,13 +54,13 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
     const off = lpBitmapName & 0xFFFF;
     if (seg === 0) {
       // Integer resource ID
-      console.log(`[WIN16] LoadBitmap hInst=0x${hInstance.toString(16)} id=${off}`);
+      // console.log(`[WIN16] LoadBitmap hInst=0x${hInstance.toString(16)} id=${off}`);
       return emu.loadBitmapResource(off) || off || 1;
     } else {
       // Far pointer to string name
       const linear = emu.resolveFarPtr(lpBitmapName);
       const name = emu.memory.readCString(linear);
-      console.log(`[WIN16] LoadBitmap hInst=0x${hInstance.toString(16)} name="${name}"`);
+      // console.log(`[WIN16] LoadBitmap hInst=0x${hInstance.toString(16)} name="${name}"`);
       return emu.loadBitmapResourceByName(name) || 1;
     }
   }, 175);
@@ -71,7 +71,7 @@ export function registerWin16UserResource(emu: Emulator, user: Win16Module, h: W
   user.register('LoadString', 10, () => {
     const [hInstance, uID, lpBuffer, nBufferMax] = emu.readPascalArgs16([2, 2, 4, 2]);
     const str = emu.loadNEString(uID);
-    console.log(`[WIN16] LoadString id=${uID} → "${str}" (maxLen=${nBufferMax})`);
+    // console.log(`[WIN16] LoadString id=${uID} → "${str}" (maxLen=${nBufferMax})`);
     if (lpBuffer && nBufferMax > 0) {
       const maxCopy = Math.min(str.length, nBufferMax - 1);
       for (let i = 0; i < maxCopy; i++) {

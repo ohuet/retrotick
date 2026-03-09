@@ -107,7 +107,16 @@ function collectChildren(emu: Emulator, wnd: WindowInfo, offsetX: number, offset
   if (!wnd.childList) return;
   for (const childHwnd of wnd.childList) {
     const child = emu.handles.get<WindowInfo>(childHwnd);
-    if (!child || !child.visible) continue;
+    if (!child) continue;
+    // MDICLIENT: always recurse into it (structural container for MDI children)
+    const cn = child.classInfo?.className?.toUpperCase();
+    if (cn === 'MDICLIENT') {
+      if (child.childList && child.childList.length > 0) {
+        collectChildren(emu, child, offsetX + child.x, offsetY + child.y, out);
+      }
+      continue;
+    }
+    if (!child.visible) continue;
     out.push({ hwnd: childHwnd, info: child, ox: offsetX, oy: offsetY });
     // Recurse into child dialogs (e.g. tab pages) that have their own children
     if (child.childList && child.childList.length > 0) {
@@ -124,6 +133,9 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
 
   const allChildren: { hwnd: number; info: WindowInfo; ox: number; oy: number }[] = [];
   collectChildren(emu, wnd, 0, 0, allChildren);
+
+  if (false) { // DIAG: enable for debugging render cycles
+  }
 
   // Notify overlays synchronously BEFORE custom draw so Preact renders
   // CompanionCanvas elements and sets wnd.domCanvas via ref callbacks.
@@ -155,7 +167,11 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
     // Custom-class child controls with their own wndProc: send WM_PAINT
     if (child.wndProc && !['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT'].includes(className)) {
       child.needsPaint = true;
-      emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT
+      if (emu.isNE) {
+        emu.callWndProc16(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win16 PASCAL)
+      } else {
+        emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win32 stdcall)
+      }
       child.needsPaint = false;
     }
   }
@@ -192,7 +208,11 @@ function sendDrawItem(emu: Emulator, parentHwnd: number, parentWnd: WindowInfo, 
   emu.memory.writeU32(addr + 40, child.height);// rcItem.bottom
   emu.memory.writeU32(addr + 44, 0);           // itemData
 
-  emu.callWndProc(parentWnd.wndProc, parentHwnd, 0x002B, controlId, addr);
+  if (emu.isNE) {
+    emu.callWndProc16(parentWnd.wndProc, parentHwnd, 0x002B, controlId, addr);
+  } else {
+    emu.callWndProc(parentWnd.wndProc, parentHwnd, 0x002B, controlId, addr);
+  }
 
   // Restore DC transform
   if (dc && !useDomCanvas) {
