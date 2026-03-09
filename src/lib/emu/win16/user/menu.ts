@@ -9,7 +9,7 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 150: LoadMenu(hInstance, lpMenuName_ptr) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('DestroyMenu', 6, () => {
+  user.register('LoadMenu', 6, () => {
     const [hInstance, lpMenuName] = emu.readPascalArgs16([2, 4]);
     console.log(`[WIN16] LoadMenu hInst=0x${hInstance.toString(16)} menuName=0x${lpMenuName.toString(16)}`);
     return 1;
@@ -23,7 +23,7 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 154: CheckMenuItem(hMenu, uIDCheckItem, uCheck) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('GetSystemMenu', 6, () => {
+  user.register('CheckMenuItem', 6, () => {
     const [hMenu, uIDCheckItem, uCheck] = emu.readPascalArgs16([2, 2, 2]);
     if (!emu.menuItems) return -1;
     const MF_BYPOSITION = 0x400;
@@ -40,7 +40,7 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 155: EnableMenuItem(hMenu, uIDEnableItem, uEnable) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('GetMenu', 6, () => {
+  user.register('EnableMenuItem', 6, () => {
     const [_hMenu, uIDEnableItem, uEnable] = emu.readPascalArgs16([2, 2, 2]);
     if (!emu.menuItems) return -1;
     const MF_BYPOSITION = 0x400;
@@ -62,7 +62,7 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 158: SetMenu(hWnd, hMenu) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('DrawMenuBar', 4, () => {
+  user.register('SetMenu', 4, () => {
     const [hWnd, hMenu] = emu.readPascalArgs16([2, 2]);
     console.log(`[WIN16] SetMenu hwnd=0x${hWnd.toString(16)} hMenu=0x${hMenu.toString(16)}`);
     const wnd = emu.handles.get<WindowInfo>(hWnd);

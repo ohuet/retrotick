@@ -99,7 +99,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 41: CreateWindow — 30 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ShowWindow', 30, () => {
+  user.register('CreateWindow', 30, () => {
     const lpParam = h.readFarPtr(0);
     const hInstance = emu.readArg16(4);
     const hMenu = emu.readArg16(6);
@@ -189,7 +189,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 42: ShowWindow(hWnd, nCmdShow) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('CloseWindow', 4, () => {
+  user.register('ShowWindow', 4, () => {
     const [hWnd, nCmdShow] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) { console.log(`[WIN16] ShowWindow: wnd not found!`); return 0; }
@@ -251,7 +251,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 46: GetParent(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('IsWindow', 2, () => {
+  user.register('GetParent', 2, () => {
     const hWnd = emu.readArg16(0);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     return wnd?.parent || 0;
@@ -268,7 +268,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 48: IsChild(hWndParent, hWnd) — 4 bytes (2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('IsWindowVisible', 4, () => {
+  user.register('IsChild', 4, () => {
     const [hWndParent, hWnd] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     return wnd?.parent === hWndParent ? 1 : 0;
@@ -277,7 +277,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 49: IsWindowVisible(hWnd) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('FindWindow', 2, () => {
+  user.register('IsWindowVisible', 2, () => {
     const hWnd = emu.readArg16(0);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     return wnd?.visible ? 1 : 0;
@@ -322,7 +322,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 56: MoveWindow(hWnd, x, y, w, h, bRepaint) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('DestroyWindow', 12, () => {
+  user.register('MoveWindow', 12, () => {
     const [hWnd, x, y, w, height, bRepaint] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
@@ -427,7 +427,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 133: GetWindowWord(hWnd, nIndex) — 4 bytes (2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('GetWindowLong', 4, () => {
+  user.register('GetWindowWord', 4, () => {
     const [hWnd, nIndex] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd && wnd.extraBytes && nIndex >= 0 && nIndex + 2 <= wnd.extraBytes.length) {
@@ -441,7 +441,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 135: GetWindowLong(hWnd, nIndex) — 4 bytes (2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('OpenClipboard', 4, () => {
+  user.register('GetWindowLong', 4, () => {
     const [hWnd, nIndex] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const signedIndex = (nIndex << 16) >> 16;
@@ -478,7 +478,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 136: SetWindowLong(hWnd, nIndex, dwNewLong) — 8 bytes (2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('CloseClipboard', 8, () => {
+  user.register('SetWindowLong', 8, () => {
     const [hWnd, nIndex, dwNewLong] = emu.readPascalArgs16([2, 2, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const signedIndex = (nIndex << 16) >> 16;
@@ -498,7 +498,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 232: SetWindowPos(hWnd, hWndInsertAfter, x, y, cx, cy, uFlags) — 14 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('SetParent', 14, () => {
+  user.register('SetWindowPos', 14, () => {
     const [hWnd, _hInsertAfter, x, y, cx, cy, uFlags] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) return 0;
@@ -554,9 +554,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   user.register('MapWindowPoints', 10, () => 0, 258);
 
-  // Ordinal 259-261: DeferWindowPos
-  user.register('wsprintf', 2, () => 1, 259);   // BeginDeferWindowPos
-  user.register('wvsprintf', 16, () => 1, 260);  // DeferWindowPos
+  // Ordinal 259-BeginDeferWindowPos: DeferWindowPos
+  user.register('BeginDeferWindowPos', 2, () => 1, 259);   // BeginDeferWindowPos
+  user.register('DeferWindowPos', 16, () => 1, 260);  // DeferWindowPos
   user.register('EndDeferWindowPos', 2, () => 1);   // EndDeferWindowPos
 
   // Ordinal 262: GetWindow(hWnd, uCmd) — 4 bytes

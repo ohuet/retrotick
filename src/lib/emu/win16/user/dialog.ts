@@ -11,7 +11,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 87: DialogBox(hInst, lpTemplate_ptr, hWndParent, dlgProc_segptr) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('DrawIcon', 12, () => {
+  user.register('DialogBox', 12, () => {
     const [hInst, lpTemplate, hWndParent, dlgProc] = emu.readPascalArgs16([2, 4, 2, 4]);
     return showWin16Dialog(emu, lpTemplate, hWndParent, dlgProc);
   }, 87);
@@ -19,7 +19,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 88: EndDialog(hDlg, nResult_sword) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('DrawText', 4, () => {
+  user.register('EndDialog', 4, () => {
     const [_hDlg, nResult] = emu.readPascalArgs16([2, 2]);
     if (emu.dialogState) {
       emu.dialogState.result = nResult;
@@ -60,7 +60,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 92: SetDlgItemText(hDlg, nIDDlgItem, lpString) — 8 bytes (2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('DialogBoxParam', 8, () => {
+  user.register('SetDlgItemText', 8, () => {
     const [hDlg, nIDDlgItem, lpString] = emu.readPascalArgs16([2, 2, 4]);
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
     if (dlgWnd) {
@@ -93,7 +93,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 96: CheckRadioButton(hDlg, nFirst, nLast, nCheck) — 8 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('GetDlgItem', 8, () => {
+  user.register('CheckRadioButton', 8, () => {
     const hDlg = emu.readArg16(0);
     const nFirst = emu.readArg16(2);
     const nLast = emu.readArg16(4);
@@ -113,7 +113,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 97: CheckDlgButton(hDlg, nID, uCheck) — 6 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('SetDlgItemText', 6, () => {
+  user.register('CheckDlgButton', 6, () => {
     const hDlg = emu.readArg16(0);
     const nID = emu.readArg16(2);
     const uCheck = emu.readArg16(4);
@@ -132,7 +132,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 98: IsDlgButtonChecked(hDlg, nID) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('GetDlgItemText', 4, () => {
+  user.register('IsDlgButtonChecked', 4, () => {
     const hDlg = emu.readArg16(0);
     const nID = emu.readArg16(2);
     const wnd = emu.handles.get<WindowInfo>(hDlg);
@@ -150,7 +150,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 102: AdjustWindowRect(lpRect_ptr, dwStyle_long, bMenu) — 10 bytes (4+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('CheckDlgButton', 10, () => {
+  user.register('AdjustWindowRect', 10, () => {
     const [lpRect, dwStyle, bMenu] = emu.readPascalArgs16([4, 4, 2]);
     if (lpRect) {
       const { bw, captionH, menuH } = getNonClientMetrics(dwStyle, !!bMenu, true);
@@ -174,7 +174,7 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 454: AdjustWindowRectEx(lpRect_ptr, dwStyle_long, bMenu, dwExStyle_long) — 14 bytes (4+4+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('GetWindowPlacement', 14, () => {
+  user.register('AdjustWindowRectEx', 14, () => {
     const [lpRect, dwStyle, bMenu, _dwExStyle] = emu.readPascalArgs16([4, 4, 2, 4]);
     if (lpRect) {
       const { bw, captionH, menuH } = getNonClientMetrics(dwStyle, !!bMenu, true);

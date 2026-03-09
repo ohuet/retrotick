@@ -43,7 +43,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 10: SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc_segptr) — 10 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('KillTimer', 10, () => {
+  user.register('SetTimer', 10, () => {
     const [hWnd, nIDEvent, uElapse, lpTimerFunc] = emu.readPascalArgs16([2, 2, 2, 4]);
     console.log(`[WIN16] SetTimer hwnd=0x${hWnd.toString(16)} id=${nIDEvent} elapse=${uElapse} timerFunc=0x${lpTimerFunc.toString(16)}`);
     // Clear existing timer with same ID
@@ -81,7 +81,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('ReleaseCapture', 0, () => { emu.capturedWindow = 0; return 0; }, 19);
 
   // Ordinal 22: SetFocus(hWnd) — 2 bytes
-  user.register('RemoveProp', 2, () => {
+  user.register('SetFocus', 2, () => {
     const hWnd = emu.readArg16(0);
     const prev = emu.focusedWindow;
     emu.focusedWindow = hWnd;
@@ -97,8 +97,8 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 31: IsIconic(hWnd) — 2 bytes
   user.register('IsIconic', 2, () => 0, 31);
 
-  // Ordinal 61: SetScrollPos(hWnd, nBar, nPos, bRedraw) — 8 bytes
-  user.register('GetClassName', 8, () => {
+  // Ordinal 61: ScrollWindow(hWnd, nBar, nPos, bRedraw) — 8 bytes
+  user.register('ScrollWindow', 8, () => {
     const [hWnd, nBar, nPos, _bRedraw] = emu.readPascalArgs16([2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) return 0;
@@ -112,8 +112,8 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     return old;
   }, 61);
 
-  // Ordinal 62: GetScrollPos(hWnd, nBar) — 4 bytes
-  user.register('SetActiveWindow', 4, () => {
+  // Ordinal 62: SetScrollPos(hWnd, nBar) — 4 bytes
+  user.register('SetScrollPos', 4, () => {
     const [hWnd, nBar] = emu.readPascalArgs16([2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const bar = nBar & 1;
@@ -136,7 +136,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   }, 64);
 
   // Ordinal 69: SetCursor(hCursor) — 2 bytes
-  user.register('GetDC', 2, () => {
+  user.register('SetCursor', 2, () => {
     const hCursor = emu.readArg16(0);
     const prev = emu.currentCursor;
     emu.currentCursor = hCursor;
@@ -157,7 +157,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 71: ShowCursor(bShow) — 2 bytes
   user.register('ShowCursor', 2, () => 1, 71);
 
-  // Ordinal 93: GetScrollRange(hWnd, nBar, lpMinPos, lpMaxPos) — 12 bytes
+  // Ordinal 93: GetDlgItemText(hWnd, nBar, lpMinPos, lpMaxPos) — 12 bytes
   user.register('GetDlgItemText', 12, () => {
     const [hWnd, nBar, lpMinPos, lpMaxPos] = emu.readPascalArgs16([2, 2, 4, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
@@ -169,7 +169,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   }, 93);
 
   // Ordinal 101: SendDlgItemMessage(hDlg, nIDDlgItem, wMsg, wParam, lParam) — 12 bytes (2+2+2+2+4)
-  user.register('CheckRadioButton', 12, () => {
+  user.register('SendDlgItemMessage', 12, () => {
     const [hDlg, nIDDlgItem, wMsg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 2, 4]);
     const dlgWnd = emu.handles.get<WindowInfo>(hDlg);
     let childHwnd = dlgWnd?.children?.get(nIDDlgItem) ?? 0;
@@ -260,7 +260,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 179: GetSystemMetrics(nIndex) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('SetSysColors', 2, () => {
+  user.register('GetSystemMetrics', 2, () => {
     const idx = emu.readArg16(0);
     const metrics: Record<number, number> = {
       0: 640,   // SM_CXSCREEN
@@ -290,7 +290,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 180: GetSysColor(nIndex) — 2 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('KillSystemTimer', 2, () => {
+  user.register('GetSysColor', 2, () => {
     const idx = emu.readArg16(0);
     const colors: Record<number, number> = {
       0: 0x808000,   // COLOR_SCROLLBAR
@@ -399,7 +399,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('CallNextHookEx', 12, () => 0, 293);
 
   // Ordinal 404: GetClassInfo(hInstance, className, lpWndClass) — 10 bytes (2+4+4)
-  user.register('GetAsyncKeyState', 10, () => {
+  user.register('GetClassInfo', 10, () => {
     const args = emu.readPascalArgs16([2, 4, 4]);
     const hInstance = args[0];
     const classNameRaw = args[1];
@@ -710,7 +710,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 430: lstrcmp(s1, s2) — 8 bytes (4+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('RedrawWindow', 8, () => {
+  user.register('lstrcmp', 8, () => {
     const [s1, s2] = emu.readPascalArgs16([4, 4]);
     if (!s1 || !s2) return 0;
     let i = 0;
@@ -813,7 +813,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   }, 145);
 
   // Ordinal 17: GetCursorPos(lpPoint) — 4 bytes (ptr)
-  user.register('ReleaseCapture', 4, () => {
+  user.register('GetCursorPos', 4, () => {
     const lpPoint = emu.readArg16DWord(0);
     if (lpPoint) {
       emu.memory.writeU16(lpPoint, 0);     // x
@@ -835,7 +835,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('IsWindowEnabled', 2, () => 1, 35);
 
   // Ordinal 37: SetWindowText(hWnd, lpString) — 6 bytes (2+4)
-  user.register('SetWindowText16', 6, () => {
+  user.register('SetWindowText', 6, () => {
     const [hWnd, lpStringRaw] = emu.readPascalArgs16([2, 4]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     const lpString = emu.resolveFarPtr(lpStringRaw);
@@ -849,7 +849,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   }, 37);
 
   // Ordinal 36: GetWindowText(hWnd, lpString, nMaxCount) — 8 bytes (2+4+2)
-  user.register('GetWindowTextLength', 8, () => {
+  user.register('GetWindowText', 8, () => {
     const [hWnd, lpString, nMaxCount] = emu.readPascalArgs16([2, 4, 2]);
     const win = emu.handles.get<WindowInfo>(hWnd);
     const title = win?.title || '';
@@ -869,7 +869,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('GetScrollPos', 4, () => 0, 63);
 
   // Ordinal 75: IsRectEmpty(lpRect) — 4 bytes (ptr)
-  user.register('SetRect', 4, () => {
+  user.register('IsRectEmpty', 4, () => {
     const lpRect = emu.readArg16DWord(0);
     if (!lpRect) return 1;
     const l = emu.memory.readI16(lpRect);
@@ -889,7 +889,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('SetWindowsHook', 6, () => 0, 121);
 
   // Ordinal 122: CallWindowProc(lpPrevWndFunc, hWnd, Msg, wParam, lParam) — 14 bytes (4+2+2+2+4)
-  user.register('UpdateWindow', 14, () => {
+  user.register('CallWindowProc', 14, () => {
     const [lpPrevWndFunc, hWnd, msg, wParam, lParam] = emu.readPascalArgs16([4, 2, 2, 2, 4]);
     const resolved = emu.resolveFarPtr(lpPrevWndFunc);
     console.log(`[WIN16] CallWindowProc(0x${lpPrevWndFunc.toString(16)}→0x${resolved.toString(16)}, hwnd=0x${hWnd.toString(16)}, msg=0x${msg.toString(16)}, wP=0x${wParam.toString(16)}, lP=0x${lParam.toString(16)})`);
@@ -950,7 +950,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 187: EndMenu() — 0 bytes
   user.register('EndMenu', 0, () => 0, 187);
 
-  // Ordinal 193: InSendMessage() — 0 bytes
+  // Ordinal 193: IsClipboardFormatAvailable() — 0 bytes
   user.register('IsClipboardFormatAvailable', 0, () => 0, 193);
 
   // Ordinal 196: TabbedTextOut(hDC, x, y, lpStr, nCount, nTabPositions, lpnTabStopPositions, nTabOrigin) — 20 bytes
@@ -987,7 +987,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('RealizePalette', 2, () => 0, 283);
 
   // Ordinal 407: CreateIcon(hInst, nWidth, nHeight, nPlanes, nBitsPixel, lpANDbits, lpXORbits) — 18 bytes (2+2+2+2+2+4+4)
-  user.register('GetPrivateProfileStruct', 18, () => 0, 407);
+  user.register('CreateIcon', 18, () => 0, 407);
 
   // Ordinal 414: ModifyMenu(hMenu, uPosition, uFlags, uIDNewItem, lpNewItem) — 12 bytes (2+2+2+2+4)
   user.register('ModifyMenu', 12, () => 1, 414);
@@ -996,7 +996,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('TrackPopupMenu', 18, () => 0, 416);
 
   // Ordinal 432: AnsiLower(lpStr) — 4 bytes (segstr)
-  user.register('ScrollWindowEx', 4, () => {
+  user.register('AnsiLower', 4, () => {
     const lpStr = emu.readArg16DWord(0);
     if ((lpStr & 0xFFFF0000) === 0) {
       const ch = lpStr & 0xFF;
@@ -1060,7 +1060,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 458: DestroyCursor(hCursor) — 2 bytes
   user.register('DestroyCursor', 2, () => 1, 458);
 
-  // Ordinal 466: DragDetect(hWnd, pt) — 6 bytes (2+4)
+  // Ordinal 466: DrawFocusRect(hWnd, pt) — 6 bytes (2+4)
   user.register('DrawFocusRect', 6, () => 0, 466);
 
   // ───────────────────────────────────────────────────────────────────────────

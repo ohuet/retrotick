@@ -211,7 +211,7 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
 
   // --- Ordinal 170: AllocCStoDSAlias(selector) — 2 bytes (word) ---
   // Creates a writable data selector aliasing the given code selector
-  kernel.register('RegDeleteValue', 2, () => {
+  kernel.register('AllocCStoDSAlias', 2, () => {
     const srcSel = emu.readArg16(0);
     const base = emu.cpu.segBases.get(srcSel);
     const newSel = state.nextGlobalSelector++;
@@ -222,7 +222,7 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
 
   // --- Ordinal 171: AllocDStoCSAlias(word) — 2 bytes ---
   // Creates an executable code selector aliasing the given data selector
-  kernel.register('RegEnumValue', 2, () => {
+  kernel.register('AllocDStoCSAlias', 2, () => {
     const srcSel = emu.readArg16(0);
     const base = emu.cpu.segBases.get(srcSel);
     const newSel = state.nextGlobalSelector++;
@@ -231,7 +231,7 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
   }, 171);
 
   // --- Ordinal 172: AllocAlias(word) — 2 bytes ---
-  kernel.register('RegQueryValueEx', 2, () => {
+  kernel.register('AllocAlias', 2, () => {
     const srcSel = emu.readArg16(0);
     const base = emu.cpu.segBases.get(srcSel);
     const newSel = state.nextGlobalSelector++;

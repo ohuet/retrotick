@@ -74,7 +74,7 @@ export function registerKernelMisc(kernel: Win16Module, emu: Emulator, _state: K
   // --- Ordinal 165: A20Proc(word) — 2 bytes ---
   kernel.register('A20Proc', 2, () => 0, 165);
   // --- Ordinal 180: LongPtrAdd(long long) — 8 bytes ---
-  kernel.register('FarSetOwner', 8, () => {
+  kernel.register('LongPtrAdd', 8, () => {
     const [ptr, offset] = emu.readPascalArgs16([4, 4]);
     return (ptr + offset) >>> 0;
   }, 180);
@@ -108,18 +108,18 @@ export function registerKernelMisc(kernel: Win16Module, emu: Emulator, _state: K
   kernel.register('MemoryFreed', 0, () => 0, 126);
   // --- Ordinal 130: FileCDR — 6 bytes ---
   kernel.register('FileCDR', 6, () => 0, 130);
-  // --- Ordinal 141: CreateDirectory(str ptr) — 8 bytes ---
+  // --- Ordinal 141: InitTask1(str ptr) — 8 bytes ---
   kernel.register('InitTask1', 8, () => 0, 141);
-  // --- Ordinal 142: RemoveDirectory(str) — 4 bytes ---
+  // --- Ordinal 142: GetProfileSectionNames(str) — 4 bytes ---
   kernel.register('GetProfileSectionNames', 4, () => 0, 142);
-  // --- Ordinal 143: DeleteFile(str) — 4 bytes ---
+  // --- Ordinal 143: GetPrivateProfileSectionNames(str) — 4 bytes ---
   kernel.register('GetPrivateProfileSectionNames', 4, () => 0, 143);
-  // --- Ordinal 144: SetLastError(long) — 4 bytes ---
+  // --- Ordinal 144: CreateDirectory(long) — 4 bytes ---
   // (duplicate ordinal for compat; use same as ord_147)
   kernel.register('CreateDirectory', 4, () => 0, 144);
-  // --- Ordinal 145: GetLastError() — 0 bytes ---
+  // --- Ordinal 145: RemoveDirectory() — 0 bytes ---
   kernel.register('RemoveDirectory', 0, () => 0, 145);
-  // --- Ordinal 146: GetCurrentDirectory(word ptr) — 6 bytes ---
+  // --- Ordinal 146: DeleteFile(word ptr) — 6 bytes ---
   kernel.register('DeleteFile', 6, () => 0, 146);
   // --- Ordinal 151: WinOldApCall — 0 bytes ---
   kernel.register('WinOldApCall', 0, () => 0, 151);
@@ -128,8 +128,8 @@ export function registerKernelMisc(kernel: Win16Module, emu: Emulator, _state: K
 
   // --- Ordinal 158: IsWinOldApTask(hTask) — 2 bytes ---
   kernel.register('IsWinOldApTask', 2, () => 0, 158);
-  // --- Ordinal 328: IsSharedSelector(sel) — 2 bytes ---
-  kernel.register('IsSharedSelector', 2, () => 0, 328);
+  // --- Ordinal 328: _DebugOutput(sel) — 2 bytes ---
+  kernel.register('_DebugOutput', 2, () => 0, 328);
 
   // ---- WinNT/WOW extensions ----
   // --- Ordinal 262: WOWWaitForMsgAndEvent(word) — 2 bytes ---

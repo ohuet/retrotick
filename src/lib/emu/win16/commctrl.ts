@@ -15,7 +15,7 @@ export function registerWin16Commctrl(emu: Emulator): void {
   // Ordinal 5: CreateStatusWindow(style, lpszText, hwndParent, wID) — 14 bytes (4+4+2+2 + padding)
   cc.register('CreateStatusWindow', 14, () => 0, 5);
 
-  // Ordinal 6: WritePrivateProfileStruct — stub
+  // Ordinal 6: CreateToolbar — stub
   cc.register('CreateToolbar', 28, () => 0, 6);
 
   // Ordinal 7: CreateHeaderWindow — 14 bytes

@@ -38,13 +38,13 @@ export function registerKernelProfile(kernel: Win16Module, emu: Emulator, _state
   kernel.register('WriteProfileString', 12, () => 1, 59);
 
   // --- Ordinal 127: GetPrivateProfileInt(str str s_word str) — 14 bytes ---
-  kernel.register('GetPrivateProfileString', 14, () => {
+  kernel.register('GetPrivateProfileInt', 14, () => {
     const [lpAppName, lpKeyName, nDefault] = emu.readPascalArgs16([4, 4, 2, 4]);
     return nDefault;
   }, 127);
 
   // --- Ordinal 128: GetPrivateProfileString(str str str ptr word str) — 22 bytes ---
-  kernel.register('WritePrivateProfileString', 22, () => {
+  kernel.register('GetPrivateProfileString', 22, () => {
     const [lpAppName, lpKeyName, lpDefault, lpRetBuf, nSize, lpFileName] = emu.readPascalArgs16([4, 4, 4, 4, 2, 4]);
     return copyDefault(lpDefault, lpRetBuf, nSize);
   }, 128);

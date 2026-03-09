@@ -7,7 +7,7 @@ import type { Emulator } from '../emulator';
 export function registerWin16Sconfig(emu: Emulator): void {
   const sc = emu.registerModule16('SCONFIG');
 
-  // Ordinal 12: unknown function — likely a config query
+  // Ordinal 12: WSecGetAllItems — Microsoft Workgroup Security
   // 4 bytes is a safe estimate (single ptr or dword argument)
-  sc.register('ord_12', 4, () => 0, 12);
+  sc.register('WSecGetAllItems', 4, () => 0, 12);
 }

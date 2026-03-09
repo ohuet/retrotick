@@ -1080,7 +1080,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   // LOGFONT16: lfHeight(2), lfWidth(2), lfEscapement(2), lfOrientation(2), lfWeight(2),
   //   lfItalic(1), lfUnderline(1), lfStrikeOut(1), lfCharSet(1), lfOutPrecision(1),
   //   lfClipPrecision(1), lfQuality(1), lfPitchAndFamily(1), lfFaceName(32)
-  gdi.register('CombineRgn', 4, () => {
+  gdi.register('CreateFontIndirect', 4, () => {
     const lpLogFont = emu.readArg16DWord(0);
     if (!lpLogFont) return emu.handles.alloc('font', { height: 13 });
     const height = emu.memory.readI16(lpLogFont);
@@ -1104,7 +1104,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 58);
 
   // Ordinal 60: CreatePatternBrush(hBitmap) — pascal -ret16, 2 bytes
-  gdi.register('CreateBitmap', 2, () => {
+  gdi.register('CreatePatternBrush', 2, () => {
     const hBitmap = emu.readArg16(0);
     const bmp = emu.handles.get<BitmapInfo>(hBitmap);
     const brush: BrushInfo = { color: 0x808080, isNull: false, patternBitmap: bmp?.canvas };
@@ -1112,14 +1112,14 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 60);
 
   // Ordinal 61: CreatePen(fnPenStyle, nWidth, crColor_long) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('CreateBitmapIndirect', 8, () => {
+  gdi.register('CreatePen', 8, () => {
     const [style, width, color] = emu.readPascalArgs16([2, 2, 4]);
     const pen: PenInfo = { style, width, color };
     return emu.handles.alloc('pen', pen);
   }, 61);
 
   // Ordinal 62: CreatePenIndirect(lpLogPen) — pascal -ret16, 4 bytes
-  gdi.register('CreateBrushIndirect', 4, () => {
+  gdi.register('CreatePenIndirect', 4, () => {
     const lpLogPen = emu.readArg16DWord(0);
     if (lpLogPen) {
       const style = emu.memory.readU16(lpLogPen);
@@ -1141,14 +1141,14 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('CreateRectRgnIndirect', 4, () => emu.handles.alloc('region', {}), 65);
 
   // Ordinal 66: CreateSolidBrush(crColor_long) — pascal -ret16, 4 bytes
-  gdi.register('CreateEllipticRgn', 4, () => {
+  gdi.register('CreateSolidBrush', 4, () => {
     const color = emu.readArg16DWord(0);
     const brush: BrushInfo = { color, isNull: false };
     return emu.handles.alloc('brush', brush);
   }, 66);
 
   // Ordinal 67: DPtoLP(hdc, lpPoints, nCount) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('CreateEllipticRgnIndirect', 8, () => {
+  gdi.register('DPtoLP', 8, () => {
     const [hdc, lpPoints, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc || !lpPoints) return 0;
@@ -1189,7 +1189,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('ExcludeVisRect', 10, () => SIMPLEREGION, 73);
 
   // Ordinal 74: GetBitmapBits(hBitmap, cbBuffer, lpvBits) — pascal, 10 bytes (2+4+4)
-  gdi.register('CreatePenIndirect', 10, () => {
+  gdi.register('GetBitmapBits', 10, () => {
     const [hBitmap, cbBuffer, lpvBits] = emu.readPascalArgs16([2, 4, 4]);
     const bmp = emu.handles.get<BitmapInfo>(hBitmap);
     if (!bmp || !lpvBits || cbBuffer <= 0) return 0;
@@ -1204,21 +1204,21 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 74);
 
   // Ordinal 75: GetBkColor(hdc) — pascal, 2 bytes
-  gdi.register('CreatePolygonRgn', 2, () => {
+  gdi.register('GetBkColor', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc ? dc.bkColor : 0xFFFFFF;
   }, 75);
 
   // Ordinal 76: GetBkMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('CreateRectRgn', 2, () => {
+  gdi.register('GetBkMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc ? dc.bkMode : OPAQUE;
   }, 76);
 
   // Ordinal 77: GetClipBox(hdc, lpRect) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('CreateRectRgnIndirect', 6, () => {
+  gdi.register('GetClipBox', 6, () => {
     const [hdc, lpRect] = emu.readPascalArgs16([2, 4]);
     const dc = emu.getDC(hdc);
     if (dc && lpRect) {
@@ -1231,7 +1231,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 77);
 
   // Ordinal 78: GetCurrentPosition(hdc) — pascal, 2 bytes
-  gdi.register('CreateSolidBrush', 2, () => {
+  gdi.register('GetCurrentPosition', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     if (dc) return ((dc.penPosY & 0xFFFF) << 16) | (dc.penPosX & 0xFFFF);
@@ -1242,7 +1242,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('GetDCOrg', 2, () => 0, 79);
 
   // Ordinal 80: GetDeviceCaps(hdc, nIndex) — pascal -ret16, 4 bytes
-  gdi.register('DeleteDC', 4, () => {
+  gdi.register('GetDeviceCaps', 4, () => {
     const [hdc, nIndex] = emu.readPascalArgs16([2, 2]);
     const DRIVERVERSION = 0;
     const TECHNOLOGY = 2;
@@ -1292,14 +1292,14 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 80);
 
   // Ordinal 81: GetMapMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('DeleteObject', 2, () => {
+  gdi.register('GetMapMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.mapMode ?? MM_TEXT;
   }, 81);
 
   // Ordinal 82: GetObject(hObj, cbBuffer, lpvObject_ptr) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('EnumFonts', 8, () => {
+  gdi.register('GetObject', 8, () => {
     const [hObj, cbBuffer, lpvObject] = emu.readPascalArgs16([2, 2, 4]);
     if (!lpvObject || cbBuffer <= 0) return 0;
 
@@ -1344,7 +1344,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 82);
 
   // Ordinal 83: GetPixel(hdc, x, y) — pascal, 6 bytes
-  gdi.register('EnumObjects', 6, () => {
+  gdi.register('GetPixel', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1358,14 +1358,14 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 83);
 
   // Ordinal 84: GetPolyFillMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('EqualRgn', 2, () => {
+  gdi.register('GetPolyFillMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.polyFillMode ?? 1;
   }, 84);
 
   // Ordinal 85: GetROP2(hdc) — pascal -ret16, 2 bytes
-  gdi.register('ExcludeVisRect', 2, () => {
+  gdi.register('GetROP2', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.rop2 ?? 13;
@@ -1375,27 +1375,27 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('GetRelAbs', 2, () => 1, 86); // ABSOLUTE
 
   // Ordinal 87: GetStockObject(fnObject) — pascal -ret16, 2 bytes
-  gdi.register('GetBkColor', 2, () => {
+  gdi.register('GetStockObject', 2, () => {
     const fnObject = emu.readArg16(0);
     return 0x8000 + fnObject;
   }, 87);
 
   // Ordinal 88: GetStretchBltMode(hdc) — pascal -ret16, 2 bytes
-  gdi.register('GetBkMode', 2, () => {
+  gdi.register('GetStretchBltMode', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.stretchBltMode ?? 1;
   }, 88);
 
   // Ordinal 89: GetTextCharacterExtra(hdc) — pascal -ret16, 2 bytes
-  gdi.register('GetClipBox', 2, () => {
+  gdi.register('GetTextCharacterExtra', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.textCharExtra ?? 0;
   }, 89);
 
   // Ordinal 90: GetTextColor(hdc) — pascal, 2 bytes
-  gdi.register('GetCurrentPosition', 2, () => {
+  gdi.register('GetTextColor', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc ? dc.textColor : 0;
@@ -1403,7 +1403,7 @@ export function registerWin16Gdi(emu: Emulator): void {
 
   // Ordinal 91: GetTextExtent(hdc, lpString_ptr, nCount) — pascal, 8 bytes (2+4+2)
   // Returns DWORD: HIWORD=height, LOWORD=width
-  gdi.register('GetDCOrg', 8, () => {
+  gdi.register('GetTextExtent', 8, () => {
     const [hdc, lpString, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const fontSize = getFontSize(hdc);
     const dc = emu.getDC(hdc);
@@ -1418,7 +1418,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 91);
 
   // Ordinal 92: GetTextFace(hdc, nCount, lpFaceName) — pascal -ret16, 8 bytes (2+2+4)
-  gdi.register('GetDeviceCaps', 8, () => {
+  gdi.register('GetTextFace', 8, () => {
     const [hdc, nCount, lpFaceName] = emu.readPascalArgs16([2, 2, 4]);
     if (lpFaceName && nCount > 0) {
       const face = 'System';
@@ -1433,7 +1433,7 @@ export function registerWin16Gdi(emu: Emulator): void {
 
   // Ordinal 93: GetTextMetrics(hdc, lptm_ptr) — pascal -ret16, 6 bytes (2+4)
   // TEXTMETRIC16: 24 bytes total
-  gdi.register('GetMapMode', 6, () => {
+  gdi.register('GetTextMetrics', 6, () => {
     const [hdc, lptm] = emu.readPascalArgs16([2, 4]);
     if (lptm) {
       const fontSize = getFontSize(hdc);
@@ -1475,7 +1475,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 93);
 
   // Ordinal 94: GetViewportExt(hdc) — pascal, 2 bytes
-  gdi.register('GetObject', 2, () => {
+  gdi.register('GetViewportExt', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const extX = dc?.viewportExtX ?? 1;
@@ -1484,7 +1484,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 94);
 
   // Ordinal 95: GetViewportOrg(hdc) — pascal, 2 bytes
-  gdi.register('GetPixel', 2, () => {
+  gdi.register('GetViewportOrg', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const orgX = dc?.viewportOrgX ?? 0;
@@ -1493,7 +1493,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 95);
 
   // Ordinal 96: GetWindowExt(hdc) — pascal, 2 bytes
-  gdi.register('GetPolyFillMode', 2, () => {
+  gdi.register('GetWindowExt', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const extX = dc?.windowExtX ?? 1;
@@ -1502,7 +1502,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   }, 96);
 
   // Ordinal 97: GetWindowOrg(hdc) — pascal, 2 bytes
-  gdi.register('GetROP2', 2, () => {
+  gdi.register('GetWindowOrg', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     const orgX = dc?.windowOrgX ?? 0;
@@ -1514,7 +1514,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('IntersectVisRect', 10, () => SIMPLEREGION, 98);
 
   // Ordinal 99: LPtoDP(hdc, lpPoints, nCount) — pascal -ret16, 8 bytes (2+4+2)
-  gdi.register('GetStockObject', 8, () => {
+  gdi.register('LPtoDP', 8, () => {
     const [hdc, lpPoints, nCount] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hdc);
     if (!dc || !lpPoints) return 0;
@@ -1555,7 +1555,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('SelectVisRgn', 4, () => SIMPLEREGION, 105);
 
   // Ordinal 106: SetBitmapBits(hBitmap, cbBuffer, lpBits) — pascal, 10 bytes (2+4+4)
-  gdi.register('GetViewportExt', 10, () => {
+  gdi.register('SetBitmapBits', 10, () => {
     const [hBitmap, cbBuffer, lpBits] = emu.readPascalArgs16([2, 4, 4]);
     const bmp = emu.handles.get<BitmapInfo>(hBitmap);
     if (!bmp || !lpBits || cbBuffer <= 0) return 0;
@@ -1611,7 +1611,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('RemoveFontResource', 4, () => 1, 136);
 
   // Ordinal 148: SetBrushOrg(hdc, x, y) — pascal, 6 bytes
-  gdi.register('AddFontResource', 6, () => {
+  gdi.register('SetBrushOrg', 6, () => {
     const [hdc, x, y] = emu.readPascalArgs16([2, 2, 2]);
     const dc = emu.getDC(hdc);
     if (dc) {
@@ -1701,7 +1701,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('EnumFontFamilies', 14, () => 0, 330);
 
   // Ordinal 345: GetTextAlign(hdc) — pascal -ret16, 2 bytes
-  gdi.register('PolyPolygon', 2, () => {
+  gdi.register('GetTextAlign', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
     return dc?.textAlign ?? TA_LEFT;
@@ -1742,7 +1742,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('SetMapperFlags', 6, () => 0, 349);
 
   // Ordinal 350: GetCharWidth(hdc, uFirstChar, uLastChar, lpBuffer) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('StretchDIBits', 10, () => {
+  gdi.register('GetCharWidth', 10, () => {
     const [hdc, uFirstChar, uLastChar, lpBuffer] = emu.readPascalArgs16([2, 2, 2, 4]);
     if (lpBuffer) {
       const dc = emu.getDC(hdc);
@@ -2841,7 +2841,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('SetArcDirection', 4, () => 2); // return old direction
 
   // Ordinal 602: SetDIBColorTable(hdc, uStartIndex, cEntries, pColors) — pascal -ret16, 10 bytes (2+2+2+4)
-  gdi.register('CopyMetaFile', 10, () => {
+  gdi.register('SetDIBColorTable', 10, () => {
     const [hdc, uStartIndex, cEntries] = emu.readPascalArgs16([2, 2, 2, 4]);
     return cEntries;
   }, 602);
@@ -2850,7 +2850,7 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('GetDIBColorTable', 10, () => 0, 603);
 
   // Ordinal 604: SetSolidBrush(hBrush, color) — pascal -ret16, 6 bytes (2+4)
-  gdi.register('DeleteMetaFile', 6, () => {
+  gdi.register('SetSolidBrush', 6, () => {
     const [hBrush, color] = emu.readPascalArgs16([2, 4]);
     const brush = emu.getBrush(hBrush);
     if (brush) brush.color = color;

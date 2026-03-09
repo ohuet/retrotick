@@ -234,7 +234,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 107: DefWindowProc(hWnd, msg, wParam, lParam_long) — 10 bytes (2+2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('AdjustWindowRect', 10, () => {
+  user.register('DefWindowProc', 10, () => {
     const [hWnd, msg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     const WM_CLOSE = 0x0010;
     const WM_SYSCOMMAND = 0x0112;
@@ -326,7 +326,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 108: GetMessage(lpMsg_segptr, hWnd, wMsgFilterMin, wMsgFilterMax) — 10 bytes (4+2+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('MapDialogRect', 10, () => {
+  user.register('GetMessage', 10, () => {
     const [lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax] = emu.readPascalArgs16([4, 2, 2, 2]);
     if (emu.messageQueue.length > 0) {
       const msg = emu.messageQueue.shift()!;
@@ -387,7 +387,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 109: PeekMessage(lpMsg_ptr, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('MessageBeep', 12, () => {
+  user.register('PeekMessage', 12, () => {
     const [lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg] = emu.readPascalArgs16([4, 2, 2, 2, 2]);
 
     // Check for synthesized WM_PAINT
@@ -445,7 +445,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 110: PostMessage(hWnd, msg, wParam, lParam_long) — 10 bytes (2+2+2+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('FlashWindow', 10, () => {
+  user.register('PostMessage', 10, () => {
     const [hWnd, msg, wParam, lParam] = emu.readPascalArgs16([2, 2, 2, 4]);
     emu.postMessage(hWnd, msg, wParam, lParam);
     return 1;
@@ -807,7 +807,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 114: DispatchMessage(lpMsg_ptr) — 4 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ReplyMessage', 4, () => {
+  user.register('DispatchMessage', 4, () => {
     const lpMsg = h.readFarPtr(0);
     const hWnd = emu.memory.readU16(lpMsg);
     const message = emu.memory.readU16(lpMsg + 2);

@@ -36,7 +36,7 @@ export function registerKernelTask(kernel: Win16Module, emu: Emulator, state: Ke
   kernel.register('SetTaskSignalProc', 6, () => 0, 38);
 
   // --- Ordinal 91: InitTask() — 0 bytes, register-based ---
-  kernel.register('InitTask2', 0, () => {
+  kernel.register('InitTask', 0, () => {
     const hInstance = 1;
     const SW_SHOWNORMAL = 1;
     emu.cpu.setReg16(1, 0x1000);  // CX = stack size

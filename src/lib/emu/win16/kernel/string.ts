@@ -2,7 +2,7 @@ import type { Emulator, Win16Module } from '../../emulator';
 import type { KernelState } from './index';
 
 export function registerKernelString(kernel: Win16Module, emu: Emulator, _state: KernelState): void {
-  // --- Ordinal 87: lstrcmp(str str) — 8 bytes ---
+  // --- Ordinal 87: Reserved5(str str) — 8 bytes ---
   kernel.register('Reserved5', 8, () => {
     const [lpStr1, lpStr2] = emu.readPascalArgs16([4, 4]);
     if (!lpStr1 || !lpStr2) return 0;
@@ -39,7 +39,7 @@ export function registerKernelString(kernel: Win16Module, emu: Emulator, _state:
   }, 88);
 
   // --- Ordinal 89: lstrcat(lpDst, lpSrc) — 8 bytes (segstr+str) ---
-  kernel.register('lstrlen', 8, () => {
+  kernel.register('lstrcat', 8, () => {
     const [lpDstRaw, lpSrcRaw] = emu.readPascalArgs16([4, 4]);
     const lpDst = emu.resolveFarPtr(lpDstRaw);
     const lpSrc = emu.resolveFarPtr(lpSrcRaw);
@@ -61,7 +61,7 @@ export function registerKernelString(kernel: Win16Module, emu: Emulator, _state:
   }, 89);
 
   // --- Ordinal 90: lstrlen(lpString) — 4 bytes (str) ---
-  kernel.register('InitTask', 4, () => {
+  kernel.register('lstrlen', 4, () => {
     const lpString = emu.readArg16FarPtr(0);
     if (!lpString) return 0;
     let len = 0;
@@ -70,7 +70,7 @@ export function registerKernelString(kernel: Win16Module, emu: Emulator, _state:
   }, 90);
 
   // --- Ordinal 353: lstrcpyn(lpDst, lpSrc, iMaxLength) — 10 bytes (segptr+str+word) ---
-  kernel.register('IsBadCodePtr', 10, () => {
+  kernel.register('lstrcpyn', 10, () => {
     const [lpDst, lpSrc, iMaxLength] = emu.readPascalArgs16([4, 4, 2]);
     if (lpDst && lpSrc && iMaxLength > 0) {
       let i = 0;

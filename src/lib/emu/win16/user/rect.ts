@@ -7,7 +7,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 72: SetRect(lpRect_ptr, left, top, right, bottom) — 12 bytes (4+2+2+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('SetCursor', 12, () => {
+  user.register('SetRect', 12, () => {
     const [lpRect, left, top, right, bottom] = emu.readPascalArgs16([4, 2, 2, 2, 2]);
     if (lpRect) {
       h.writeRect(lpRect, left, top, right, bottom);
@@ -18,7 +18,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 74: CopyRect(lpDst_ptr, lpSrc_ptr) — 8 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('ShowCursor', 8, () => {
+  user.register('CopyRect', 8, () => {
     const [lpDst, lpSrc] = emu.readPascalArgs16([4, 4]);
     if (lpDst && lpSrc) {
       const r = h.readRect(lpSrc);
@@ -30,7 +30,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 76: PtInRect(lpRect_ptr, point_long) — 8 bytes (4+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('SetRectEmpty', 8, () => {
+  user.register('PtInRect', 8, () => {
     const [lpRect, pointLong] = emu.readPascalArgs16([4, 4]);
     if (lpRect) {
       const px = pointLong & 0xFFFF;
@@ -46,7 +46,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 77: OffsetRect(lpRect_ptr, dx, dy) — 8 bytes (4+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('CopyRect', 8, () => {
+  user.register('OffsetRect', 8, () => {
     const [lpRect, dxRaw, dyRaw] = emu.readPascalArgs16([4, 2, 2]);
     const dx = (dxRaw << 16) >> 16;
     const dy = (dyRaw << 16) >> 16;
@@ -60,7 +60,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 78: InflateRect(lpRect_ptr, dx, dy) — 8 bytes (4+2+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('IsRectEmpty', 8, () => {
+  user.register('InflateRect', 8, () => {
     const [lpRect, dxRaw, dyRaw] = emu.readPascalArgs16([4, 2, 2]);
     const dx = (dxRaw << 16) >> 16;
     const dy = (dyRaw << 16) >> 16;
@@ -74,7 +74,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 79: IntersectRect(lpDst_ptr, lpSrc1_ptr, lpSrc2_ptr) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('PtInRect', 12, () => {
+  user.register('IntersectRect', 12, () => {
     const [lpDst, lpSrc1, lpSrc2] = emu.readPascalArgs16([4, 4, 4]);
     if (lpDst && lpSrc1 && lpSrc2) {
       const r1 = h.readRect(lpSrc1);
@@ -95,7 +95,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 80: UnionRect(lpDst_ptr, lpSrc1_ptr, lpSrc2_ptr) — 12 bytes
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('OffsetRect', 12, () => {
+  user.register('UnionRect', 12, () => {
     const [lpDst, lpSrc1, lpSrc2] = emu.readPascalArgs16([4, 4, 4]);
     if (lpDst && lpSrc1 && lpSrc2) {
       const r1 = h.readRect(lpSrc1);
@@ -113,7 +113,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 81: FillRect(hDC, lpRect_ptr, hBrush) — 8 bytes (2+4+2)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('InflateRect', 8, () => {
+  user.register('FillRect', 8, () => {
     const [hDC, lpRect, hBrush] = emu.readPascalArgs16([2, 4, 2]);
     const dc = emu.getDC(hDC);
     if (dc && lpRect) {
@@ -132,7 +132,7 @@ export function registerWin16UserRect(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 244: EqualRect(lprc1, lprc2) — 8 bytes (4+4)
   // ───────────────────────────────────────────────────────────────────────────
-  user.register('GetMessageTime', 8, () => {
+  user.register('EqualRect', 8, () => {
     const [lprc1, lprc2] = emu.readPascalArgs16([4, 4]);
     if (lprc1 && lprc2) {
       for (let i = 0; i < 8; i++) {
