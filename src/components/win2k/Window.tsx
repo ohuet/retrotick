@@ -84,6 +84,8 @@ interface WindowProps {
   onBlockedClick?: () => void;
   /** Increment to trigger a title bar flash animation (like Windows 2000 FlashWindow) */
   flashTrigger?: number;
+  /** Background color for the client area (default: inherited from frame) */
+  clientBg?: string;
   lang?: string;
   children?: ComponentChildren;
 }
@@ -93,7 +95,7 @@ export function Window({
   focused = true, maximized, minimized,
   menus, onClose, onMinimize, onMaximize,
   onTitleBarMouseDown, onTitleBarDblClick, onResizeStart,
-  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, lang, children,
+  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang, children,
 }: WindowProps) {
   const hasCaption = (wStyle & WS_CAPTION) === WS_CAPTION;
   const hasThickFrame = !!(wStyle & WS_THICKFRAME);
@@ -243,6 +245,7 @@ export function Window({
           marginTop: hasCaption ? '1px' : '0',
           display: minimized ? 'none' : 'block',
           lineHeight: 1,
+          ...(clientBg ? { background: clientBg } : {}),
         }}>
           {children}
         </div>

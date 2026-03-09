@@ -1197,6 +1197,54 @@ function renderControlOverlay(
 }
 
 
+// --- MDI Child Window Rendering ---
+
+function renderMdiChildOverlay(
+  ctrl: ControlOverlay,
+  emuRef: { current: Emulator | null },
+  setPressedControl: (id: number | null) => void,
+  pressedControl: number | null,
+  onResizeStart?: (edge: string, e: PointerEvent) => void,
+) {
+  const hasCaption = (ctrl.style & WS_CAPTION) === WS_CAPTION;
+  // Compute client area using emulator's metrics (not CSS metrics) for correct sizing
+  const emu = emuRef.current;
+  const isWin16 = !!emu?.isNE;
+  const bw = isWin16 ? 1 : getBorderWidth(ctrl.style);
+  const captionH = hasCaption ? (isWin16 ? 20 : 18) : 0;
+  const clientW = Math.max(0, ctrl.width - 2 * bw);
+  const clientH = Math.max(0, ctrl.height - 2 * bw - captionH);
+
+  return (
+    <div key={ctrl.childHwnd} style={{
+      position: 'absolute',
+      left: `${ctrl.x}px`,
+      top: `${ctrl.y}px`,
+      zIndex: 15,
+    }}>
+      <Window
+        title={ctrl.title || ''}
+        style={ctrl.style}
+        clientW={clientW}
+        clientH={clientH}
+        clientBg="transparent"
+        focused={true}
+        onClose={() => {
+          const emu = emuRef.current;
+          if (emu) {
+            emu.postMessage(ctrl.childHwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+          }
+        }}
+      >
+        {ctrl.mdiChildren?.map(childCtrl =>
+          renderControlOverlay(childCtrl, emuRef, setPressedControl, pressedControl, onResizeStart)
+        )}
+      </Window>
+    </div>
+  );
+}
+
+
 // --- Find Dialog ---
 
 function FindDialog({ findTerm, onTermChange, onFindNext, onClose, focused, parentRef }: {
@@ -2141,7 +2189,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
               onContextMenu={(e) => e.preventDefault()}
             />
           )}
-          {!isConsole && controlOverlays.map((ctrl) => renderControlOverlay(ctrl, emuRef, setPressedControl, pressedControl, onResizeStart))}
+          {!isConsole && controlOverlays.map((ctrl) =>
+            ctrl.isMdiChild
+              ? renderMdiChildOverlay(ctrl, emuRef, setPressedControl, pressedControl, onResizeStart)
+              : renderControlOverlay(ctrl, emuRef, setPressedControl, pressedControl, onResizeStart)
+          )}
         </div>
       </Window>
       {dialogInfo && (
