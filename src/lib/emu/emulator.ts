@@ -91,6 +91,10 @@ export interface ControlOverlay {
   tabItems?: { text: string }[];
   tabSelectedIndex?: number;
   bgColor?: string;
+  /** True if this is an MDI child window (should render with title bar/frame) */
+  isMdiChild?: boolean;
+  /** Children overlays nested inside this MDI child window */
+  mdiChildren?: ControlOverlay[];
 }
 
 // Detect fullwidth characters (CJK, fullwidth forms, etc.) that occupy 2 console columns

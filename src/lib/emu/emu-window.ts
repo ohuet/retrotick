@@ -5,7 +5,7 @@ import { OPAQUE, SYS_COLORS, COLOR_BTNFACE } from './win32/types';
 import { decodeDib } from '../pe/decode-dib';
 import { rvaToFileOffset } from '../pe/read';
 import { renderChildControls } from './emu-render';
-import { getClientSize } from './win32/user32/_helpers';
+import { getClientSize, getNonClientMetrics } from './win32/user32/_helpers';
 import { emuFindResourceEntryForModule } from './emu-load';
 
 // Track DCs that have canvas state saved (child window translate)
@@ -99,7 +99,16 @@ function getWindowOrigin(emu: Emulator, hwnd: number): { x: number; y: number } 
     x += cur.x || 0;
     y += cur.y || 0;
     if (!cur.parent) break;
-    cur = emu.handles.get<WindowInfo>(cur.parent);
+    const parent = emu.handles.get<WindowInfo>(cur.parent);
+    // Add non-client offset for parents with caption/frame (e.g. MDI children)
+    // Child windows are positioned relative to the parent's client area, so we need
+    // to offset by the parent's non-client area (border + caption)
+    if (parent && parent.hwnd !== emu.mainWindow) {
+      const { bw, captionH } = getNonClientMetrics(parent.style, !!parent.hMenu, emu.isNE);
+      x += bw;
+      y += bw + captionH;
+    }
+    cur = parent;
   }
   return { x, y };
 }
