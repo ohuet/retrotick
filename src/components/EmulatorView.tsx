@@ -1851,10 +1851,14 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const rect = canvas.getBoundingClientRect();
     const x = Math.round((e.clientX - rect.left) * canvas.width / rect.width);
     const y = Math.round((e.clientY - rect.top) * canvas.height / rect.height);
-    const lParam = makeLParam(x, y);
     const wParam = buildMKFlags(e);
-    const targetHwnd = emu.capturedWindow || emu.mainWindow;
-    emu.postMessage(targetHwnd, msg, wParam, lParam);
+    if (emu.capturedWindow) {
+      emu.postMessage(emu.capturedWindow, msg, wParam, makeLParam(x, y));
+    } else {
+      // Hit-test to find the correct child window and convert coordinates
+      const hit = emu.windowFromPoint(x, y);
+      emu.postMessage(hit.hwnd, msg, wParam, makeLParam(hit.x, hit.y));
+    }
   }, []);
 
   // Document-level mouse listeners for SetCapture support (drag over overlays)

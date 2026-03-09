@@ -1162,6 +1162,30 @@ export class Emulator {
       child.needsPaint = false;
     }
   }
+  /** Hit-test: find the deepest visible child window at (x,y) in the main window's client area.
+   *  Returns { hwnd, x, y } with coordinates relative to the found window's client area. */
+  windowFromPoint(px: number, py: number): { hwnd: number; x: number; y: number } {
+    const main = this.mainWindow;
+    if (!main) return { hwnd: 0, x: px, y: py };
+
+    const findChild = (parentHwnd: number, cx: number, cy: number): { hwnd: number; x: number; y: number } => {
+      const parent = this.handles.get<WindowInfo>(parentHwnd);
+      if (!parent?.childList) return { hwnd: parentHwnd, x: cx, y: cy };
+      // Walk children in reverse (last = topmost in z-order)
+      for (let i = parent.childList.length - 1; i >= 0; i--) {
+        const childHwnd = parent.childList[i];
+        const child = this.handles.get<WindowInfo>(childHwnd);
+        if (!child || !child.visible) continue;
+        if (cx >= child.x && cy >= child.y &&
+            cx < child.x + child.width && cy < child.y + child.height) {
+          return findChild(childHwnd, cx - child.x, cy - child.y);
+        }
+      }
+      return { hwnd: parentHwnd, x: cx, y: cy };
+    };
+
+    return findChild(main, px, py);
+  }
   notifyControlOverlays(): void { _notifyControlOverlays(this); }
   syncDCToCanvas(hdc: number): void { _syncDCToCanvas(this, hdc); }
   releaseChildDC(hdc: number): void { _releaseChildDC(this, hdc); }

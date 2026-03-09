@@ -828,8 +828,12 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 23: GetFocus() — 0 bytes
   user.register('GetFocus', 0, () => emu.focusedWindow || 0, 23);
 
-  // Ordinal 30: WindowFromPoint(pt) — 4 bytes (long = POINT packed)
-  user.register('WindowFromPoint', 4, () => emu.mainWindow || 0, 30);
+  // Ordinal 30: WindowFromPoint(pt) — 4 bytes (long = POINT packed as y:x)
+  user.register('WindowFromPoint', 4, () => {
+    const pt = emu.readArg16DWord(0);
+    const x = pt & 0xFFFF, y = (pt >>> 16) & 0xFFFF;
+    return emu.windowFromPoint(x, y).hwnd || emu.mainWindow || 0;
+  }, 30);
 
   // Ordinal 35: IsWindowEnabled(hWnd) — 2 bytes
   user.register('IsWindowEnabled', 2, () => 1, 35);
@@ -1353,8 +1357,22 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // GetUpdateRect(hWnd, lpRect, bErase) — 8 bytes
   user.register('GetUpdateRect', 8, () => 0, 190);
 
-  // ChildWindowFromPoint(hWndParent, pt) — 6 bytes
-  user.register('ChildWindowFromPoint', 6, () => 0, 191);
+  // ChildWindowFromPoint(hWndParent, pt) — 6 bytes (2+4)
+  user.register('ChildWindowFromPoint', 6, () => {
+    const [hWndParent, pt] = emu.readPascalArgs16([2, 4]);
+    const x = pt & 0xFFFF, y = (pt >>> 16) & 0xFFFF;
+    const parent = emu.handles.get<WindowInfo>(hWndParent);
+    if (!parent?.childList) return hWndParent;
+    for (let i = parent.childList.length - 1; i >= 0; i--) {
+      const childHwnd = parent.childList[i];
+      const child = emu.handles.get<WindowInfo>(childHwnd);
+      if (!child || !child.visible) continue;
+      if (x >= child.x && y >= child.y && x < child.x + child.width && y < child.y + child.height) {
+        return childHwnd;
+      }
+    }
+    return hWndParent;
+  }, 191);
 
   // InSendMessage() — 0 bytes
   user.register('InSendMessage', 0, () => 0, 192);
