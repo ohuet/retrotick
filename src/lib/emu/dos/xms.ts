@@ -114,10 +114,24 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
         return true;
       }
 
-      // Copy byte-by-byte (could optimize with bulk copy for large blocks)
-      for (let i = 0; i < length; i++) {
-        emu.memory.writeU8(dstBase + i, emu.memory.readU8(srcBase + i));
+      // Bounds-check: clamp length to handle size (like DOSBox)
+      let copyLen = length;
+      if (srcHandle !== 0) {
+        const srcEmb = emu._xmsHandles.get(srcHandle);
+        if (srcEmb) {
+          const maxSrc = srcEmb.size * 1024 - srcOffset;
+          if (copyLen > maxSrc) copyLen = Math.max(0, maxSrc);
+        }
       }
+      if (dstHandle !== 0) {
+        const dstEmb = emu._xmsHandles.get(dstHandle);
+        if (dstEmb) {
+          const maxDst = dstEmb.size * 1024 - dstOffset;
+          if (copyLen > maxDst) copyLen = Math.max(0, maxDst);
+        }
+      }
+
+      emu.memory.copyBlock(dstBase, srcBase, copyLen);
       cpu.setReg16(EAX, 1);
       return true;
     }

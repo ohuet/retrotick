@@ -141,14 +141,20 @@ export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
   const resolved = dosResolvePath(emu, name);
   openFileByPath(cpu, emu, name, resolved);
-  console.log(`[DOS] Open "${name}" -> CF=${cpu.getFlags()&1} AX=0x${cpu.getReg16(0).toString(16)}`);
+  // Don't log on async path (waitingForMessage) — AX hasn't been set yet;
+  // the INT 21h will re-execute after cache is populated and log then.
+  if (!emu.waitingForMessage) {
+    console.log(`[DOS] Open "${name}" -> CF=${cpu.getFlags()&1} AX=0x${cpu.getReg16(0).toString(16)}`);
+  }
 }
 
 /** 0x3E: Close file */
 export function dosCloseFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const f = emu._dosFiles.get(h);
-  console.log(`[DOS] Close h=${h} "${f?.name}"`);
+  const csBase = (cpu.cs << 4) >>> 0;
+  const ip = ((cpu.eip - 2) >>> 0) - csBase; // -2 for CD 21
+  console.log(`[DOS] Close h=${h} "${f?.name}" at ${cpu.cs.toString(16)}:${ip.toString(16)} (linear 0x${((cpu.eip-2)>>>0).toString(16)})`);
   emu._dosFiles.delete(h);
   const of = emu.handles.get<OpenFile>(h);
   if (of) emu.fs.persistOnClose(of);
@@ -259,6 +265,7 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
   } else {
     cpu.setFlag(CF, true);
     cpu.setReg16(EAX, 6);
+    console.warn(`[DOS] Seek h=${h} INVALID HANDLE origin=${origin} offset=${offset} at EIP=0x${((cpu.eip-2)>>>0).toString(16)}`);
   }
 }
 

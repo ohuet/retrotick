@@ -6,7 +6,7 @@ import {
   getItemsInFolder, addFolder, deleteFolder, deleteFile, renameEntry,
   isFolder, displayName, addFile, getAllFiles, readDroppedItems,
 } from '../lib/file-store';
-import { parsePE, extractIcons } from '../lib/pe';
+import { parsePE, parseCOM, extractIcons } from '../lib/pe';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
 import { Button } from './win2k/Button';
@@ -47,6 +47,9 @@ function extractFirstIconUrl(data: ArrayBuffer): string | null {
 }
 
 function isExeFile(data: ArrayBuffer, name?: string): { ok: boolean; peInfo?: PEInfo } {
+  if (name?.toLowerCase().endsWith('.com')) {
+    return { ok: true, peInfo: parseCOM(data) };
+  }
   try {
     const peInfo = parsePE(data);
     if (peInfo.isMZ) return { ok: true, peInfo };

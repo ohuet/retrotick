@@ -65,6 +65,7 @@ export interface PEInfo {
   neEncoding?: string;
   isMZ?: boolean;
   mzHeader?: MZHeader;
+  isCOM?: boolean;
 }
 
 export interface BitmapResult {

@@ -23,14 +23,18 @@ export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regFi
 
   // Memory addressing
   let addr: number;
+  let useSSeg = false; // BP/ESP-based addressing defaults to SS
   if (rm === 4) {
     // SIB byte
-    addr = decodeSIB(cpu, mod);
+    const { addr: sibAddr, bpBase } = decodeSIB(cpu, mod);
+    addr = sibAddr;
+    useSSeg = bpBase;
   } else if (rm === 5 && mod === 0) {
     // disp32
     addr = cpu.fetch32();
   } else {
     addr = cpu.reg[rm] | 0;
+    if (rm === EBP || rm === ESP) useSSeg = true;
   }
 
   if (mod === 1) {
@@ -39,9 +43,19 @@ export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regFi
     addr = (addr + cpu.fetchI32()) | 0;
   }
 
-  // Apply FS segment base if override is active
+  // Save raw EA before segment base (for LEA)
+  const rawEA = addr >>> 0;
+
+  // Apply segment base
   if (cpu._segOverride === 0x64) {
     addr = (addr + cpu.fsBase) | 0;
+  } else if (cpu._segOverride) {
+    const segSel = getSegOverrideSel(cpu);
+    addr = (addr + cpu.segBase(segSel)) | 0;
+  } else if (!cpu.use32) {
+    // Real mode with 67 prefix: apply default segment (DS, or SS for BP/ESP-based)
+    const segSel = useSSeg ? cpu.ss : cpu.ds;
+    addr = (addr + cpu.segBase(segSel)) | 0;
   }
 
   const ea = addr >>> 0;
@@ -50,27 +64,29 @@ export function decodeModRM(cpu: CPU, sizeBits: number): { isReg: boolean; regFi
   else if (sizeBits === 16) val = cpu.mem.readU16(ea);
   else val = cpu.mem.readU32(ea);
 
-  return { isReg: false, regField, val, addr: ea };
+  return { isReg: false, regField, val, addr: ea, ea: rawEA };
 }
 
-export function decodeSIB(cpu: CPU, mod: number): number {
+export function decodeSIB(cpu: CPU, mod: number): { addr: number; bpBase: boolean } {
   const sib = cpu.fetch8();
   const scale = (sib >> 6) & 3;
   const index = (sib >> 3) & 7;
   const base = sib & 7;
 
   let addr: number;
+  let bpBase = false;
   if (base === 5 && mod === 0) {
     addr = cpu.fetchI32();
   } else {
     addr = cpu.reg[base] | 0;
+    if (base === EBP || base === ESP) bpBase = true;
   }
 
   if (index !== 4) {
     addr = (addr + ((cpu.reg[index] | 0) << scale)) | 0;
   }
 
-  return addr;
+  return { addr, bpBase };
 }
 
 export function getSegOverrideSel(cpu: CPU): number {
@@ -171,20 +187,30 @@ export function decodeFPUModRM(cpu: CPU): { mod: number; regField: number; rm: n
   }
 
   let addr: number;
+  let useSSeg = false;
   if (rm === 4) {
-    addr = decodeSIB(cpu, mod);
+    const { addr: sibAddr, bpBase } = decodeSIB(cpu, mod);
+    addr = sibAddr;
+    useSSeg = bpBase;
   } else if (rm === 5 && mod === 0) {
     addr = cpu.fetch32();
   } else {
     addr = cpu.reg[rm] | 0;
+    if (rm === EBP || rm === ESP) useSSeg = true;
   }
 
   if (mod === 1) addr = (addr + cpu.fetchI8()) | 0;
   else if (mod === 2) addr = (addr + cpu.fetchI32()) | 0;
 
-  // Apply FS segment base if override is active
+  // Apply segment base
   if (cpu._segOverride === 0x64) {
     addr = (addr + cpu.fsBase) | 0;
+  } else if (cpu._segOverride) {
+    const segSel = getSegOverrideSel(cpu);
+    addr = (addr + cpu.segBase(segSel)) | 0;
+  } else if (!cpu.use32) {
+    const segSel = useSSeg ? cpu.ss : cpu.ds;
+    addr = (addr + cpu.segBase(segSel)) | 0;
   }
 
   return { mod, regField, rm, addr: addr >>> 0 };

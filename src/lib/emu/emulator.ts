@@ -339,6 +339,14 @@ export class Emulator {
   _dosHalted = false;
   _dosVerifyFlag = false;
   _dosInDOSAddr = 0;
+  /** Saved parent state for DOS EXEC (INT 21h AH=4Bh) — supports nesting */
+  _dosExecStack: {
+    regs: Int32Array; cs: number; ds: number; es: number; ss: number;
+    eip: number; flags: number; psp: number; dta: number;
+  }[] = [];
+  _dosExitCode = 0;
+  /** Segment of fake UCDOS TSR stub (0 = not set up) */
+  _dosUcdosStubSeg = 0;
   /** I/O port data (for IN/OUT instructions) */
   _ioPorts = new Map<number, number>();
   /** Pending hardware interrupts to fire at next tick */
@@ -1397,6 +1405,33 @@ export class Emulator {
   injectHwKey(scancode: number, browserChar?: number): void {
     // Queue all scancodes for sequential delivery — writing directly to port 0x60
     // would lose earlier scancodes when multiple keys are injected in the same JS event.
+    // Cap queue size to prevent overflow from key repeat (browser fires keydown ~30-60/s
+    // when holding a key, but the CPU can only process one INT 09h per execution batch).
+    // Break code (key-up, bit 7 set): flush queued repeat make codes for the
+    // same key so the character stops immediately when the key is released.
+    // Keep the first make code (initial press) but drop subsequent repeats.
+    if ((scancode & 0x80) && scancode !== 0xE0) {
+      const makeCode = scancode & 0x7F;
+      let kept = false;
+      const filtered: number[] = [];
+      for (let i = 0; i < this._pendingHwKeys.length; i++) {
+        const k = this._pendingHwKeys[i];
+        if (k === makeCode) {
+          if (!kept) {
+            kept = true;
+            filtered.push(k); // keep first make
+          } else {
+            // Drop repeat; also drop preceding E0 prefix if present
+            if (filtered.length > 0 && filtered[filtered.length - 1] === 0xE0) filtered.pop();
+          }
+          continue;
+        }
+        filtered.push(k);
+      }
+      this._pendingHwKeys = filtered;
+    }
+    const MAX_HW_KEY_QUEUE = 8;
+    if (this._pendingHwKeys.length >= MAX_HW_KEY_QUEUE) return;
     this._pendingHwKeys.push(scancode);
     if (browserChar !== undefined) this._pendingHwKeyChars.set(scancode, browserChar);
     // Wake promptly on keyboard input from INT 16h waits or DOS HLT idle.
@@ -1411,6 +1446,9 @@ export class Emulator {
   _currentHwKeyChar: number | undefined;
   _kbdE0Prefix = false;
   _hwKeyDelay = 0;
+  _lastHwKeyDeliverTime = 0; // performance.now() of last non-E0 scancode delivery
+  _tickRunning = false; // reentrancy guard for tick()
+  _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
   _kbdDataReadsLeft = 0;
   _kbdReplayPending = false;
   _kbdReplayValue = 0xFF;

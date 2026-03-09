@@ -218,6 +218,17 @@ function parseMZ(dv: DataView, arrayBuffer: ArrayBuffer): PEInfo {
   };
 }
 
+export function parseCOM(arrayBuffer: ArrayBuffer): PEInfo {
+  return {
+    dosHeader: { e_magic: 0, e_lfanew: 0 },
+    coffHeader: { machine: 0, numberOfSections: 0, timeDateStamp: 0, sizeOfOptionalHeader: 0, characteristics: 0 },
+    optionalHeader: { magic: 0, isPE32Plus: false, subsystem: 0, dataDirectories: [] },
+    sections: [],
+    resources: null,
+    isCOM: true,
+  };
+}
+
 export function parsePE(arrayBuffer: ArrayBuffer): PEInfo {
   const dv = new DataView(arrayBuffer);
 

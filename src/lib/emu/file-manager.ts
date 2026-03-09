@@ -229,11 +229,16 @@ export class DefaultFileManager implements FileManager {
             return { name: vf.name, size: vf.size, source: 'virtual' };
           }
         }
-        const baseName = relPath.includes('\\') ? relPath.substring(relPath.lastIndexOf('\\') + 1) : relPath;
-        for (const [name, data] of additionalFiles) {
-          const nameNorm = name.toUpperCase().replace(/\//g, '\\');
-          const nameBase = nameNorm.includes('\\') ? nameNorm.substring(nameNorm.lastIndexOf('\\') + 1) : nameNorm;
-          if (nameNorm === relPath || nameBase === baseName) return { name, size: data.byteLength, source: 'additional' };
+        // Try progressively shorter sub-paths: UCDOS\README → README
+        let sub = relPath;
+        while (sub) {
+          for (const [name, data] of additionalFiles) {
+            const nameNorm = name.toUpperCase().replace(/\//g, '\\');
+            if (nameNorm === sub) return { name, size: data.byteLength, source: 'additional' };
+          }
+          const idx = sub.indexOf('\\');
+          if (idx < 0) break;
+          sub = sub.substring(idx + 1);
         }
       }
     }

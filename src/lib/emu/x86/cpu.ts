@@ -225,7 +225,7 @@ export class CPU {
     return _decodeModRM(this, sizeBits);
   }
 
-  decodeSIB(mod: number): number {
+  decodeSIB(mod: number): { addr: number; bpBase: boolean } {
     return _decodeSIB(this, mod);
   }
 

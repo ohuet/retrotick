@@ -322,9 +322,7 @@ export function registerWinmm(emu: Emulator): void {
 
   function ensureAudioContext(): AudioContext | null {
     if (typeof AudioContext === 'undefined') return null;
-    if (!emu.audioContext) {
-      emu.audioContext = new AudioContext();
-    }
+    if (!emu.audioContext) return null;
     if (emu.audioContext.state === 'suspended') {
       emu.audioContext.resume();
     }
@@ -526,13 +524,8 @@ export function registerWinmm(emu: Emulator): void {
     const sampleRate = emu.memory.readU32(lpFormat + 4);
     const bitsPerSample = emu.memory.readU16(lpFormat + 14);
 
-    if (typeof AudioContext !== 'undefined') {
-      if (!emu.audioContext) {
-        emu.audioContext = new AudioContext({ sampleRate: sampleRate });
-      }
-      if (emu.audioContext.state === 'suspended') {
-        emu.audioContext.resume();
-      }
+    if (emu.audioContext?.state === 'suspended') {
+      emu.audioContext.resume();
     }
 
     const device: WaveOutDevice = {
@@ -773,12 +766,9 @@ export function registerWinmm(emu: Emulator): void {
     device.recording = true;
     device.startTime = Date.now();
 
-    if (typeof AudioContext === 'undefined') {
+    if (!emu.audioContext) {
       device.recording = false;
       return 0;
-    }
-    if (!emu.audioContext) {
-      emu.audioContext = new AudioContext();
     }
     const ctx = emu.audioContext;
 

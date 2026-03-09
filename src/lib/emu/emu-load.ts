@@ -40,7 +40,7 @@ import { parsePE, extractExports } from '../pe';
 import type { ExportFunction } from '../pe';
 import { buildNEThunkTable } from './emu-thunks-ne';
 import { handleSehDispatchReturn } from './emu-window';
-import { loadMZ } from './mz-loader';
+import { loadMZ, loadCOM } from './mz-loader';
 
 export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo, canvas: HTMLCanvasElement): void {
   console.log('[EMU] load() called, arrayBuffer size:', arrayBuffer.byteLength);
@@ -121,6 +121,18 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
   emu.canvasCtx = canvas.getContext('2d')!;
   emu.canvasCtx.imageSmoothingEnabled = false;
 
+  // COM (DOS) executable branch
+  if (peInfo.isCOM) {
+    emu.isDOS = true;
+    emu.isConsole = true;
+    emu.initConsoleBuffer();
+
+    const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath);
+    setupDosEnvironment(emu, mz);
+    console.log(`[EMU] COM loaded: entry CS:IP=${mz.entryCS.toString(16)}:${mz.entryIP.toString(16)} SS:SP=${mz.entrySS.toString(16)}:${mz.entrySP.toString(16)} imageSize=${mz.imageSize}`);
+    return;
+  }
+
   // MZ (DOS) executable branch
   if (peInfo.isMZ && peInfo.mzHeader) {
     emu.isDOS = true;
@@ -128,134 +140,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.initConsoleBuffer();
 
     const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath);
-    emu._dosLoadSegment = mz.loadSegment;
-    emu._dosPSP = mz.loadSegment;
-    emu._dosImageSize = mz.imageSize;
-    emu._dosMcbFirstSeg = mz.mcbFirstSeg;
-
-    // Set up CPU for 16-bit real mode
-    emu.cpu.use32 = false;
-    emu.cpu.realMode = true;
-
-    emu.cpu.cs = mz.entryCS;
-    emu.cpu.ds = mz.loadSegment; // PSP segment (DOS convention: DS=ES=PSP)
-    emu.cpu.es = mz.loadSegment; // PSP segment
-    emu.cpu.ss = mz.entrySS;
-    emu.cpu.eip = (emu.cpu.segBase(mz.entryCS)) + mz.entryIP;
-    emu.cpu.reg[4] = mz.entrySP; // SP
-
-    // Set up video memory area (B800:0000)
-    // Initialize with spaces + default attribute
-    for (let i = 0; i < emu.screenCols * emu.screenRows; i++) {
-      emu.memory.writeU8(0xB8000 + i * 2, 0x20);
-      emu.memory.writeU8(0xB8000 + i * 2 + 1, 0x07);
-    }
-
-    // Set up per-interrupt BIOS stubs at F000:i*5, each containing: INT i; RETF 2
-    // This allows programs that chain to the original vector (via PUSHF; CALL FAR)
-    // to trigger our built-in handler through the INT instruction.
-    // RETF 2 (instead of IRET) preserves CPU flags from the handler, matching
-    // real BIOS behavior where flag-returning functions (e.g. INT 16h AH=01/11
-    // setting ZF) use RETF 2 to propagate flag changes back to the caller.
-    const IRET_SEG = 0xF000;
-    const BIOS_BASE = IRET_SEG * 16; // linear 0xF0000
-    for (let i = 0; i < 256; i++) {
-      const off = i * 5;
-      emu.memory.writeU8(BIOS_BASE + off, 0xCD);     // INT
-      emu.memory.writeU8(BIOS_BASE + off + 1, i);    // interrupt number
-      emu.memory.writeU8(BIOS_BASE + off + 2, 0xCA); // RETF imm16
-      emu.memory.writeU8(BIOS_BASE + off + 3, 0x02); // 2 (pop FLAGS from PUSHF)
-      emu.memory.writeU8(BIOS_BASE + off + 4, 0x00);
-    }
-    // Build BIOS default vectors (synthetic stubs at F000:i*5).
-    const defaultVec = new Map<number, number>();
-    for (let i = 0; i < 256; i++) defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
-
-    // Fill IVT and vector maps.
-    for (let i = 0; i < 256; i++) {
-      const vec = defaultVec.get(i)!;
-      emu.memory.writeU16(i * 4, vec & 0xFFFF);
-      emu.memory.writeU16(i * 4 + 2, (vec >>> 16) & 0xFFFF);
-      emu._dosBiosDefaultVectors.set(i, vec);
-      emu._dosIntVectors.set(i, vec);
-    }
-
-    // BDA (BIOS Data Area) at 0040:0000
-    // Video info
-    emu.memory.writeU8(0x0449, 0x03);    // current video mode
-    emu.memory.writeU16(0x044A, 80);    // screen columns
-    emu.memory.writeU16(0x044C, 80 * 25 * 2); // page size in bytes
-    emu.memory.writeU16(0x044E, 0);     // current page offset
-    emu.memory.writeU16(0x0450, 0);     // cursor position page 0
-    emu.memory.writeU8(0x0460, 15);     // cursor end scanline
-    emu.memory.writeU8(0x0461, 14);     // cursor start scanline
-    emu.memory.writeU8(0x0462, 0);      // active display page
-    emu.memory.writeU16(0x0463, 0x3D4); // CRTC base port
-    emu.memory.writeU8(0x0465, 0x29);   // CRT mode control (80-col text, color)
-    emu.memory.writeU8(0x0466, 0x30);   // CGA color palette
-    emu.memory.writeU8(0x0484, 24);     // rows - 1
-    emu.memory.writeU16(0x0485, 16);    // character height
-    emu.memory.writeU8(0x0487, 0x60);   // EGA/VGA feature: bits 6-5=11 (256K+ RAM)
-    emu.memory.writeU8(0x0489, 0x21);   // VGA DDA: bit 0=VGA active, bits 6-5=01 (400 scan lines)
-    // Keyboard buffer (circular buffer at 0040:001E-003D, 16 words)
-    emu.memory.writeU16(0x041A, 0x1E); // buffer head (offset within seg 40h)
-    emu.memory.writeU16(0x041C, 0x1E); // buffer tail (same = empty)
-    emu.memory.writeU16(0x0480, 0x1E); // buffer start offset
-    emu.memory.writeU16(0x0482, 0x3E); // buffer end offset
-    // Keyboard status/feature bytes
-    emu.memory.writeU8(0x0417, 0x00);  // shift flags
-    emu.memory.writeU8(0x0418, 0x00);  // extended shift flags
-    emu.memory.writeU8(0x0496, 0x10);  // enhanced keyboard present
-    // INT 15h/AH=C0 BIOS configuration table at F000:0600
-    // (past the 256×5=1280 byte interrupt stubs ending at F000:0500)
-    // Byte 0 = length of following bytes (8 for AT/PS2 style feature table)
-    const biosCfg = 0xF0000 + 0x0600;
-    emu.memory.writeU8(biosCfg + 0, 0x08);
-    emu.memory.writeU8(biosCfg + 1, 0xFC); // model: AT-compatible (placeholder)
-    emu.memory.writeU8(biosCfg + 2, 0x00); // submodel
-    emu.memory.writeU8(biosCfg + 3, 0x00); // BIOS revision
-    emu.memory.writeU8(biosCfg + 4, 0x00); // feature byte 1
-    emu.memory.writeU8(biosCfg + 5, 0x10); // feature byte 2: enhanced keyboard
-    emu.memory.writeU8(biosCfg + 6, 0x00); // feature byte 3
-    emu.memory.writeU8(biosCfg + 7, 0x00); // feature byte 4
-    emu.memory.writeU8(biosCfg + 8, 0x00); // feature byte 5
-    // VGA Static Functionality Table at F000:0700
-    // Used by INT 10h AH=1Bh — QBasic reads this to determine supported video modes
-    const sftBase = 0xF0000 + 0x0700;
-    emu.memory.writeU8(sftBase + 0x00, 0xFF); // Modes 0-7 supported
-    emu.memory.writeU8(sftBase + 0x01, 0xE0); // Modes D,E,F supported (8-C not standard VGA)
-    emu.memory.writeU8(sftBase + 0x02, 0x0F); // Modes 10,11,12,13 supported
-    emu.memory.writeU8(sftBase + 0x03, 0x00); // Reserved
-    emu.memory.writeU8(sftBase + 0x04, 0x00); // Reserved
-    emu.memory.writeU8(sftBase + 0x05, 0x00); // Reserved
-    emu.memory.writeU8(sftBase + 0x06, 0x00); // Reserved
-    emu.memory.writeU8(sftBase + 0x07, 0x07); // Scan lines for text: 200, 350, 400
-    emu.memory.writeU8(sftBase + 0x08, 0x02); // Character blocks available in text mode
-    emu.memory.writeU8(sftBase + 0x09, 0x08); // Max active character blocks
-    emu.memory.writeU8(sftBase + 0x0A, 0xE7); // Misc flags: all modes, gray sum, font load, palette, cursor emu, EGA pal, color reg, color page
-    emu.memory.writeU8(sftBase + 0x0B, 0x0F); // Misc flags 2: light pen, save/restore, blink, DCC
-    emu.memory.writeU8(sftBase + 0x0C, 0x00); // Reserved
-    emu.memory.writeU8(sftBase + 0x0D, 0x00); // Reserved
-    emu.memory.writeU8(sftBase + 0x0E, 0x00); // Save area function flags
-    emu.memory.writeU8(sftBase + 0x0F, 0x00); // Reserved
-
-    // XMS driver entry point stub at F000:0800
-    setupXmsStub(emu.memory);
-
-    // Equipment list (0040:0010) — bit 0=floppy, bits 4-5=video mode (10=80col color)
-    emu.memory.writeU16(0x0410, 0x0021);
-    // Memory size in KB (0040:0013) — 640KB
-    emu.memory.writeU16(0x0413, 640);
-
-    // Heap/virtual allocator — must be within real-mode 1MB address space
-    // Place heap after program image, aligned to paragraph boundary
-    const imageEnd = mz.loadSegment * 16 + mz.imageSize + 0x100; // +0x100 for PSP
-    emu.heapBase = ((imageEnd + 0xF) & ~0xF); // paragraph-aligned
-    emu.heapPtr = emu.heapBase;
-    // Virtual base also within 1MB, above heap
-    emu.virtualBase = 0x00080000; // 512KB
-    emu.virtualPtr = emu.virtualBase;
-
+    setupDosEnvironment(emu, mz);
     console.log(`[EMU] MZ loaded: entry CS:IP=${mz.entryCS.toString(16)}:${mz.entryIP.toString(16)} SS:SP=${mz.entrySS.toString(16)}:${mz.entrySP.toString(16)} imageSize=${mz.imageSize}`);
     return;
   }
@@ -883,6 +768,155 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
   ne.nextSelector = nextSelector;
 
   return dllEntries;
+}
+
+/** Set up DOS environment (CPU, BDA, IVT, heap, audio) shared by MZ and COM loaders. */
+function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ): void {
+  emu._dosLoadSegment = mz.loadSegment;
+  emu._dosPSP = mz.loadSegment;
+  emu._dosImageSize = mz.imageSize;
+  emu._dosMcbFirstSeg = mz.mcbFirstSeg;
+
+  // Set up CPU for 16-bit real mode
+  emu.cpu.use32 = false;
+  emu.cpu.realMode = true;
+
+  emu.cpu.cs = mz.entryCS;
+  emu.cpu.ds = mz.loadSegment; // PSP segment (DOS convention: DS=ES=PSP)
+  emu.cpu.es = mz.loadSegment; // PSP segment
+  emu.cpu.ss = mz.entrySS;
+  emu.cpu.eip = (emu.cpu.segBase(mz.entryCS)) + mz.entryIP;
+  emu.cpu.reg[4] = mz.entrySP; // SP
+  emu.cpu.setFlags(emu.cpu.getFlags() | 0x0200); // IF=1: enable hardware interrupts
+
+  // Set up video memory area (B800:0000)
+  for (let i = 0; i < emu.screenCols * emu.screenRows; i++) {
+    emu.memory.writeU8(0xB8000 + i * 2, 0x20);
+    emu.memory.writeU8(0xB8000 + i * 2 + 1, 0x07);
+  }
+
+  // Set up per-interrupt BIOS stubs at F000:i*5, each containing: INT i; RETF 2
+  const IRET_SEG = 0xF000;
+  const BIOS_BASE = IRET_SEG * 16;
+  for (let i = 0; i < 256; i++) {
+    const off = i * 5;
+    emu.memory.writeU8(BIOS_BASE + off, 0xCD);
+    emu.memory.writeU8(BIOS_BASE + off + 1, i);
+    emu.memory.writeU8(BIOS_BASE + off + 2, 0xCA);
+    emu.memory.writeU8(BIOS_BASE + off + 3, 0x02);
+    emu.memory.writeU8(BIOS_BASE + off + 4, 0x00);
+  }
+  const defaultVec = new Map<number, number>();
+  for (let i = 0; i < 256; i++) defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
+
+  for (let i = 0; i < 256; i++) {
+    const vec = defaultVec.get(i)!;
+    emu.memory.writeU16(i * 4, vec & 0xFFFF);
+    emu.memory.writeU16(i * 4 + 2, (vec >>> 16) & 0xFFFF);
+    emu._dosBiosDefaultVectors.set(i, vec);
+    emu._dosIntVectors.set(i, vec);
+  }
+
+  // BDA (BIOS Data Area) at 0040:0000
+  emu.memory.writeU8(0x0449, 0x03);
+  emu.memory.writeU16(0x044A, 80);
+  emu.memory.writeU16(0x044C, 80 * 25 * 2);
+  emu.memory.writeU16(0x044E, 0);
+  emu.memory.writeU16(0x0450, 0);
+  emu.memory.writeU8(0x0460, 15);
+  emu.memory.writeU8(0x0461, 14);
+  emu.memory.writeU8(0x0462, 0);
+  emu.memory.writeU16(0x0463, 0x3D4);
+  emu.memory.writeU8(0x0465, 0x29);
+  emu.memory.writeU8(0x0466, 0x30);
+  emu.memory.writeU8(0x0484, 24);
+  emu.memory.writeU16(0x0485, 16);
+  emu.memory.writeU8(0x0487, 0x60);
+  emu.memory.writeU8(0x0489, 0x21);
+  // Keyboard buffer
+  emu.memory.writeU16(0x041A, 0x1E);
+  emu.memory.writeU16(0x041C, 0x1E);
+  emu.memory.writeU16(0x0480, 0x1E);
+  emu.memory.writeU16(0x0482, 0x3E);
+  emu.memory.writeU8(0x0417, 0x00);
+  emu.memory.writeU8(0x0418, 0x00);
+  emu.memory.writeU8(0x0496, 0x10);
+  // BIOS configuration table at F000:0600
+  const biosCfg = 0xF0000 + 0x0600;
+  emu.memory.writeU8(biosCfg + 0, 0x08);
+  emu.memory.writeU8(biosCfg + 1, 0xFC);
+  emu.memory.writeU8(biosCfg + 2, 0x00);
+  emu.memory.writeU8(biosCfg + 3, 0x00);
+  emu.memory.writeU8(biosCfg + 4, 0x00);
+  emu.memory.writeU8(biosCfg + 5, 0x10);
+  emu.memory.writeU8(biosCfg + 6, 0x00);
+  emu.memory.writeU8(biosCfg + 7, 0x00);
+  emu.memory.writeU8(biosCfg + 8, 0x00);
+  // VGA Static Functionality Table at F000:0700
+  const sftBase = 0xF0000 + 0x0700;
+  emu.memory.writeU8(sftBase + 0x00, 0xFF);
+  emu.memory.writeU8(sftBase + 0x01, 0xE0);
+  emu.memory.writeU8(sftBase + 0x02, 0x0F);
+  emu.memory.writeU8(sftBase + 0x03, 0x00);
+  emu.memory.writeU8(sftBase + 0x04, 0x00);
+  emu.memory.writeU8(sftBase + 0x05, 0x00);
+  emu.memory.writeU8(sftBase + 0x06, 0x00);
+  emu.memory.writeU8(sftBase + 0x07, 0x07);
+  emu.memory.writeU8(sftBase + 0x08, 0x02);
+  emu.memory.writeU8(sftBase + 0x09, 0x08);
+  emu.memory.writeU8(sftBase + 0x0A, 0xE7);
+  emu.memory.writeU8(sftBase + 0x0B, 0x0F);
+  emu.memory.writeU8(sftBase + 0x0C, 0x00);
+  emu.memory.writeU8(sftBase + 0x0D, 0x00);
+  emu.memory.writeU8(sftBase + 0x0E, 0x00);
+  emu.memory.writeU8(sftBase + 0x0F, 0x00);
+
+  setupXmsStub(emu.memory);
+
+  // UCDOS stub — fake TSR for UCDOS-dependent programs.
+  // Programs do INT 21h AH=35h AL=79h to get INT 79h handler → ES:BX,
+  // then check ES:[0104h] == "TP" (absolute offset 0x0104 within the segment).
+  // Place stub in BIOS ROM area at F000:0900. The "TP" signature goes at
+  // offset 0x0104 relative to the handler's SEGMENT base, i.e., F000:0104.
+  // F000:0104 = linear 0xF0104 — this is in the BIOS stubs area (INT 0x20's
+  // stub is at F000:0x64 = 100*5, so 0x0104 is within the stub region but
+  // those stubs only use 5 bytes each, so byte 0x0104 is the 5th byte of
+  // INT 0x33's stub (unused padding). Safe to write here.
+  const UCDOS_STUB_SEG = 0xF000;
+  const UCDOS_STUB_OFF = 0x0900;
+  const ucdosLin = UCDOS_STUB_SEG * 16 + UCDOS_STUB_OFF;
+  emu.memory.writeU8(ucdosLin, 0xCF); // IRET at entry point
+  // "TP" signature at SEG:0104 = F000:0104 = linear 0xF0104
+  const sigAddr = UCDOS_STUB_SEG * 16 + 0x0104;
+  emu.memory.writeU8(sigAddr, 0x54);     // 'T'
+  emu.memory.writeU8(sigAddr + 1, 0x50); // 'P'
+  // Point INT 79h to our stub
+  emu.memory.writeU16(0x79 * 4, UCDOS_STUB_OFF);
+  emu.memory.writeU16(0x79 * 4 + 2, UCDOS_STUB_SEG);
+  emu._dosIntVectors.set(0x79, (UCDOS_STUB_SEG << 16) | UCDOS_STUB_OFF);
+  emu._dosUcdosStubSeg = UCDOS_STUB_SEG;
+  // Register the UCDOS stub as the "BIOS default" so the dispatch code
+  // falls through to our JS handleInt79 instead of jumping to the IRET stub.
+  const ucdosVec = (UCDOS_STUB_SEG << 16) | UCDOS_STUB_OFF;
+  emu._dosBiosDefaultVectors.set(0x79, ucdosVec);
+
+  // Equipment list and memory size
+  emu.memory.writeU16(0x0410, 0x0021);
+  emu.memory.writeU16(0x0413, 640);
+
+  // Heap/virtual allocator
+  const imageEnd = mz.loadSegment * 16 + mz.imageSize + 0x100;
+  emu.heapBase = ((imageEnd + 0xF) & ~0xF);
+  emu.heapPtr = emu.heapBase;
+  emu.virtualBase = 0x00080000;
+  emu.virtualPtr = emu.virtualBase;
+
+  // Wire Sound Blaster DMA
+  emu.dosAudio.readMemory = (addr: number) => emu.memory.readU8(addr);
+  emu.dosAudio.writeMemory = (addr: number, val: number) => emu.memory.writeU8(addr, val);
+  emu.dosAudio.onSBIRQ = () => {
+    if (!emu._pendingHwInts.includes(0x0F)) emu._pendingHwInts.push(0x0F);
+  };
 }
 
 /** Rebuild the thunk page set from current thunkToApi entries. */

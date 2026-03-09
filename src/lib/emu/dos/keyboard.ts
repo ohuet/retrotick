@@ -34,7 +34,13 @@ const EXTENDED_SCANCODES = new Set([
 function runInt15KeyboardIntercept(cpu: CPU, emu: Emulator, scancode: number): { scancode: number; discard: boolean } {
   const intNum = 0x15;
   const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
-  const vec = emu._dosIntVectors.get(intNum) ?? biosDefault;
+  // Check both _dosIntVectors and IVT memory (programs may write vectors directly)
+  const ivtOff = cpu.mem.readU16(intNum * 4);
+  const ivtSeg = cpu.mem.readU16(intNum * 4 + 2);
+  const ivtVec = (ivtSeg << 16) | ivtOff;
+  const vec = (ivtVec !== biosDefault && ivtSeg !== 0xF000)
+    ? ivtVec
+    : (emu._dosIntVectors.get(intNum) ?? biosDefault);
   if (vec === biosDefault) return { scancode, discard: false };
 
   const returnCS = cpu.cs;
@@ -67,6 +73,15 @@ function runInt15KeyboardIntercept(cpu: CPU, emu: Emulator, scancode: number): {
 }
 
 export function handleInt09(cpu: CPU, emu: Emulator, scancodeOverride?: number): boolean {
+  // Save all CPU registers — real BIOS INT 09h preserves them.
+  // This is critical because runInt15KeyboardIntercept runs a step loop
+  // that may modify any register (game's INT 15h handler could trash DS/ES/etc).
+  const savedRegs = [cpu.reg[0], cpu.reg[1], cpu.reg[2], cpu.reg[3],
+                     cpu.reg[4], cpu.reg[5], cpu.reg[6], cpu.reg[7]];
+  const savedDS = cpu.ds;
+  const savedES = cpu.es;
+  const savedFlags = cpu.getFlags();
+
   let scancode = scancodeOverride ?? emu.portIn(0x60);
   // Acknowledge keyboard controller and PIC like real BIOS INT 09h.
   const p61 = emu.portIn(0x61);
@@ -77,7 +92,14 @@ export function handleInt09(cpu: CPU, emu: Emulator, scancodeOverride?: number):
   // Hook may translate AL or discard event via CF=1.
   const int15Result = runInt15KeyboardIntercept(cpu, emu, scancode);
   scancode = int15Result.scancode & 0xFF;
-  if (int15Result.discard) return true;
+  if (int15Result.discard) {
+    // Restore registers before returning
+    for (let i = 0; i < 8; i++) cpu.reg[i] = savedRegs[i];
+    cpu.ds = savedDS;
+    cpu.es = savedES;
+    cpu.setFlags(savedFlags);
+    return true;
+  }
 
   const shiftFlags = emu.memory.readU8(BDA + 0x17);
 
@@ -138,8 +160,17 @@ export function handleInt09(cpu: CPU, emu: Emulator, scancodeOverride?: number):
     ascii = (scancode < SCAN_TO_ASCII.length ? SCAN_TO_ASCII[scancode] : undefined) ?? 0;
   }
 
-  emu.dosKeyBuffer.push({ ascii, scan: scancode });
+  // Cap software key buffer to prevent overflow from key repeat
+  if (emu.dosKeyBuffer.length < 32) {
+    emu.dosKeyBuffer.push({ ascii, scan: scancode });
+  }
   emu.writeBdaKey(ascii, scancode);
+
+  // Restore all registers — BIOS INT 09h is transparent to caller
+  for (let i = 0; i < 8; i++) cpu.reg[i] = savedRegs[i];
+  cpu.ds = savedDS;
+  cpu.es = savedES;
+  cpu.setFlags(savedFlags);
   return true;
 }
 
@@ -213,6 +244,39 @@ export function handleInt16(cpu: CPU, emu: Emulator, fromBiosStub = false): bool
         cpu.setReg8(EAX, basic);
       } else {
         cpu.setReg16(EAX, (ext << 8) | basic);
+      }
+      break;
+    }
+    case 0x27: {
+      // UCDOS keyboard control
+      const al = cpu.reg[EAX] & 0xFF;
+      switch (al) {
+        case 0x00: // Disable input method
+          break;
+        case 0x01: // Enable input method
+          break;
+        case 0x02: // Get input method status → AL=0 (inactive)
+          cpu.setReg8(EAX, 0x00);
+          break;
+        case 0x03: // Switch input method
+          break;
+        default:
+          break;
+      }
+      break;
+    }
+    case 0x28: {
+      // UCDOS keyboard installation check / get status
+      // Return signature: BX=CEF7h, CX=C9BDh
+      // AL preserved from input, AH modified to status info
+      const EBX = 3, ECX = 1;
+      cpu.setReg16(EBX, 0xCEF7);
+      cpu.setReg16(ECX, 0xC9BD);
+      // Log what the program is comparing
+      if (emu._dosUcdosStubSeg) {
+        const ds = cpu.ds;
+        const val323C = cpu.mem.readU16(ds * 16 + 0x323C);
+        console.log(`[INT 16h AH=28h] ds=${ds.toString(16)} AX=${cpu.getReg16(EAX).toString(16)} [DS:323C]=${val323C.toString(16)}`);
       }
       break;
     }

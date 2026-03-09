@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import { parsePE, extractIcons } from '../lib/pe';
+import { parsePE, parseCOM, extractIcons } from '../lib/pe';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
 import { getRootItems, addFile, addFolder, deleteFile, deleteFolder, moveFile, renameEntry, isFolder, displayName, type StoredFile, getAllFiles, readDroppedItems } from '../lib/file-store';
@@ -33,6 +33,9 @@ function extractFirstIconUrl(data: ArrayBuffer): string | null {
 }
 
 function isExeFile(data: ArrayBuffer, name?: string): { ok: boolean; peInfo?: PEInfo } {
+  if (name?.toLowerCase().endsWith('.com')) {
+    return { ok: true, peInfo: parseCOM(data) };
+  }
   try {
     const peInfo = parsePE(data);
     if (peInfo.isMZ) return { ok: true, peInfo };

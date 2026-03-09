@@ -1,391 +1,27 @@
 /**
- * DOS audio subsystem: PC Speaker, AdLib/OPL2 FM synthesis, Sound Blaster DSP detection.
+ * DOS audio subsystem orchestrator.
  *
- * PC Speaker: PIT channel 2 square wave gated through port 0x61 bits 0-1.
- * AdLib: OPL2 FM chip at ports 0x388-0x389 (and SB mirror at 0x228-0x229).
- * Sound Blaster: DSP at 0x220-0x22F — detection/reset only (no DMA audio).
+ * Ties together OPL2 (AdLib FM), Sound Blaster DSP + DMA, and PC Speaker.
+ * Routes I/O port reads/writes to the appropriate subsystem, manages the
+ * AudioWorklet for real-time audio output, and handles PCM mixing.
  */
 
-import type { Emulator } from '../emulator';
+import { OPL2 } from './opl2';
+import { DMAController } from './dma';
+import { SoundBlasterDSP } from './soundblaster';
+import { PCSpeaker } from './pc-speaker';
 
-// ---- OPL2 constants ----
-
-const OPL_RATE = 49716; // OPL2 native sample rate
-const NUM_CHANNELS = 9;
-const NUM_OPERATORS = 18;
-
-// Operator index within a channel: channel i → operators [CH_OP[i][0], CH_OP[i][1]]
-const CH_OP: [number, number][] = [
-  [0, 3], [1, 4], [2, 5], [6, 9], [7, 10], [8, 11], [12, 15], [13, 16], [14, 17],
-];
-
-// Register offset → operator index mapping
-const OP_OFFSET = [0, 1, 2, 3, 4, 5, -1, -1, 6, 7, 8, 9, 10, 11, -1, -1, 12, 13, 14, 15, 16, 17];
-
-// Multiplier table
-const MULTI = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 12, 12, 15, 15];
-
-// Sine table (10-bit, 1024 entries, output = 0..8191 representing -log2 attenuation)
-const SINE_TABLE = new Float64Array(1024);
-for (let i = 0; i < 1024; i++) {
-  SINE_TABLE[i] = Math.sin((i + 0.5) * Math.PI / 512);
-}
-
-// Attack rate timing (ms approximate) — indexed by effective rate 0-15
-const ATTACK_TIMES = [Infinity, 1500, 750, 500, 375, 250, 187, 125, 93, 62, 46, 31, 23, 15, 7, 0];
-const DECAY_TIMES = [Infinity, 24000, 12000, 6000, 4800, 3600, 2400, 1800, 1200, 900, 600, 480, 360, 240, 120, 0];
-
-// ---- Operator state ----
-
-const ENV_OFF = 0;
-const ENV_ATTACK = 1;
-const ENV_DECAY = 2;
-const ENV_SUSTAIN = 3;
-const ENV_RELEASE = 4;
-
-interface OpState {
-  phase: number;          // 0..1 accumulator
-  envLevel: number;       // 0 = max volume, 1 = silent
-  envState: number;       // ENV_*
-  feedback0: number;      // previous output for feedback
-  feedback1: number;      // previous-previous output for feedback
-}
-
-// ---- OPL2 Emulator ----
-
-export class OPL2 {
-  private regs = new Uint8Array(256);
-  private regIndex = 0; // address latch
-  private ops: OpState[] = [];
-  private sampleRate: number;
-  private outputBuf: Float32Array;
-  private bufPos = 0;
-  private accumPhase = 0; // fractional resampling accumulator
-
-  constructor(sampleRate: number) {
-    this.sampleRate = sampleRate;
-    this.outputBuf = new Float32Array(4096);
-    for (let i = 0; i < NUM_OPERATORS; i++) {
-      this.ops.push({ phase: 0, envLevel: 1, envState: ENV_OFF, feedback0: 0, feedback1: 0 });
-    }
-  }
-
-  writeAddr(val: number): void { this.regIndex = val & 0xFF; }
-
-  readStatus(): number {
-    // Bit 7: IRQ flag, Bit 6: Timer 1 flag, Bit 5: Timer 2 flag
-    // Return 0 = ready (no timers expired)
-    return 0x00;
-  }
-
-  writeData(val: number): void {
-    const reg = this.regIndex;
-    const old = this.regs[reg];
-    this.regs[reg] = val;
-
-    // Key-on/off: registers 0xB0-0xB8
-    if (reg >= 0xB0 && reg <= 0xB8) {
-      const ch = reg - 0xB0;
-      const keyOn = (val >> 5) & 1;
-      const wasOn = (old >> 5) & 1;
-      const [op1, op2] = CH_OP[ch];
-      if (keyOn && !wasOn) {
-        // Key on: start attack
-        this.ops[op1].envState = ENV_ATTACK;
-        this.ops[op1].envLevel = 1;
-        this.ops[op1].phase = 0;
-        this.ops[op2].envState = ENV_ATTACK;
-        this.ops[op2].envLevel = 1;
-        this.ops[op2].phase = 0;
-      } else if (!keyOn && wasOn) {
-        // Key off: start release
-        if (this.ops[op1].envState !== ENV_OFF) this.ops[op1].envState = ENV_RELEASE;
-        if (this.ops[op2].envState !== ENV_OFF) this.ops[op2].envState = ENV_RELEASE;
-      }
-    }
-  }
-
-  // Get operator register values
-  private opReg(opIdx: number, baseReg: number): number {
-    // Convert operator index to register offset
-    const offset = opIdx < 6 ? opIdx : opIdx < 12 ? opIdx + 2 : opIdx + 4;
-    return this.regs[baseReg + offset] ?? 0;
-  }
-
-  private getMulti(opIdx: number): number { return MULTI[this.opReg(opIdx, 0x20) & 0x0F]; }
-  private getTotalLevel(opIdx: number): number { return (this.opReg(opIdx, 0x40) & 0x3F) / 63; }
-  private getAttackRate(opIdx: number): number { return (this.opReg(opIdx, 0x60) >> 4) & 0x0F; }
-  private getDecayRate(opIdx: number): number { return this.opReg(opIdx, 0x60) & 0x0F; }
-  private getSustainLevel(opIdx: number): number { return ((this.opReg(opIdx, 0x80) >> 4) & 0x0F) / 15; }
-  private getReleaseRate(opIdx: number): number { return this.opReg(opIdx, 0x80) & 0x0F; }
-  private getWaveform(opIdx: number): number {
-    if (!(this.regs[0x01] & 0x20)) return 0; // waveform select not enabled
-    return this.opReg(opIdx, 0xE0) & 0x03;
-  }
-
-  private getChannelFreq(ch: number): number {
-    const fnum = this.regs[0xA0 + ch] | ((this.regs[0xB0 + ch] & 0x03) << 8);
-    const block = (this.regs[0xB0 + ch] >> 2) & 0x07;
-    return fnum * Math.pow(2, block - 1) * OPL_RATE / (1 << 19);
-  }
-
-  private getFeedback(ch: number): number {
-    return (this.regs[0xC0 + ch] >> 1) & 0x07;
-  }
-
-  private getConnection(ch: number): number {
-    return this.regs[0xC0 + ch] & 0x01;
-  }
-
-  // Apply waveform shaping
-  private waveform(phase: number, type: number): number {
-    // Normalize phase to 0..1
-    const p = ((phase % 1) + 1) % 1;
-    const idx = (p * 1024) | 0;
-    switch (type) {
-      case 0: return SINE_TABLE[idx & 1023]; // sine
-      case 1: return p < 0.5 ? SINE_TABLE[idx & 1023] : 0; // half-sine
-      case 2: return Math.abs(SINE_TABLE[idx & 1023]); // abs-sine
-      case 3: return (p % 0.5) < 0.25 ? SINE_TABLE[(idx * 2) & 1023] : 0; // quarter-sine (pulse)
-      default: return SINE_TABLE[idx & 1023];
-    }
-  }
-
-  // Update envelope for one operator, returns current amplitude (0..1)
-  private updateEnvelope(op: OpState, opIdx: number, dt: number): number {
-    if (op.envState === ENV_OFF) return 0;
-
-    const tl = this.getTotalLevel(opIdx);
-    const maxAmp = 1 - tl; // total level attenuation
-
-    switch (op.envState) {
-      case ENV_ATTACK: {
-        const rate = this.getAttackRate(opIdx);
-        if (rate === 0) { op.envLevel = 1; break; }
-        if (rate >= 15) { op.envLevel = 0; op.envState = ENV_DECAY; break; }
-        const attackTime = ATTACK_TIMES[rate] / 1000;
-        op.envLevel -= dt / attackTime;
-        if (op.envLevel <= 0) { op.envLevel = 0; op.envState = ENV_DECAY; }
-        break;
-      }
-      case ENV_DECAY: {
-        const rate = this.getDecayRate(opIdx);
-        const sl = this.getSustainLevel(opIdx);
-        if (rate === 0) break;
-        const decayTime = DECAY_TIMES[rate] / 1000;
-        op.envLevel += dt / decayTime;
-        if (op.envLevel >= sl) { op.envLevel = sl; op.envState = ENV_SUSTAIN; }
-        break;
-      }
-      case ENV_SUSTAIN:
-        // Stay at sustain level (EG type determines if it stays or decays, simplified here)
-        break;
-      case ENV_RELEASE: {
-        const rate = this.getReleaseRate(opIdx);
-        if (rate === 0) break;
-        const relTime = DECAY_TIMES[rate] / 1000;
-        op.envLevel += dt / relTime;
-        if (op.envLevel >= 1) { op.envLevel = 1; op.envState = ENV_OFF; }
-        break;
-      }
-    }
-
-    const amplitude = (1 - op.envLevel) * maxAmp;
-    return Math.max(0, Math.min(1, amplitude));
-  }
-
-  // Generate one sample at OPL_RATE
-  private generateOneSample(): number {
-    let output = 0;
-    const dt = 1 / OPL_RATE;
-
-    for (let ch = 0; ch < NUM_CHANNELS; ch++) {
-      const freq = this.getChannelFreq(ch);
-      if (freq <= 0) continue;
-
-      const [opIdx1, opIdx2] = CH_OP[ch];
-      const op1 = this.ops[opIdx1];
-      const op2 = this.ops[opIdx2];
-      const connection = this.getConnection(ch);
-      const feedback = this.getFeedback(ch);
-
-      // Update envelopes
-      const amp1 = this.updateEnvelope(op1, opIdx1, dt);
-      const amp2 = this.updateEnvelope(op2, opIdx2, dt);
-
-      if (amp1 === 0 && amp2 === 0) continue;
-
-      const multi1 = this.getMulti(opIdx1);
-      const multi2 = this.getMulti(opIdx2);
-      const wave1 = this.getWaveform(opIdx1);
-      const wave2 = this.getWaveform(opIdx2);
-
-      // Advance phases
-      const phaseInc1 = freq * multi1 / OPL_RATE;
-      const phaseInc2 = freq * multi2 / OPL_RATE;
-      op1.phase += phaseInc1;
-      op2.phase += phaseInc2;
-
-      // Operator 1 (modulator) with feedback
-      let mod1 = 0;
-      if (feedback > 0) {
-        mod1 = (op1.feedback0 + op1.feedback1) / 2 * (1 << (feedback - 1)) / 8;
-      }
-      const out1 = this.waveform(op1.phase + mod1, wave1) * amp1;
-      op1.feedback1 = op1.feedback0;
-      op1.feedback0 = out1;
-
-      if (connection === 0) {
-        // FM: op1 modulates op2
-        const modulation = out1 * 0.5; // modulation depth
-        const out2 = this.waveform(op2.phase + modulation, wave2) * amp2;
-        output += out2;
-      } else {
-        // Additive: both operators output directly
-        output += out1 + this.waveform(op2.phase, wave2) * amp2;
-      }
-    }
-
-    return output / NUM_CHANNELS; // Normalize
-  }
-
-  /** Fill a Float32Array with audio samples at the target sample rate. */
-  generateSamples(out: Float32Array, length: number): void {
-    const ratio = OPL_RATE / this.sampleRate;
-    for (let i = 0; i < length; i++) {
-      this.accumPhase += ratio;
-      while (this.accumPhase >= 1) {
-        this.accumPhase -= 1;
-        this.outputBuf[this.bufPos & 4095] = this.generateOneSample();
-        this.bufPos++;
-      }
-      out[i] = this.outputBuf[(this.bufPos - 1) & 4095];
-    }
-  }
-}
-
-// ---- Sound Blaster DSP (detection only) ----
-
-const SB_DSP_READY = 0xAA;
-const SB_DSP_VERSION_HI = 2;
-const SB_DSP_VERSION_LO = 1;
-
-class SoundBlasterDSP {
-  private resetState = 0; // 0=idle, 1=reset pulse received
-  private dataQueue: number[] = [];
-  private lastCommand = 0;
-
-  reset(): void {
-    this.dataQueue = [SB_DSP_READY]; // After reset, 0xAA is readable
-    this.resetState = 0;
-  }
-
-  writeReset(val: number): void {
-    if (val === 1) {
-      this.resetState = 1;
-    } else if (val === 0 && this.resetState === 1) {
-      this.reset();
-    }
-  }
-
-  writeCommand(val: number): void {
-    switch (val) {
-      case 0xE1: // Get DSP version
-        this.dataQueue.push(SB_DSP_VERSION_HI, SB_DSP_VERSION_LO);
-        break;
-      case 0xD1: // Enable speaker
-      case 0xD3: // Disable speaker
-        break;
-      default:
-        this.lastCommand = val;
-        break;
-    }
-  }
-
-  readData(): number {
-    return this.dataQueue.length > 0 ? this.dataQueue.shift()! : 0xFF;
-  }
-
-  readStatus(): number {
-    // Bit 7: data available to read
-    return this.dataQueue.length > 0 ? 0xFF : 0x7F;
-  }
-}
-
-// ---- PC Speaker ----
-
-class PCSpeaker {
-  private oscillator: OscillatorNode | null = null;
-  private gain: GainNode | null = null;
-  private ctx: AudioContext | null = null;
-  private enabled = false;
-  private frequency = 0;
-
-  constructor(ctx: AudioContext | null) {
-    this.ctx = ctx;
-    if (ctx) {
-      this.gain = ctx.createGain();
-      this.gain.gain.value = 0;
-      this.gain.connect(ctx.destination);
-    }
-  }
-
-  update(port61: number, pitReload: number): void {
-    const speakerOn = (port61 & 0x03) === 0x03; // both gate and enable
-    const freq = pitReload > 0 ? 1193182 / pitReload : 0;
-
-    if (speakerOn && freq >= 20 && freq <= 20000) {
-      if (!this.enabled || Math.abs(this.frequency - freq) > 0.5) {
-        this.frequency = freq;
-        this.startTone(freq);
-      }
-      this.enabled = true;
-    } else {
-      if (this.enabled) {
-        this.stopTone();
-      }
-      this.enabled = false;
-    }
-  }
-
-  private startTone(freq: number): void {
-    if (!this.ctx || !this.gain) return;
-    if (!this.oscillator) {
-      this.oscillator = this.ctx.createOscillator();
-      this.oscillator.type = 'square';
-      this.oscillator.connect(this.gain);
-      this.oscillator.start();
-    }
-    this.oscillator.frequency.setValueAtTime(freq, this.ctx.currentTime);
-    this.gain.gain.setValueAtTime(0.08, this.ctx.currentTime); // Low volume for speaker
-  }
-
-  private stopTone(): void {
-    if (this.gain && this.ctx) {
-      this.gain.gain.setValueAtTime(0, this.ctx.currentTime);
-    }
-  }
-
-  destroy(): void {
-    this.stopTone();
-    if (this.oscillator) {
-      this.oscillator.stop();
-      this.oscillator.disconnect();
-      this.oscillator = null;
-    }
-    if (this.gain) {
-      this.gain.disconnect();
-      this.gain = null;
-    }
-  }
-}
-
-// ---- DosAudio: ties everything together ----
+// Re-export component classes for external consumers
+export { OPL2 } from './opl2';
+export { DMAController } from './dma';
+export { SoundBlasterDSP, SB_IRQ } from './soundblaster';
+export { PCSpeaker } from './pc-speaker';
 
 export class DosAudio {
   private opl2: OPL2;
   private speaker: PCSpeaker;
   private sbDsp: SoundBlasterDSP;
+  readonly dma = new DMAController();
   private ctx: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
   private started = false;
@@ -393,11 +29,26 @@ export class DosAudio {
   private sharedBuf: Float32Array | null = null;
   private writePos = 0;
   private fillTimer = 0;
+  /** Callback to read a byte from emulator memory (set by emu-load). */
+  readMemory: (addr: number) => number = () => 0;
+  /** Callback to write a byte to emulator memory (set by emu-load). */
+  writeMemory: (addr: number, val: number) => void = () => {};
+  /** Callback to queue a hardware interrupt (set by emu-load). */
+  onSBIRQ: () => void = () => {};
 
   constructor() {
     this.opl2 = new OPL2(44100); // will be updated when AudioContext is created
     this.speaker = new PCSpeaker(null);
     this.sbDsp = new SoundBlasterDSP();
+    // Wire DSP IRQ callback through to our onSBIRQ (which gets set by emu-load)
+    this.sbDsp.onIRQ = () => this.onSBIRQ();
+    // Wire OPL2 timer IRQ through the same IRQ 7 path
+    this.opl2.onTimerIRQ = () => this.onSBIRQ();
+    // Wire E2 DMA identification — writes a computed byte to DMA channel 0 address
+    this.sbDsp.onE2Write = (value: number) => {
+      const addr = this.dma.getPhysicalAddr(0);
+      this.writeMemory(addr, value);
+    };
   }
 
   /** Initialize audio (must be called from user gesture). */
@@ -406,7 +57,8 @@ export class DosAudio {
     this.ctx = audioContext;
     this.started = true;
 
-    this.opl2 = new OPL2(audioContext.sampleRate);
+    this.opl2.setSampleRate(audioContext.sampleRate);
+    this.opl2.onTimerIRQ = () => this.onSBIRQ();
     this.speaker = new PCSpeaker(audioContext);
 
     // Use SharedArrayBuffer if available for lock-free audio, otherwise fall back
@@ -459,7 +111,10 @@ class OPLProcessor extends AudioWorkletProcessor {
     return true;
   }
 }
-registerProcessor('opl-processor', OPLProcessor);`;
+if (!globalThis._oplRegistered) {
+  registerProcessor('opl-processor', OPLProcessor);
+  globalThis._oplRegistered = true;
+}`;
 
     const blob = new Blob([processorCode], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
@@ -474,37 +129,55 @@ registerProcessor('opl-processor', OPLProcessor);`;
       node.connect(this.ctx.destination);
       this.workletNode = node;
 
+      // Use setInterval so audio generates even when the tab is in the background.
+      // Track real time to generate exactly the right number of samples (no over/under-production).
+      const FILL_INTERVAL_MS = 10;
+      const sampleRate = audioContext.sampleRate;
+      let lastFillTime = performance.now();
       if (ringBuf) {
         this.sharedBuf = new Float32Array(ringBuf, 0, RING_SIZE);
-        // Periodically generate OPL2 samples into the shared ring buffer
         const pointers = new Int32Array(ringBuf, RING_SIZE * 4, 2);
-        const tmpBuf = new Float32Array(512);
         const fill = () => {
           if (!this.ctx) return;
+          const now = performance.now();
+          const elapsed = (now - lastFillTime) / 1000; // seconds
+          // Cap to avoid huge bursts after tab regains focus
+          const samplesToGen = Math.min(Math.floor(elapsed * sampleRate), RING_SIZE / 2) & ~1;
+          if (samplesToGen <= 0) return;
+
           const rp = Atomics.load(pointers, 1);
           const wp = this.writePos;
           const available = RING_SIZE - (wp - rp);
-          if (available > 512) {
-            this.opl2.generateSamples(tmpBuf, 512);
-            for (let i = 0; i < 512; i++) {
-              this.sharedBuf![((wp + i) % RING_SIZE)] = tmpBuf[i];
-            }
-            this.writePos = wp + 512;
-            Atomics.store(pointers, 0, this.writePos);
+          const count = Math.min(samplesToGen, available);
+          if (count <= 0) return;
+
+          const tmpBuf = new Float32Array(count);
+          this.opl2.generateSamples(tmpBuf, count);
+          this.mixPCM(tmpBuf, count);
+          for (let i = 0; i < count; i++) {
+            this.sharedBuf![((wp + i) % RING_SIZE)] = tmpBuf[i];
           }
-          this.fillTimer = requestAnimationFrame(fill) as unknown as number;
+          this.writePos = wp + count;
+          Atomics.store(pointers, 0, this.writePos);
+          lastFillTime = now;
         };
-        this.fillTimer = requestAnimationFrame(fill) as unknown as number;
+        this.fillTimer = setInterval(fill, FILL_INTERVAL_MS) as unknown as number;
       } else {
-        // Fallback: periodically post samples via message port
-        const tmpBuf = new Float32Array(512);
+        // Fallback: periodically post samples via message port, with time tracking
         const fill = () => {
           if (!this.workletNode) return;
-          this.opl2.generateSamples(tmpBuf, 512);
+          const now = performance.now();
+          const elapsed = (now - lastFillTime) / 1000;
+          const samplesToGen = Math.min(Math.floor(elapsed * sampleRate), 2048);
+          if (samplesToGen <= 0) return;
+
+          const tmpBuf = new Float32Array(samplesToGen);
+          this.opl2.generateSamples(tmpBuf, samplesToGen);
+          this.mixPCM(tmpBuf, samplesToGen);
           this.workletNode.port.postMessage({ samples: Array.from(tmpBuf) });
-          this.fillTimer = requestAnimationFrame(fill) as unknown as number;
+          lastFillTime = now;
         };
-        this.fillTimer = requestAnimationFrame(fill) as unknown as number;
+        this.fillTimer = setInterval(fill, FILL_INTERVAL_MS) as unknown as number;
       }
     }).catch(() => {
       // AudioWorklet not supported — no OPL2 audio (PC speaker still works)
@@ -520,8 +193,29 @@ registerProcessor('opl-processor', OPLProcessor);`;
 
     // Sound Blaster DSP ports (base 0x220)
     if (port === 0x22A) return this.sbDsp.readData();    // Read data
-    if (port === 0x22E) return this.sbDsp.readStatus();   // Read status (data available?)
+    if (port === 0x22E) {
+      // Reading status port also acknowledges SB IRQ
+      if (this.sbDsp.irqPending) this.sbDsp.ackIRQ();
+      return this.sbDsp.readStatus();
+    }
     if (port === 0x22C) return 0x00; // Write status — always ready (bit 7 = 0)
+
+    // DMA controller ports (channels 0-3)
+    if (port === 0x00) return this.dma.readAddr(0);
+    if (port === 0x01) return this.dma.readCount(0);
+    if (port === 0x02) return this.dma.readAddr(1);
+    if (port === 0x03) return this.dma.readCount(1);
+    if (port === 0x04) return this.dma.readAddr(2);
+    if (port === 0x05) return this.dma.readCount(2);
+    if (port === 0x06) return this.dma.readAddr(3);
+    if (port === 0x07) return this.dma.readCount(3);
+    if (port === 0x08) return this.dma.readStatus();
+
+    // DMA page registers
+    if (port === 0x87) return this.dma.page[0];
+    if (port === 0x83) return this.dma.page[1];
+    if (port === 0x81) return this.dma.page[2];
+    if (port === 0x82) return this.dma.page[3];
 
     return -1; // Not an audio port
   }
@@ -536,7 +230,64 @@ registerProcessor('opl-processor', OPLProcessor);`;
     if (port === 0x226) { this.sbDsp.writeReset(value); return true; }
     if (port === 0x22C) { this.sbDsp.writeCommand(value); return true; }
 
+    // DMA controller ports (channels 0-3)
+    if (port === 0x00) { this.dma.writeAddr(0, value); return true; }
+    if (port === 0x01) { this.dma.writeCount(0, value); return true; }
+    if (port === 0x02) { this.dma.writeAddr(1, value); return true; }
+    if (port === 0x03) { this.dma.writeCount(1, value); return true; }
+    if (port === 0x04) { this.dma.writeAddr(2, value); return true; }
+    if (port === 0x05) { this.dma.writeCount(2, value); return true; }
+    if (port === 0x06) { this.dma.writeAddr(3, value); return true; }
+    if (port === 0x07) { this.dma.writeCount(3, value); return true; }
+    if (port === 0x08) { /* command register — not needed for SB */ return true; }
+    if (port === 0x09) { /* request register */ return true; }
+    if (port === 0x0A) { this.dma.writeSingleMask(value); return true; }
+    if (port === 0x0B) { this.dma.writeMode(value); return true; }
+    if (port === 0x0C) { this.dma.clearFlipFlop(); return true; }
+    if (port === 0x0D) { this.dma.masterClear(); return true; }
+    if (port === 0x0E) { this.dma.mask = 0; return true; } // clear all masks
+    if (port === 0x0F) { this.dma.writeAllMask(value); return true; }
+
+    // DMA page registers
+    if (port === 0x87) { this.dma.page[0] = value; return true; }
+    if (port === 0x83) { this.dma.page[1] = value; return true; }
+    if (port === 0x81) { this.dma.page[2] = value; return true; }
+    if (port === 0x82) { this.dma.page[3] = value; return true; }
+
     return false; // Not an audio port
+  }
+
+  /**
+   * Advance DMA transfer and check OPL2 timers. Called from main tick loop.
+   * Fires IRQ 7 (via onSBIRQ callback) when a transfer block completes
+   * or an OPL2 timer expires.
+   */
+  tickDMA(): void {
+    if (this.sbDsp.tickDMA(this.dma, this.readMemory)) {
+      this.onSBIRQ();
+    }
+    this.opl2.tickTimers();
+  }
+
+  /** Mix SB PCM samples into the output buffer (additive, resampled). */
+  private pcmAccum = 0;
+  private mixPCM(buf: Float32Array, length: number): void {
+    const dsp = this.sbDsp;
+    const avail = (dsp.pcmWritePos - dsp.pcmReadPos) & 0xFFFF;
+    if (avail === 0) return;
+    const sbRate = dsp.getSampleRate();
+    const outRate = this.ctx?.sampleRate ?? 44100;
+    const ratio = sbRate / outRate;
+    for (let i = 0; i < length; i++) {
+      this.pcmAccum += ratio;
+      while (this.pcmAccum >= 1 && dsp.pcmReadPos !== dsp.pcmWritePos) {
+        this.pcmAccum -= 1;
+        dsp.pcmReadPos = (dsp.pcmReadPos + 1) & 0xFFFF;
+      }
+      if (((dsp.pcmWritePos - dsp.pcmReadPos) & 0xFFFF) > 0) {
+        buf[i] += dsp.pcmRing[dsp.pcmReadPos & 0xFFFF] * 0.5;
+      }
+    }
   }
 
   /** Update PC speaker state (call when port 0x61 or PIT ch2 changes). */
@@ -546,7 +297,7 @@ registerProcessor('opl-processor', OPLProcessor);`;
 
   destroy(): void {
     this.speaker.destroy();
-    if (this.fillTimer) cancelAnimationFrame(this.fillTimer);
+    if (this.fillTimer) clearInterval(this.fillTimer);
     if (this.workletNode) {
       this.workletNode.disconnect();
       this.workletNode = null;

@@ -16,7 +16,57 @@ const IF = 0x200;
 const DF = 0x400;
 const OF = 0x800;
 
+function raiseDivideError(cpu: CPU, instrEip: number): void {
+  // Dispatch INT 0 (Divide Error) like a real x86 CPU.
+  // The faulting instruction's CS:IP is pushed so the handler knows where the error occurred.
+  const csBase = (cpu.cs << 4) >>> 0;
+  const ip = (instrEip - csBase) & 0xFFFF;
+  console.warn(`[DIV ERROR] at CS:IP=${cpu.cs.toString(16)}:${ip.toString(16)} (linear 0x${instrEip.toString(16)}) AX=0x${(cpu.reg[0] & 0xFFFF).toString(16)} BX=0x${(cpu.reg[3] & 0xFFFF).toString(16)} CX=0x${(cpu.reg[1] & 0xFFFF).toString(16)} DX=0x${(cpu.reg[2] & 0xFFFF).toString(16)}`);
+  // Dump the faulting instruction bytes
+  const bytes: string[] = [];
+  for (let i = 0; i < 8; i++) bytes.push(cpu.mem.readU8((instrEip + i) >>> 0).toString(16).padStart(2, '0'));
+  console.warn(`[DIV ERROR] bytes: ${bytes.join(' ')}`);
+  cpu.eip = instrEip; // rewind to faulting instruction
+  if (cpu.emu && handleDosInt(cpu, 0, cpu.emu)) {
+    return; // handler installed — let it run
+  }
+  // No handler — halt
+  cpu.haltReason = 'integer divide by zero';
+  cpu.halted = true;
+}
+
+export function dumpInstrTrace(): void {}
+const _instrRing: string[] = new Array(200).fill('');
+let _instrRingIdx = 0;
+let _instrRingDumped = false;
+
 export function cpuStep(cpu: CPU): void {
+  const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
+  // Per-instruction trace ring buffer (disabled for perf)
+  if (false && cpu.emu && cpu.emu.cpuSteps > 90000000) {
+    const csBase_t = (cpu.cs << 4) >>> 0;
+    const ip_t = (instrEip - csBase_t) & 0xFFFF;
+    const ax = cpu.reg[0] & 0xFFFF, bx = cpu.reg[3] & 0xFFFF, cx = cpu.reg[1] & 0xFFFF, dx = cpu.reg[2] & 0xFFFF;
+    const sp_t = cpu.reg[4] & 0xFFFF, bp_t = cpu.reg[5] & 0xFFFF;
+    const si_t = cpu.reg[6] & 0xFFFF, di_t = cpu.reg[7] & 0xFFFF;
+    const b0 = cpu.mem.readU8(instrEip), b1 = cpu.mem.readU8((instrEip+1)>>>0), b2 = cpu.mem.readU8((instrEip+2)>>>0);
+    _instrRing[_instrRingIdx % 200] = `${cpu.cs.toString(16)}:${ip_t.toString(16).padStart(4,'0')} [${b0.toString(16).padStart(2,'0')} ${b1.toString(16).padStart(2,'0')} ${b2.toString(16).padStart(2,'0')}] AX=${ax.toString(16)} BX=${bx.toString(16)} CX=${cx.toString(16)} DX=${dx.toString(16)} SP=${sp_t.toString(16)} BP=${bp_t.toString(16)} SI=${si_t.toString(16)} DI=${di_t.toString(16)} SS=${cpu.ss.toString(16)} DS=${cpu.ds.toString(16)} ES=${cpu.es.toString(16)}`;
+    _instrRingIdx++;
+    // Dump when we hit the XMS stub with srcOffset=0 for handle 12
+    if (cpu.cs === 0xf000 && ip_t === 0x0800 && !_instrRingDumped && (cpu.reg[0] >>> 8) === 0x0B) {
+      // Check if this is the bad XMS move (srcHandle=12, srcOffset=0)
+      const structAddr2 = cpu.segBase(cpu.ds) + (cpu.reg[6] & 0xFFFF);
+      const srcH = cpu.mem.readU16(structAddr2 + 4);
+      const srcO = cpu.mem.readU32(structAddr2 + 6);
+      if (srcH === 12 && srcO === 0) {
+      _instrRingDumped = true;
+      console.warn(`[TRACE] Last 200 instructions before bad XMS move (step ${cpu.emu.cpuSteps}):`);
+      for (let i = 0; i < 200; i++) {
+        const idx = (_instrRingIdx - 200 + i) % 200;
+        if (_instrRing[idx]) console.warn(`  ${_instrRing[idx]}`);
+      }
+    }}
+  }
   let prefix66 = false;  // operand-size override
   let prefix67 = false;  // address-size override
   let prefixF2 = false;  // REPNE
@@ -239,9 +289,34 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // BOUND r32, m32&32 — check array index against bounds
+    // BOUND r16/32, m16/32&16/32 — check array index against bounds
     case 0x62: {
-      cpu.decodeModRM(32);
+      const d = cpu.decodeModRM(opSize);
+      if (d.isReg) break; // undefined for register operand
+      if (opSize === 16) {
+        const idx = d.regField;
+        const val = cpu.getReg16(idx) << 16 >> 16; // sign-extend
+        const lo = cpu.mem.readI16(d.addr);
+        const hi = cpu.mem.readI16((d.addr + 2) >>> 0);
+        if (val < lo || val > hi) {
+          // BOUND range exceeded — dispatch INT 5
+          cpu.eip = instrEip;
+          if (cpu.emu && handleDosInt(cpu, 5, cpu.emu)) break;
+          cpu.haltReason = 'BOUND range exceeded';
+          cpu.halted = true;
+        }
+      } else {
+        const idx = d.regField;
+        const val = cpu.reg[idx] | 0;
+        const lo = cpu.mem.readI32(d.addr);
+        const hi = cpu.mem.readI32((d.addr + 4) >>> 0);
+        if (val < lo || val > hi) {
+          cpu.eip = instrEip;
+          if (cpu.emu && handleDosInt(cpu, 5, cpu.emu)) break;
+          cpu.haltReason = 'BOUND range exceeded';
+          cpu.halted = true;
+        }
+      }
       break;
     }
 
@@ -310,9 +385,13 @@ export function cpuStep(cpu: CPU): void {
       const delta = cpu.getFlag(DF) ? -1 : 1;
       const doOne = () => {
         const val = cpu.emu?.portIn(port) ?? 0xFF;
-        const addr = cpu._addrSize16
-          ? (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0
-          : cpu.reg[EDI] >>> 0;
+        let addr: number;
+        if (cpu._addrSize16) {
+          addr = (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0;
+        } else {
+          addr = cpu.reg[EDI] >>> 0;
+          if (!cpu.use32) addr = (cpu.segBase(cpu.es) + addr) >>> 0;
+        }
         cpu.mem.writeU8(addr, val);
         if (cpu._addrSize16) {
           cpu.reg[EDI] = (cpu.reg[EDI] & ~0xFFFF) | (((cpu.reg[EDI] & 0xFFFF) + delta) & 0xFFFF);
@@ -343,9 +422,13 @@ export function cpuStep(cpu: CPU): void {
       const delta = cpu.getFlag(DF) ? -unitSize : unitSize;
       const doOne = () => {
         const val = cpu.emu?.portIn(port) ?? (unitSize === 2 ? 0xFFFF : 0xFFFFFFFF);
-        const addr = cpu._addrSize16
-          ? (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0
-          : cpu.reg[EDI] >>> 0;
+        let addr: number;
+        if (cpu._addrSize16) {
+          addr = (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0;
+        } else {
+          addr = cpu.reg[EDI] >>> 0;
+          if (!cpu.use32) addr = (cpu.segBase(cpu.es) + addr) >>> 0;
+        }
         if (unitSize === 2) cpu.mem.writeU16(addr, val & 0xFFFF);
         else cpu.mem.writeU32(addr, val >>> 0);
         if (cpu._addrSize16) {
@@ -375,10 +458,16 @@ export function cpuStep(cpu: CPU): void {
       const rep = prefixF3 || prefixF2;
       const delta = cpu.getFlag(DF) ? -1 : 1;
       const doOne = () => {
-        const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
-        const addr = cpu._addrSize16
-          ? (cpu.segBase(segSel) + (cpu.reg[ESI] & 0xFFFF)) >>> 0
-          : cpu.reg[ESI] >>> 0;
+        let addr: number;
+        if (cpu._addrSize16) {
+          const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
+          addr = (cpu.segBase(segSel) + (cpu.reg[ESI] & 0xFFFF)) >>> 0;
+        } else {
+          addr = cpu.reg[ESI] >>> 0;
+          if (cpu._segOverride === 0x64) addr = (addr + cpu.fsBase) >>> 0;
+          else if (cpu._segOverride) addr = (addr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+          else if (!cpu.use32) addr = (addr + cpu.segBase(cpu.ds)) >>> 0;
+        }
         const val = cpu.mem.readU8(addr);
         cpu.emu?.portOut(port, val);
         if (cpu._addrSize16) {
@@ -409,10 +498,16 @@ export function cpuStep(cpu: CPU): void {
       const rep = prefixF3 || prefixF2;
       const delta = cpu.getFlag(DF) ? -unitSize : unitSize;
       const doOne = () => {
-        const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
-        const addr = cpu._addrSize16
-          ? (cpu.segBase(segSel) + (cpu.reg[ESI] & 0xFFFF)) >>> 0
-          : cpu.reg[ESI] >>> 0;
+        let addr: number;
+        if (cpu._addrSize16) {
+          const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
+          addr = (cpu.segBase(segSel) + (cpu.reg[ESI] & 0xFFFF)) >>> 0;
+        } else {
+          addr = cpu.reg[ESI] >>> 0;
+          if (cpu._segOverride === 0x64) addr = (addr + cpu.fsBase) >>> 0;
+          else if (cpu._segOverride) addr = (addr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+          else if (!cpu.use32) addr = (addr + cpu.segBase(cpu.ds)) >>> 0;
+        }
         const val = unitSize === 2 ? cpu.mem.readU16(addr) : cpu.mem.readU32(addr);
         cpu.emu?.portOut(port, val);
         if (cpu._addrSize16) {
@@ -594,13 +689,12 @@ export function cpuStep(cpu: CPU): void {
     // LEA r32, m — loads effective address (offset only, no segment base)
     case 0x8D: {
       const d = cpu.decodeModRM(opSize) as { isReg: boolean; regField: number; val: number; addr: number; ea?: number };
-      if (cpu._addrSize16 && d.ea !== undefined) {
-        // In 16-bit mode, use the raw effective address (without segment base)
-        cpu.setReg16(d.regField, d.ea & 0xFFFF);
-      } else if (opSize === 16) {
-        cpu.setReg16(d.regField, d.addr & 0xFFFF);
+      // Use raw EA (without segment base) — LEA computes offset only
+      const leaAddr = d.ea !== undefined ? d.ea : d.addr;
+      if (opSize === 16) {
+        cpu.setReg16(d.regField, leaAddr & 0xFFFF);
       } else {
-        cpu.reg[d.regField] = d.addr | 0;
+        cpu.reg[d.regField] = leaAddr | 0;
       }
       break;
     }
@@ -711,7 +805,10 @@ export function cpuStep(cpu: CPU): void {
         maddr = ((cpu.segBase(segSel)) + maddr) >>> 0;
       } else {
         maddr = cpu.fetch32();
-        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0; else maddr >>>= 0;
+        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
+        else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
+        else maddr >>>= 0;
       }
       cpu.setReg8(EAX, cpu.mem.readU8(maddr));
       break;
@@ -726,7 +823,10 @@ export function cpuStep(cpu: CPU): void {
         maddr = ((cpu.segBase(segSel)) + maddr) >>> 0;
       } else {
         maddr = cpu.fetch32();
-        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0; else maddr >>>= 0;
+        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
+        else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
+        else maddr >>>= 0;
       }
       if (opSize === 16) cpu.setReg16(EAX, cpu.mem.readU16(maddr));
       else cpu.reg[EAX] = cpu.mem.readU32(maddr) | 0;
@@ -742,7 +842,10 @@ export function cpuStep(cpu: CPU): void {
         maddr = ((cpu.segBase(segSel)) + maddr) >>> 0;
       } else {
         maddr = cpu.fetch32();
-        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0; else maddr >>>= 0;
+        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
+        else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
+        else maddr >>>= 0;
       }
       cpu.mem.writeU8(maddr, cpu.getReg8(EAX));
       break;
@@ -757,7 +860,10 @@ export function cpuStep(cpu: CPU): void {
         maddr = ((cpu.segBase(segSel)) + maddr) >>> 0;
       } else {
         maddr = cpu.fetch32();
-        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0; else maddr >>>= 0;
+        if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
+        else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
+        else maddr >>>= 0;
       }
       if (opSize === 16) cpu.mem.writeU16(maddr, cpu.getReg16(EAX));
       else cpu.mem.writeU32(maddr, cpu.reg[EAX] >>> 0);
@@ -989,9 +1095,11 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
 
-    // INT 3
+    // INT 3 — dispatch like any software interrupt (UCDOS uses this as API entry)
     case 0xCC:
-      console.warn(`INT 3 at 0x${((cpu.eip - 1) >>> 0).toString(16)}`);
+      if (cpu.emu && handleDosInt(cpu, 3, cpu.emu)) {
+        break;
+      }
       break;
 
     // ICEBP / INT1 — debug breakpoint, treat as NOP
@@ -1001,7 +1109,12 @@ export function cpuStep(cpu: CPU): void {
     // INTO — INT 4 if OF=1
     case 0xCE:
       if (cpu.getFlag(OF)) {
-        console.warn(`INTO triggered at 0x${((cpu.eip - 1) >>> 0).toString(16)}`);
+        if (cpu.emu && cpu.emu.cpuSteps > 70000000) {
+          const csBase_into = (cpu.cs << 4) >>> 0;
+          const ip_into = (instrEip - csBase_into) & 0xFFFF;
+          console.warn(`[INTO] CS:IP=${cpu.cs.toString(16)}:${ip_into.toString(16)} AX=${(cpu.reg[EAX]&0xFFFF).toString(16)} DX=${(cpu.reg[EDX]&0xFFFF).toString(16)} SP=${(cpu.reg[ESP]&0xFFFF).toString(16)} steps=${cpu.emu.cpuSteps}`);
+        }
+        if (cpu.emu && handleDosInt(cpu, 4, cpu.emu)) break;
       }
       break;
 
@@ -1257,8 +1370,9 @@ export function cpuStep(cpu: CPU): void {
         case 6: { // DIV r/m8
           const dividend = cpu.getReg16(EAX);
           const divisor = d.val & 0xFF;
-          if (divisor === 0) { cpu.haltReason = 'integer divide by zero'; cpu.halted = true; break; }
+          if (divisor === 0) { raiseDivideError(cpu, instrEip); break; }
           const quot = (dividend / divisor) >>> 0;
+          if (quot > 0xFF) { raiseDivideError(cpu, instrEip); break; }
           const rem = dividend % divisor;
           cpu.setReg8(EAX, quot & 0xFF);
           cpu.setReg8(4, rem & 0xFF); // AH
@@ -1267,8 +1381,9 @@ export function cpuStep(cpu: CPU): void {
         case 7: { // IDIV r/m8
           const dividend = cpu.getReg16(EAX) << 16 >> 16;
           const divisor = d.val << 24 >> 24;
-          if (divisor === 0) { cpu.haltReason = 'integer divide by zero'; cpu.halted = true; break; }
+          if (divisor === 0) { raiseDivideError(cpu, instrEip); break; }
           const quot = (dividend / divisor) | 0;
+          if (quot < -0x80 || quot > 0x7F) { raiseDivideError(cpu, instrEip); break; }
           const rem = dividend - quot * divisor;
           cpu.setReg8(EAX, quot & 0xFF);
           cpu.setReg8(4, rem & 0xFF);
@@ -1350,16 +1465,18 @@ export function cpuStep(cpu: CPU): void {
           if (opSize === 16) {
             const dividend = ((cpu.getReg16(EDX) & 0xFFFF) << 16) | (cpu.getReg16(EAX) & 0xFFFF);
             const divisor = d.val & 0xFFFF;
-            if (divisor === 0) { cpu.haltReason = 'integer divide by zero'; cpu.halted = true; break; }
+            if (divisor === 0) { raiseDivideError(cpu, instrEip); break; }
             const quot = (dividend >>> 0) / divisor >>> 0;
+            if (quot > 0xFFFF) { raiseDivideError(cpu, instrEip); break; }
             const rem = (dividend >>> 0) % divisor;
             cpu.setReg16(EAX, quot & 0xFFFF);
             cpu.setReg16(EDX, rem & 0xFFFF);
           } else {
             const dividend = (BigInt(cpu.reg[EDX] >>> 0) << 32n) | BigInt(cpu.reg[EAX] >>> 0);
             const divisor = BigInt(d.val >>> 0);
-            if (divisor === 0n) { cpu.haltReason = 'integer divide by zero'; cpu.halted = true; break; }
+            if (divisor === 0n) { raiseDivideError(cpu, instrEip); break; }
             const quot = dividend / divisor;
+            if (quot > 0xFFFFFFFFn) { raiseDivideError(cpu, instrEip); break; }
             const rem = dividend % divisor;
             cpu.reg[EAX] = Number(quot & 0xFFFFFFFFn) | 0;
             cpu.reg[EDX] = Number(rem & 0xFFFFFFFFn) | 0;
@@ -1370,16 +1487,18 @@ export function cpuStep(cpu: CPU): void {
           if (opSize === 16) {
             const dividend = ((cpu.getReg16(EDX) << 16) | (cpu.getReg16(EAX) & 0xFFFF)) | 0;
             const divisor = d.val << 16 >> 16;
-            if (divisor === 0) { cpu.haltReason = 'integer divide by zero'; cpu.halted = true; break; }
+            if (divisor === 0) { raiseDivideError(cpu, instrEip); break; }
             const quot = (dividend / divisor) | 0;
+            if (quot < -0x8000 || quot > 0x7FFF) { raiseDivideError(cpu, instrEip); break; }
             const rem = dividend - quot * divisor;
             cpu.setReg16(EAX, quot & 0xFFFF);
             cpu.setReg16(EDX, rem & 0xFFFF);
           } else {
             const dividend = (BigInt(cpu.reg[EDX] | 0) << 32n) | BigInt(cpu.reg[EAX] >>> 0);
             const divisor = BigInt(d.val | 0);
-            if (divisor === 0n) { cpu.haltReason = 'integer divide by zero'; cpu.halted = true; break; }
+            if (divisor === 0n) { raiseDivideError(cpu, instrEip); break; }
             const quot = dividend / divisor;
+            if (quot < -0x80000000n || quot > 0x7FFFFFFFn) { raiseDivideError(cpu, instrEip); break; }
             const rem = dividend - quot * divisor;
             cpu.reg[EAX] = Number(BigInt.asIntN(32, quot)) | 0;
             cpu.reg[EDX] = Number(BigInt.asIntN(32, rem)) | 0;
@@ -1582,13 +1701,16 @@ export function cpuStep(cpu: CPU): void {
     // XLAT — AL = [DS:BX+AL] or [DS:EBX+AL]
     case 0xD7: {
       const al = cpu.getReg8(EAX);
-      const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
       let addr: number;
       if (cpu._addrSize16) {
         const bx = cpu.getReg16(EBX);
+        const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
         addr = (cpu.segBase(segSel) + ((bx + al) & 0xFFFF)) >>> 0;
       } else {
         addr = ((cpu.reg[EBX] + al) >>> 0);
+        if (cpu._segOverride === 0x64) addr = (addr + cpu.fsBase) | 0;
+        else if (cpu._segOverride) addr = (addr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+        else if (!cpu.use32) addr = (addr + cpu.segBase(cpu.ds)) >>> 0;
       }
       cpu.setReg8(EAX, cpu.mem.readU8(addr));
       break;

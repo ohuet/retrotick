@@ -1,7 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'preact/hooks';
 import type { PEInfo, MenuResult } from '../lib/pe/types';
-import { parsePE, extractMenus, extractIcons } from '../lib/pe';
+import { parsePE, parseCOM, extractMenus, extractIcons } from '../lib/pe';
 import { Emulator } from '../lib/emu/emulator';
 import type { DialogInfo, DialogControlInfo, ControlOverlay, ProcessRegistry, CommonDialogRequest } from '../lib/emu/emulator';
 import type { WindowInfo } from '../lib/emu/win32/user32/index';
@@ -39,6 +39,7 @@ interface EmulatorViewProps {
   onReady?: () => void;
   onRunExe?: (arrayBuffer: ArrayBuffer, peInfo: PEInfo, additionalFiles?: Map<string, ArrayBuffer>, exeName?: string, commandLine?: string, onSetupEmulator?: (emu: Emulator) => void) => void;
   onSetupEmulator?: (emu: Emulator) => void;
+  audioContext?: AudioContext | null;
   onTitleChange?: (title: string) => void;
   onIconChange?: (iconUrl: string | null) => void;
   onMinimize?: () => void;
@@ -318,14 +319,8 @@ function renderControlOverlay(
       emu.postMessage(emu.mainWindow, WM_COMMAND, ctrl.controlId, ctrl.childHwnd);
     }
 
-    // Ensure AudioContext is running — must be created/resumed during user gesture
-    if (!emu.audioContext || emu.audioContext.state === 'suspended') {
-      const oldState = emu.audioContext?.state;
-      if (emu.audioContext) emu.audioContext.close();
-      emu.audioContext = new AudioContext();
-      if (emu.isDOS) emu.dosAudio.init(emu.audioContext);
-      console.log(`[AUDIO] postCommand: replaced ctx (was ${oldState}) → new state=${emu.audioContext.state}`);
-    }
+    // Resume AudioContext if suspended (user gesture)
+    if (emu.audioContext?.state === 'suspended') emu.audioContext.resume();
   };
 
   const isDisabled = !!(ctrl.style & 0x08000000); // WS_DISABLED
@@ -1275,7 +1270,7 @@ function FindDialog({ findTerm, onTermChange, onFindNext, onClose, focused, pare
 
 // --- Main EmulatorView ---
 
-export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onSetupEmulator, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
+export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onSetupEmulator, audioContext: sharedAudioContext, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
   const exeBaseName = exeName.split(/[/\\]/).pop() || exeName;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const emuRef = useRef<Emulator | null>(null);
@@ -1404,6 +1399,12 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           onStop();
         }
       });
+
+      // Assign shared AudioContext — created in App during user gesture
+      if (sharedAudioContext) {
+        emu.audioContext = sharedAudioContext;
+        if (emu.isDOS) emu.dosAudio.init(sharedAudioContext);
+      }
 
       // Console app detection
       if (emu.isConsole) {
@@ -1551,7 +1552,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         const lowerName = childExeName.toLowerCase();
         for (const [name, data] of emu.additionalFiles) {
           if (name.toLowerCase() === lowerName) {
-            const childPe = parsePE(data);
+            const childPe = lowerName.endsWith('.com') ? parseCOM(data) : parsePE(data);
             // Pass all additionalFiles to the child too
             onRunExe(data, childPe, emu.additionalFiles, name, childCmdLine);
             return;
@@ -1573,7 +1574,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }
         if (!childData) return;
 
-        const childPeInfo = parsePE(childData);
+        const childPeInfo = lowerName.endsWith('.com') ? parseCOM(childData) : parsePE(childData);
         const procData = emu.handles.get<Record<string, unknown>>(hProcess);
 
         // Create child emulator in-process
@@ -1843,14 +1844,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     if (emu.messageBoxes.length > 0) return;
     if (emu.dialogState) return;
 
-    // Ensure AudioContext is running — must be created/resumed during user gesture
-    if (!emu.audioContext || emu.audioContext.state === 'suspended') {
-      const oldState = emu.audioContext?.state;
-      if (emu.audioContext) emu.audioContext.close();
-      emu.audioContext = new AudioContext();
-      if (emu.isDOS) emu.dosAudio.init(emu.audioContext);
-      console.log(`[AUDIO] handlePointerEvent: replaced ctx (was ${oldState}) → new state=${emu.audioContext.state}`);
-    }
+    // Resume AudioContext if suspended (user gesture)
+    if (emu.audioContext?.state === 'suspended') emu.audioContext.resume();
 
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();

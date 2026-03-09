@@ -1,6 +1,7 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 import { dosResolvePath } from './path';
+import { dumpInstrTrace } from '../x86/dispatch';
 import { teletypeOutput } from './video';
 import {
   dosSetDTA, dosGetDTA,
@@ -18,25 +19,56 @@ const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
 const CF = 0x001;
 const ZF = 0x040;
 
+// Debug: circular trace buffer for INT 21h calls
+const _int21Trace: string[] = [];
+const _INT21_TRACE_MAX = 1000;
+let _errorTraceDumped = false;
+
+/** Return from child to parent after EXEC. Returns true if handled (child was running). */
+function dosExecReturn(cpu: CPU, emu: Emulator, exitCode: number): boolean {
+  if (emu._dosExecStack.length === 0) return false;
+
+  // Free child's MCB
+  const childPsp = emu._dosPSP;
+  const childMcbLin = (childPsp - 1) * 16;
+  const mcbType = cpu.mem.readU8(childMcbLin);
+  if (mcbType === 0x4D || mcbType === 0x5A) {
+    cpu.mem.writeU16(childMcbLin + 1, 0x0000); // mark free
+  }
+
+  const parent = emu._dosExecStack.pop()!;
+  emu._dosPSP = parent.psp;
+  emu._dosDTA = parent.dta;
+  emu._dosExitCode = exitCode;
+  cpu.reg.set(parent.regs);
+  cpu.cs = parent.cs;
+  cpu.ds = parent.ds;
+  cpu.es = parent.es;
+  cpu.ss = parent.ss;
+  cpu.eip = parent.eip;
+  cpu.setFlags(parent.flags);
+  // EXEC returns with CF=0 on success
+  cpu.setFlag(CF, false);
+  console.log(`[INT 21h] Child exit code=${exitCode}, returning to parent PSP=${parent.psp.toString(16)}`);
+  return true;
+}
+
 /** Handle INT 21h (DOS services). Exported for use by Win16 DOS3Call. */
 export function handleInt21(cpu: CPU, emu: Emulator): boolean {
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   const al = cpu.reg[EAX] & 0xFF;
+  // Trace all INT 21h calls
+  const csBase = (cpu.cs << 4) >>> 0;
+  const ip = ((cpu.eip - 2) >>> 0) - csBase;
+  _int21Trace.push(`AH=${ah.toString(16).padStart(2,'0')} AX=${(cpu.reg[EAX]&0xFFFF).toString(16)} BX=${(cpu.reg[EBX]&0xFFFF).toString(16)} CX=${(cpu.reg[ECX]&0xFFFF).toString(16)} DX=${(cpu.reg[EDX]&0xFFFF).toString(16)} CS:IP=${cpu.cs.toString(16)}:${ip.toString(16)} DS=${cpu.ds.toString(16)} steps=${emu.cpuSteps}`);
+  if (_int21Trace.length > _INT21_TRACE_MAX) _int21Trace.shift();
   if (ah === 0x00 || ah === 0x4C) console.warn(`[INT 21h] AH=0x${ah.toString(16).padStart(2,'0')} AL=0x${al.toString(16).padStart(2,'0')} at EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} DS=0x${cpu.ds.toString(16)} SS:SP=0x${cpu.ss.toString(16)}:0x${(cpu.reg[4]&0xFFFF).toString(16)}`);
   switch (ah) {
-    case 0x00: { // Old-style terminate (same as INT 20h)
-      // Dump stack for debugging
-      const sp = cpu.reg[4] & 0xFFFF;
-      const ssBase = cpu.segBase(cpu.ss);
-      const stackWords: string[] = [];
-      for (let i = 0; i < 16; i++) {
-        stackWords.push(cpu.mem.readU16(ssBase + ((sp + i * 2) & 0xFFFF)).toString(16).padStart(4, '0'));
-      }
-      console.warn(`[INT 21h] AH=00 TERMINATE at EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} SS:SP=${cpu.ss.toString(16)}:${sp.toString(16)} stack: ${stackWords.join(' ')}`);
+    case 0x00: // Old-style terminate (same as INT 20h)
+      if (dosExecReturn(cpu, emu, 0)) break;
       emu.halted = true;
       cpu.halted = true;
       break;
-    }
 
     case 0x01: { // Read character with echo (blocking)
       if (emu.dosKeyBuffer.length > 0) {
@@ -70,6 +102,78 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x06: { // Direct console I/O
       const dl = cpu.reg[EDX] & 0xFF;
+      // Debug: dump stack on first error message print (char 'E' for "Error")
+      if (dl === 0x45 && !_errorTraceDumped && emu.cpuSteps > 50000000) {
+        _errorTraceDumped = true;
+        const sp = cpu.getReg16(4); // SP
+        const ssBase = (cpu.ss << 4) >>> 0;
+        console.warn(`[INT21-06] First 'E' char — dumping stack at SS:SP=${cpu.ss.toString(16)}:${sp.toString(16)}`);
+        const words: string[] = [];
+        for (let i = 0; i < 32; i++) {
+          const w = cpu.mem.readU16((ssBase + ((sp + i * 2) & 0xFFFF)) >>> 0);
+          words.push(w.toString(16).padStart(4, '0'));
+        }
+        console.warn(`[INT21-06] Stack: ${words.join(' ')}`);
+        // Dump code at the INT 0 handler and nearby
+        const mainBase = 0x20430;
+        for (const label of ['3700', '3710', '3720', '3730']) {
+          const off = parseInt(label, 16);
+          const b: string[] = [];
+          for (let c = 0; c < 16; c++) b.push(cpu.mem.readU8(mainBase + off + c).toString(16).padStart(2, '0'));
+          console.warn(`[INT21-06] 2043:${label}: ${b.join(' ')}`);
+        }
+        // Also dump the stack overflow handler area
+        for (const label of ['1600', '1610', '1620']) {
+          const off = parseInt(label, 16);
+          const b: string[] = [];
+          for (let c = 0; c < 16; c++) b.push(cpu.mem.readU8(mainBase + off + c).toString(16).padStart(2, '0'));
+          console.warn(`[INT21-06] 2043:${label}: ${b.join(' ')}`);
+        }
+        // Current DS:[1357] (stack limit)
+        const dsBase2 = (cpu.ds << 4) >>> 0;
+        console.warn(`[INT21-06] DS:1357 (stack limit) = 0x${cpu.mem.readU16(dsBase2 + 0x1357).toString(16)}`);
+        // Dump the game data structure at DS:3B6 (used by the script interpreter)
+        console.warn(`[INT21-06] Data structure at DS:3B6:`);
+        for (let i = 0; i < 16; i += 2) {
+          console.warn(`  [3B6+${i.toString(16)}] = [${(0x3B6+i).toString(16)}] = 0x${cpu.mem.readU16((dsBase2+0x3B6+i)>>>0).toString(16)}`);
+        }
+        // Check what ES:0 points to (where 0x1011 was read from)
+        const esVal3b8 = cpu.mem.readU16((dsBase2+0x3B8)>>>0);
+        const esBase3 = (esVal3b8 << 4) >>> 0;
+        console.warn(`[INT21-06] Segment from DS:3B8 = 0x${esVal3b8.toString(16)}, linear=0x${esBase3.toString(16)}`);
+        const esData: string[] = [];
+        for (let i = 0; i < 32; i++) esData.push(cpu.mem.readU8((esBase3+i)>>>0).toString(16).padStart(2,'0'));
+        console.warn(`[INT21-06] Data at seg:0: ${esData.join(' ')}`);
+        // The corrupted value location: DS:34BE
+        console.warn(`[INT21-06] DS:34BE = 0x${cpu.mem.readU16((dsBase2+0x34BE)>>>0).toString(16)}`);
+        console.warn(`[INT21-06] DS:34C0 = 0x${cpu.mem.readU16((dsBase2+0x34C0)>>>0).toString(16)}`);
+        console.warn(`[INT21-06] DS:34C2 = 0x${cpu.mem.readU16((dsBase2+0x34C2)>>>0).toString(16)}`);
+        console.warn(`[INT21-06] DS:34C4 = 0x${cpu.mem.readU16((dsBase2+0x34C4)>>>0).toString(16)}`);
+        // Also dump DS:3C0 (the BX offset source)
+        console.warn(`[INT21-06] DS:3C0 = 0x${cpu.mem.readU16((dsBase2+0x3C0)>>>0).toString(16)}`);
+        // Dump code at error address 10B6:2840 (linear 0x133A0)
+        const errLinear = 0x10B6 * 16 + 0x2840;
+        console.warn(`[INT21-06] Code at 10B6:2840 (linear 0x${errLinear.toString(16)}):`);
+        for (let row = -4; row < 4; row++) {
+          const off = errLinear + row * 16;
+          const b: string[] = [];
+          for (let c = 0; c < 16; c++) b.push(cpu.mem.readU8(off + c).toString(16).padStart(2, '0'));
+          console.warn(`  ${off.toString(16).padStart(5, '0')}: ${b.join(' ')}${row === 0 ? ' <-- ERROR' : ''}`);
+        }
+        // Walk BP chain — also show potential far call CS values
+        let bp = cpu.getReg16(5); // BP
+        console.warn(`[INT21-06] BP chain: BP=${bp.toString(16)}`);
+        for (let depth = 0; depth < 10 && bp > 0 && bp < 0xFFFE; depth++) {
+          const retIP = cpu.mem.readU16((ssBase + ((bp + 2) & 0xFFFF)) >>> 0);
+          const maybeCS = cpu.mem.readU16((ssBase + ((bp + 4) & 0xFFFF)) >>> 0);
+          const prevBP = cpu.mem.readU16((ssBase + (bp & 0xFFFF)) >>> 0);
+          // Dump 8 words starting from BP
+          const ws: string[] = [];
+          for (let i = 0; i < 8; i++) ws.push(cpu.mem.readU16((ssBase + ((bp + i*2) & 0xFFFF)) >>> 0).toString(16).padStart(4, '0'));
+          console.warn(`  [${depth}] BP=0x${bp.toString(16)} => ${ws.join(' ')}`);
+          bp = prevBP;
+        }
+      }
       if (dl === 0xFF) {
         // Input: check for keystroke
         if (emu.dosKeyBuffer.length > 0) {
@@ -182,7 +286,16 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x35: { // Get interrupt vector (AL=int) → ES:BX
-      const vec = emu._dosIntVectors.get(al) || 0;
+      let vec = emu._dosIntVectors.get(al) || 0;
+      // Fall back to IVT memory — programs may write vectors directly
+      // to the IVT without using INT 21h AH=25h
+      const biosDefault = emu._dosBiosDefaultVectors.get(al) ?? 0;
+      if (!vec || vec === biosDefault) {
+        const ivtOff = cpu.mem.readU16(al * 4);
+        const ivtSeg = cpu.mem.readU16(al * 4 + 2);
+        const ivtVec = (ivtSeg << 16) | ivtOff;
+        if (ivtVec !== biosDefault && ivtSeg !== 0xF000) vec = ivtVec;
+      }
       cpu.setReg16(EBX, vec & 0xFFFF);
       cpu.es = (vec >>> 16) & 0xFFFF;
       break;
@@ -209,6 +322,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       }
       const resolved = dosResolvePath(emu, path);
       const drive = resolved[0];
+      console.log(`[DOS] CHDIR "${path}" -> "${resolved}"`);
       emu.currentDirs.set(drive, resolved);
       cpu.setFlag(CF, false);
       break;
@@ -381,11 +495,30 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x4C: // Terminate with return code
+    case 0x4C: { // Terminate with return code
+      const retCode = al;
+      if (dosExecReturn(cpu, emu, retCode)) break;
+      const ssBase = (cpu.ss << 4) >>> 0;
+      const sp = cpu.getReg16(4); // ESP & 0xFFFF
+      console.warn(`[INT21h-4C] Terminate with code=${retCode} at CS:IP=${cpu.cs.toString(16)}:${((cpu.eip - (cpu.cs << 4)) >>> 0).toString(16)} SS:SP=${cpu.ss.toString(16)}:${sp.toString(16)}`);
+      console.warn(`[INT21h-4C] AX=0x${(cpu.reg[EAX]>>>0).toString(16)} BX=0x${(cpu.reg[EBX]>>>0).toString(16)} CX=0x${(cpu.reg[ECX]>>>0).toString(16)} DX=0x${(cpu.reg[EDX]>>>0).toString(16)}`);
+      console.warn(`[INT21h-4C] SI=0x${(cpu.reg[ESI]>>>0).toString(16)} DI=0x${(cpu.reg[EDI]>>>0).toString(16)} BP=0x${(cpu.reg[5]>>>0).toString(16)} DS=0x${cpu.ds.toString(16)} ES=0x${cpu.es.toString(16)}`);
+      // Dump stack
+      const stackDump: string[] = [];
+      for (let s = 0; s < 20; s++) {
+        const addr = ssBase + ((sp + s * 2) & 0xFFFF);
+        stackDump.push(cpu.mem.readU16(addr).toString(16).padStart(4, '0'));
+      }
+      console.warn(`[INT21h-4C] Stack: ${stackDump.join(' ')}`);
+      // Dump INT 21h trace
+      console.warn(`[INT21h-4C] === Last ${_int21Trace.length} INT 21h calls ===`);
+      for (const t of _int21Trace) console.warn(`  ${t}`);
       emu.exitedNormally = true;
       emu.halted = true;
       cpu.halted = true;
+      cpu.haltReason = `terminated with code ${retCode}`;
       break;
+    }
 
     case 0x50: { // Set PSP segment
       emu._dosPSP = cpu.getReg16(EBX);
@@ -699,14 +832,25 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       // AL=00 Load+Execute, AL=01 Load overlay, AL=03 Load only
       // DS:DX → ASCIZ program name, ES:BX → parameter block
       const dsBase = cpu.segBase(cpu.ds);
-      const progName = cpu.mem.readCString(dsBase + cpu.getReg16(EDX));
+      const dxVal = cpu.getReg16(EDX);
+      const pathAddr = dsBase + dxVal;
+      // Log raw bytes at path address for debugging
+      const rawBytes: string[] = [];
+      for (let i = 0; i < 30; i++) {
+        const b = cpu.mem.readU8(pathAddr + i);
+        if (b === 0) break;
+        rawBytes.push(b.toString(16).padStart(2, '0'));
+      }
+      console.log(`[INT 21h] EXEC path at DS:DX=${cpu.ds.toString(16)}:${dxVal.toString(16)} raw=[${rawBytes.join(' ')}]`);
+      const progName = cpu.mem.readCString(pathAddr);
       // Parameter block at ES:BX: word envSeg, dword cmdTail, ...
       const esBase = cpu.segBase(cpu.es);
       const paramBlock = esBase + cpu.getReg16(EBX);
+      const envSeg = cpu.mem.readU16(paramBlock);
       const cmdTailOfs = cpu.mem.readU16(paramBlock + 2);
       const cmdTailSeg = cpu.mem.readU16(paramBlock + 4);
       const cmdTailAddr = (cmdTailSeg << 4) + cmdTailOfs;
-      // Command tail: first byte = length, then the string
+      // Command tail: first byte = length, then the string, terminated by CR
       const cmdLen = cpu.mem.readU8(cmdTailAddr);
       let cmdTail = '';
       for (let i = 0; i < cmdLen; i++) {
@@ -714,15 +858,211 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         if (ch === 0x0D || ch === 0) break;
         cmdTail += String.fromCharCode(ch);
       }
-      console.warn(`[INT 21h] EXEC not supported: "${progName}" params="${cmdTail}" (AL=${al})`);
-      // Return "file not found"
-      cpu.setFlag(CF, true);
-      cpu.setReg16(EAX, 2); // ERROR_FILE_NOT_FOUND
+
+      if (al !== 0) {
+        console.warn(`[INT 21h] EXEC AL=${al} not supported: "${progName}" params="${cmdTail}"`);
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 1); // ERROR_INVALID_FUNCTION
+        break;
+      }
+
+      // Resolve path and find file data
+      const execResolved = dosResolvePath(emu, progName);
+      const fileInfo = emu.fs.findFile(execResolved, emu.additionalFiles);
+      let execData: Uint8Array | null = null;
+      if (fileInfo) {
+        if (fileInfo.source === 'additional') {
+          const ab = emu.additionalFiles.get(fileInfo.name);
+          if (ab) execData = new Uint8Array(ab);
+        } else if (fileInfo.source === 'external') {
+          const ext = emu.fs.externalFiles.get(execResolved.toUpperCase());
+          if (ext) execData = ext.data;
+        }
+      }
+      if (!execData) {
+        console.warn(`[INT 21h] EXEC file not found: "${progName}" resolved="${execResolved}"`);
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 2); // ERROR_FILE_NOT_FOUND
+        break;
+      }
+
+      // Determine if COM or MZ
+      const isCom = execResolved.endsWith('.COM') ||
+        (execData.length < 0x10000 && !(execData[0] === 0x4D && execData[1] === 0x5A));
+      const isMz = !isCom && execData[0] === 0x4D && execData[1] === 0x5A;
+
+      if (!isCom && !isMz) {
+        console.warn(`[INT 21h] EXEC unknown format: "${progName}"`);
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 11); // ERROR_BAD_FORMAT
+        break;
+      }
+
+      // Find free memory block from MCB chain
+      const firstMcb = emu._dosMcbFirstSeg || 0x0060;
+      let childSeg = 0;
+      let availParas = 0;
+      {
+        let mcbSeg = firstMcb;
+        for (let iter = 0; iter < 1000; iter++) {
+          const mcbLin = mcbSeg * 16;
+          const type = cpu.mem.readU8(mcbLin);
+          const owner = cpu.mem.readU16(mcbLin + 1);
+          const size = cpu.mem.readU16(mcbLin + 3);
+          if (owner === 0 && size > availParas) {
+            childSeg = mcbSeg + 1;
+            availParas = size;
+          }
+          if (type === 0x5A) break;
+          mcbSeg += size + 1;
+        }
+      }
+
+      // Calculate required paragraphs
+      let neededParas: number;
+      if (isCom) {
+        // PSP (0x10 paras) + max(image, 64KB segment)
+        neededParas = 0x10 + Math.ceil(execData.length / 16);
+      } else {
+        // MZ: parse header to get image size + minalloc
+        const mzDv = new DataView(execData.buffer, execData.byteOffset, execData.byteLength);
+        const e_cparhdr = mzDv.getUint16(0x08, true);
+        const e_minalloc = mzDv.getUint16(0x0A, true);
+        const e_cp = mzDv.getUint16(0x04, true);
+        const e_cblp = mzDv.getUint16(0x02, true);
+        const headerSize = e_cparhdr * 16;
+        let imgSize: number;
+        if (e_cp === 0) {
+          imgSize = execData.length - headerSize;
+        } else {
+          imgSize = (e_cp - 1) * 512 + (e_cblp || 512) - headerSize;
+        }
+        imgSize = Math.min(imgSize, execData.length - headerSize);
+        neededParas = 0x10 + Math.ceil(imgSize / 16) + e_minalloc;
+      }
+
+      if (availParas < neededParas || childSeg === 0) {
+        console.warn(`[INT 21h] EXEC insufficient memory: need ${neededParas} paras, have ${availParas}`);
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 8); // ERROR_NOT_ENOUGH_MEMORY
+        break;
+      }
+
+      // Save parent state
+      emu._dosExecStack.push({
+        regs: new Int32Array(cpu.reg),
+        cs: cpu.cs, ds: cpu.ds, es: cpu.es, ss: cpu.ss,
+        eip: cpu.eip, flags: cpu.getFlags(),
+        psp: emu._dosPSP, dta: emu._dosDTA,
+      });
+
+      // Allocate MCB for child
+      const childMcbLin = (childSeg - 1) * 16;
+      cpu.mem.writeU16(childMcbLin + 1, childSeg); // owner = child PSP
+      if (availParas > neededParas + 1) {
+        // Split MCB
+        cpu.mem.writeU16(childMcbLin + 3, neededParas);
+        const oldType = cpu.mem.readU8(childMcbLin);
+        cpu.mem.writeU8(childMcbLin, 0x4D);
+        const freeSeg = childSeg + neededParas;
+        const freeLin = freeSeg * 16;
+        cpu.mem.writeU8(freeLin, oldType);
+        cpu.mem.writeU16(freeLin + 1, 0x0000);
+        cpu.mem.writeU16(freeLin + 3, availParas - neededParas - 1);
+      }
+
+      // Set up child PSP at childSeg
+      const childPspLin = childSeg * 16;
+      cpu.mem.writeU8(childPspLin + 0x00, 0xCD); // INT 20h
+      cpu.mem.writeU8(childPspLin + 0x01, 0x20);
+      cpu.mem.writeU16(childPspLin + 0x02, childSeg + neededParas); // top of memory
+      // Environment segment: use parent's if envSeg=0
+      const childEnvSeg = envSeg || cpu.mem.readU16((emu._dosPSP << 4) + 0x2C);
+      cpu.mem.writeU16(childPspLin + 0x2C, childEnvSeg);
+      // Copy command tail to PSP:80h
+      cpu.mem.writeU8(childPspLin + 0x80, cmdLen);
+      for (let i = 0; i < 127; i++) {
+        cpu.mem.writeU8(childPspLin + 0x81 + i, cpu.mem.readU8(cmdTailAddr + 1 + i));
+      }
+      cpu.mem.writeU8(childPspLin + 0x81 + cmdLen, 0x0D);
+      // Parent PSP
+      cpu.mem.writeU16(childPspLin + 0x16, emu._dosPSP);
+
+      // Load child program
+      const childProgSeg = childSeg + 0x10; // after PSP
+      const childProgLin = childProgSeg * 16;
+      let childCS: number, childIP: number, childSS: number, childSP: number;
+
+      if (isCom) {
+        // COM: load at PSP:0100h
+        for (let i = 0; i < execData.length; i++) {
+          cpu.mem.writeU8(childPspLin + 0x100 + i, execData[i]);
+        }
+        childCS = childSeg;
+        childIP = 0x0100;
+        childSS = childSeg;
+        childSP = 0xFFFE;
+      } else {
+        // MZ: parse and load
+        const mzDv = new DataView(execData.buffer, execData.byteOffset, execData.byteLength);
+        const e_cparhdr = mzDv.getUint16(0x08, true);
+        const e_cp = mzDv.getUint16(0x04, true);
+        const e_cblp = mzDv.getUint16(0x02, true);
+        const e_crlc = mzDv.getUint16(0x06, true);
+        const e_lfarlc = mzDv.getUint16(0x18, true);
+        const headerSize = e_cparhdr * 16;
+        let imgSize: number;
+        if (e_cp === 0) {
+          imgSize = execData.length - headerSize;
+        } else {
+          imgSize = (e_cp - 1) * 512 + (e_cblp || 512) - headerSize;
+        }
+        imgSize = Math.min(imgSize, execData.length - headerSize);
+
+        // Copy image
+        for (let i = 0; i < imgSize; i++) {
+          cpu.mem.writeU8(childProgLin + i, execData[headerSize + i]);
+        }
+
+        // Apply relocations
+        for (let i = 0; i < e_crlc; i++) {
+          const rOff = e_lfarlc + i * 4;
+          if (rOff + 4 > execData.length) break;
+          const off = mzDv.getUint16(rOff, true);
+          const seg = mzDv.getUint16(rOff + 2, true);
+          const linearAddr = childProgLin + seg * 16 + off;
+          const oldVal = cpu.mem.readU16(linearAddr);
+          cpu.mem.writeU16(linearAddr, (oldVal + childProgSeg) & 0xFFFF);
+        }
+
+        childCS = (mzDv.getUint16(0x16, true) + childProgSeg) & 0xFFFF;
+        childIP = mzDv.getUint16(0x14, true);
+        childSS = (mzDv.getUint16(0x0E, true) + childProgSeg) & 0xFFFF;
+        childSP = mzDv.getUint16(0x10, true);
+      }
+
+      // Switch to child
+      emu._dosPSP = childSeg;
+      emu._dosDTA = childPspLin + 0x80; // default DTA at PSP:80h
+      cpu.cs = childCS;
+      cpu.ds = childSeg;
+      cpu.es = childSeg;
+      cpu.ss = childSS;
+      cpu.eip = cpu.segBase(childCS) + childIP;
+      cpu.reg[4] = childSP; // SP
+      cpu.setFlags(cpu.getFlags() | 0x0200); // IF=1
+
+      console.log(`[INT 21h] EXEC "${progName}" -> CS:IP=${childCS.toString(16)}:${childIP.toString(16)} SS:SP=${childSS.toString(16)}:${childSP.toString(16)} PSP=${childSeg.toString(16)} ${isCom ? 'COM' : 'MZ'} progSeg=${childProgSeg.toString(16)}`);
+      // Log INT 16h vector at EXEC time
+      const int16off = cpu.mem.readU16(0x16 * 4);
+      const int16seg = cpu.mem.readU16(0x16 * 4 + 2);
+      console.log(`[INT 21h] INT 16h vector at EXEC: ${int16seg.toString(16)}:${int16off.toString(16)}`);
+      cpu.setFlag(CF, false);
       break;
     }
 
     case 0x4D: // Get return code of sub-process → AX=return code
-      cpu.setReg16(EAX, 0); // return code 0, normal termination
+      cpu.setReg16(EAX, emu._dosExitCode);
       break;
 
     case 0x54: // Get verify setting → AL

@@ -241,7 +241,12 @@ export class Memory {
     return this.readU32(addr) | 0;
   }
 
+  _watchAddr = 0; // temporary memory write watch
   writeU8(addr: number, val: number): void {
+    if (this._watchAddr && addr === this._watchAddr) {
+      console.log(`[MEM-WATCH] Write 0x${(val & 0xFF).toString(16)} to 0x${addr.toString(16)}`);
+      console.trace();
+    }
     if (this.vgaPlanar && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
   }
@@ -286,17 +291,58 @@ export class Memory {
   }
 
   copyFrom(addr: number, data: Uint8Array): void {
-    for (let i = 0; i < data.length; i++) {
-      this.writeU8(addr + i, data[i]);
+    let remaining = data.length;
+    let cur = addr;
+    let srcOff = 0;
+    while (remaining > 0) {
+      const seg = this.seg(cur);
+      const off = cur & SEG_MASK;
+      const chunk = Math.min(remaining, SEG_SIZE - off);
+      seg.set(data.subarray(srcOff, srcOff + chunk), off);
+      cur += chunk;
+      srcOff += chunk;
+      remaining -= chunk;
     }
   }
 
   slice(addr: number, len: number): Uint8Array {
     const result = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = this.readU8(addr + i);
+    let remaining = len;
+    let cur = addr;
+    let dstOff = 0;
+    while (remaining > 0) {
+      const seg = this.seg(cur);
+      const off = cur & SEG_MASK;
+      const chunk = Math.min(remaining, SEG_SIZE - off);
+      result.set(seg.subarray(off, off + chunk), dstOff);
+      cur += chunk;
+      dstOff += chunk;
+      remaining -= chunk;
     }
     return result;
+  }
+
+  /** Bulk copy within memory — segment-level optimization */
+  copyBlock(dst: number, src: number, len: number): void {
+    let remaining = len;
+    let s = src;
+    let d = dst;
+    while (remaining > 0) {
+      const srcSeg = this.seg(s);
+      const srcOff = s & SEG_MASK;
+      const dstSeg = this.seg(d);
+      const dstOff = d & SEG_MASK;
+      const chunk = Math.min(remaining, SEG_SIZE - srcOff, SEG_SIZE - dstOff);
+      if (srcSeg === dstSeg && srcOff < dstOff && srcOff + chunk > dstOff) {
+        // Overlapping within same segment, copy backwards
+        for (let i = chunk - 1; i >= 0; i--) dstSeg[dstOff + i] = srcSeg[srcOff + i];
+      } else {
+        dstSeg.set(srcSeg.subarray(srcOff, srcOff + chunk), dstOff);
+      }
+      s += chunk;
+      d += chunk;
+      remaining -= chunk;
+    }
   }
 
   readCString(addr: number): string {

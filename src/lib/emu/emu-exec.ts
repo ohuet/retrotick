@@ -385,6 +385,10 @@ const DOS_POST_KEY_STEPS = 0x80;
 
 export function emuTick(emu: Emulator): void {
   if (!emu.running || emu.halted) return;
+  // Guard against reentrant tick() calls — can happen when multiple
+  // requestAnimationFrame(tick) are queued from different code paths.
+  if (emu._tickRunning) return;
+  emu._tickRunning = true;
 
   try {
   const tickStart = performance.now();
@@ -395,6 +399,9 @@ export function emuTick(emu: Emulator): void {
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
   let prevBdaKeyHead = emu.isDOS ? emu.memory.readU16(0x41A) : 0;
   emu._dosKeyConsumedThisTick = false;
+  // emu._hwIntSavedSP is stored on `emu` so it persists across tick() calls.
+  // If an interrupt handler is still running when a tick ends (time limit),
+  // the next tick must NOT dispatch new interrupts until the handler IRETs.
   emu._dosHwKeyReadThisTick = false;
 
   // Wake from HLT: check if a timer interrupt is due
@@ -424,6 +431,11 @@ export function emuTick(emu: Emulator): void {
         emu._int09ReturnCS = -1;
       }
     }
+    // Detect IRET from hardware interrupt handler by monitoring SP.
+    // IRET pops IP+CS+FLAGS (6 bytes), restoring SP to the pre-dispatch level.
+    if (emu._hwIntSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP) {
+      emu._hwIntSavedSP = -1;
+    }
     if (emu.halted || emu.waitingForMessage || emu._dosHalted) break;
     if (emu.isDOS && dosYieldAfterKeyAt < 0 && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
       // A DOS key was consumed this tick (INT 16h or direct port 0x60 path):
@@ -450,19 +462,24 @@ export function emuTick(emu: Emulator): void {
         if (!emu._pendingHwInts.includes(0x08)) emu._pendingHwInts.push(0x08);
         emu._dosHalted = false; // wake from HLT
       }
+      // Advance Sound Blaster DMA transfer (may queue IRQ 7)
+      if ((i & 0xFF) === 0) emu.dosAudio.tickDMA();
     }
 
-    // Deliver queued scancodes one at a time, with a delay between each
-    // to avoid overwriting port 0x60 before the previous INT 09h completes
+    // Deliver queued scancodes one at a time, throttled to ~30 Hz to match
+    // real keyboard repeat rate and prevent starving game logic with INT 09h.
     if (
       emu._pendingHwInts.length === 0 &&
       emu._pendingHwKeys.length > 0 &&
       emu._int09ReturnCS < 0
     ) {
-      const code = emu._pendingHwKeys[0];
-      const delay = 0;
-      emu._hwKeyDelay++;
-      if (emu._hwKeyDelay >= delay) {
+      const nextCode = emu._pendingHwKeys[0];
+      // E0 prefix bytes are always delivered immediately (they're part of a scancode pair).
+      // Other scancodes are throttled: at least 30ms between deliveries.
+      const KEY_THROTTLE_MS = 30;
+      const now = performance.now();
+      const elapsed = now - emu._lastHwKeyDeliverTime;
+      if (nextCode === 0xE0 || elapsed >= KEY_THROTTLE_MS) {
         const code = emu._pendingHwKeys.shift()!;
         emu._currentHwKeyChar = emu._pendingHwKeyChars.get(code);
         emu._pendingHwKeyChars.delete(code);
@@ -483,6 +500,7 @@ export function emuTick(emu: Emulator): void {
         else if (code === 0x9D) emu.memory.writeU8(BDA_SHIFT, flags & ~0x04); // Ctrl break
         else if (code === 0xB8) emu.memory.writeU8(BDA_SHIFT, flags & ~0x08); // Alt break
         emu._pendingHwInts.push(0x09);
+        if (code !== 0xE0) emu._lastHwKeyDeliverTime = now;
         if (emu.isDOS && dosYieldAfterKeyAt < 0 && code !== 0xE0) {
           // Hardware key delivered this tick: give DOS app a short execution window
           // to finish drawing, then yield/sync so the frame is observable.
@@ -493,17 +511,19 @@ export function emuTick(emu: Emulator): void {
     } else if (emu._pendingHwInts.length === 0) {
       emu._hwKeyDelay = 0;
     }
-    if (emu._pendingHwInts.length > 0) {
+    if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0) {
       const intNum = emu._pendingHwInts.shift()!;
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
-      let vec = emu._dosIntVectors.get(intNum);
-      // Also check the actual IVT in memory — programs may write vectors
-      // directly without using INT 21h AH=25h
-      if (!vec || vec === biosDefault) {
-        const ivtOff = emu.memory.readU16(intNum * 4);
-        const ivtSeg = emu.memory.readU16(intNum * 4 + 2);
-        const ivtVec = (ivtSeg << 16) | ivtOff;
-        if (ivtVec !== biosDefault && ivtSeg !== 0xF000) vec = ivtVec;
+      // Always read IVT memory first — programs chain multiple handlers
+      // by writing directly to IVT (e.g. PoP chains timer→animation→sound)
+      const ivtOff = emu.memory.readU16(intNum * 4);
+      const ivtSeg = emu.memory.readU16(intNum * 4 + 2);
+      const ivtVec = (ivtSeg << 16) | ivtOff;
+      let vec: number | undefined;
+      if (ivtVec !== biosDefault && ivtSeg !== 0xF000) {
+        vec = ivtVec;
+      } else {
+        vec = emu._dosIntVectors.get(intNum);
       }
       if (vec && vec !== biosDefault) {
         // Custom handler installed — dispatch via INT (push flags/CS/IP, jump)
@@ -511,6 +531,9 @@ export function emuTick(emu: Emulator): void {
         const off = vec & 0xFFFF;
         emu._ioPorts.set(0x64, (emu._ioPorts.get(0x64) ?? 0) | 0x01);
         const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
+        // Save SP BEFORE pushes — IRET is the only thing that restores SP to
+        // this level (handler's internal push/pop stays below it).
+        emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
         // On real hardware, interrupts only fire when IF=1, so pushed FLAGS
         // always have IF=1. We deliver regardless of IF, so force IF=1 in
         // the saved FLAGS so IRET restores an interrupt-enabled context.
@@ -527,6 +550,7 @@ export function emuTick(emu: Emulator): void {
         emu.cpu.eip = emu.cpu.segBase(seg) + off;
       } else {
         // No custom handler — call built-in BIOS handler directly
+        emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
         handleDosInt(emu.cpu, intNum, emu);
         if (intNum === 0x09) {
           emu._kbdReplayPending = false;
@@ -693,6 +717,8 @@ export function emuTick(emu: Emulator): void {
     emu.haltReason = 'internal emulator error';
     emu.halted = true;
   }
+
+  emu._tickRunning = false;
 
   // Sync video memory for DOS mode (picks up direct B800:0000 writes)
   if (emu.isDOS) {

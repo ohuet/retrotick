@@ -15,7 +15,11 @@ function stringSrc(cpu: CPU): number {
     const segSel = cpu._segOverride ? cpu.getSegOverrideSel() : cpu.ds;
     return (cpu.segBase(segSel) + si) >>> 0;
   }
-  return cpu.reg[ESI] >>> 0;
+  let addr = cpu.reg[ESI] >>> 0;
+  if (cpu._segOverride === 0x64) addr = (addr + cpu.fsBase) >>> 0;
+  else if (cpu._segOverride) addr = (addr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
+  else if (!cpu.use32) addr = (addr + cpu.segBase(cpu.ds)) >>> 0;
+  return addr;
 }
 
 function stringDst(cpu: CPU): number {
@@ -23,6 +27,8 @@ function stringDst(cpu: CPU): number {
     const di = cpu.reg[EDI] & 0xFFFF;
     return (cpu.segBase(cpu.es) + di) >>> 0;
   }
+  // String destination is always ES (not overridable), but need ES base in real mode
+  if (!cpu.use32) return (cpu.segBase(cpu.es) + (cpu.reg[EDI] >>> 0)) >>> 0;
   return cpu.reg[EDI] >>> 0;
 }
 

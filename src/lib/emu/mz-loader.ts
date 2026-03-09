@@ -135,3 +135,93 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
     mcbFirstSeg: ENV_MCB_SEG,
   };
 }
+
+export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: string): LoadedMZ {
+  const data = new Uint8Array(arrayBuffer);
+  const imageSize = data.byteLength;
+
+  const topSeg = 0xA000; // 640KB
+  const LOAD_SEG = 0x0100; // PSP segment
+
+  // Memory layout (same as MZ):
+  // 0x0060: MCB for env block
+  // 0x0061: environment data
+  // 0x00FF: MCB for program
+  // 0x0100: PSP (LOAD_SEG)
+  // 0x0100:0100: program image (offset 0x100 within PSP segment)
+
+  const ENV_MCB_SEG = 0x0060;
+  const ENV_SEG = ENV_MCB_SEG + 1;
+  const ENV_PARAS = LOAD_SEG - 1 - ENV_SEG;
+  const PROG_MCB_SEG = LOAD_SEG - 1;
+
+  const pspLinear = LOAD_SEG * 16;
+
+  // COM programs load at PSP:0100h (within the same segment as PSP)
+  const imageParas = Math.ceil((imageSize + 0x100) / 16);
+  const totalParas = imageParas;
+
+  // --- MCB chain ---
+  const envMcbLinear = ENV_MCB_SEG * 16;
+  memory.writeU8(envMcbLinear + 0, 0x4D);       // 'M'
+  memory.writeU16(envMcbLinear + 1, LOAD_SEG);   // owner = PSP
+  memory.writeU16(envMcbLinear + 3, ENV_PARAS);
+
+  const progMcbLinear = PROG_MCB_SEG * 16;
+  memory.writeU8(progMcbLinear + 0, 0x4D);       // 'M'
+  memory.writeU16(progMcbLinear + 1, LOAD_SEG);   // owner = PSP
+  memory.writeU16(progMcbLinear + 3, totalParas);
+
+  const freeMcbSeg = LOAD_SEG + totalParas;
+  if (freeMcbSeg < topSeg) {
+    const freeMcbLinear = freeMcbSeg * 16;
+    const freeParas = topSeg - freeMcbSeg - 1;
+    memory.writeU8(freeMcbLinear + 0, 0x5A);
+    memory.writeU16(freeMcbLinear + 1, 0x0000);
+    memory.writeU16(freeMcbLinear + 3, freeParas);
+  } else {
+    memory.writeU8(progMcbLinear + 0, 0x5A);
+  }
+
+  // --- Build PSP ---
+  memory.writeU8(pspLinear + 0x00, 0xCD); // INT 20h
+  memory.writeU8(pspLinear + 0x01, 0x20);
+  memory.writeU16(pspLinear + 0x02, topSeg);
+
+  // Write environment
+  const envLinear = ENV_SEG * 16;
+  let envOff = 0;
+  const comspec = 'COMSPEC=C:\\COMMAND.COM\0';
+  for (let i = 0; i < comspec.length; i++) memory.writeU8(envLinear + envOff++, comspec.charCodeAt(i));
+  const pathEnv = 'PATH=C:\\\0';
+  for (let i = 0; i < pathEnv.length; i++) memory.writeU8(envLinear + envOff++, pathEnv.charCodeAt(i));
+  memory.writeU8(envLinear + envOff++, 0); // double null terminator
+  memory.writeU16(envLinear + envOff, 1);
+  envOff += 2;
+  const progName = exePath + '\0';
+  for (let i = 0; i < progName.length; i++) memory.writeU8(envLinear + envOff++, progName.charCodeAt(i));
+
+  memory.writeU16(pspLinear + 0x2C, ENV_SEG);
+
+  // Command tail at offset 0x80 (empty)
+  memory.writeU8(pspLinear + 0x80, 0x00);
+  memory.writeU8(pspLinear + 0x81, 0x0D);
+
+  // --- Copy program image at PSP:0100h ---
+  const loadLinear = pspLinear + 0x100;
+  for (let i = 0; i < imageSize; i++) {
+    memory.writeU8(loadLinear + i, data[i]);
+  }
+
+  // COM entry: CS=DS=ES=SS=PSP segment, IP=0x0100, SP=0xFFFE (top of segment)
+  return {
+    loadSegment: LOAD_SEG,
+    pspLinear,
+    entryCS: LOAD_SEG,
+    entryIP: 0x0100,
+    entrySS: LOAD_SEG,
+    entrySP: 0xFFFE,
+    imageSize,
+    mcbFirstSeg: ENV_MCB_SEG,
+  };
+}

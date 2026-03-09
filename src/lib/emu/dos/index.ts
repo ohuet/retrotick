@@ -3,7 +3,7 @@ import type { Emulator } from '../emulator';
 import { handleInt09, handleInt16 } from './keyboard';
 import { handleInt10 } from './video';
 import { handleInt21 } from './int21';
-import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt33 } from './misc';
+import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt33, handleInt79, handleInt7F, handleUcdosInt3 } from './misc';
 import { handleXms, XMS_INT } from './xms';
 
 export { handleInt21 } from './int21';
@@ -22,10 +22,33 @@ function isFromSyntheticBiosStub(cpu: CPU, biosDefault: number): boolean {
 
 /** Handle DOS/BIOS interrupts. Returns true if handled, false if not. */
 export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
+  // When UCDOS is active and no custom INT 3 handler installed,
+  // handle INT 3 in JS as UCDOS runtime API.
+  if (intNum === 3 && emu._dosUcdosStubSeg) {
+    const ivtSeg3 = cpu.mem.readU16(3 * 4 + 2);
+    const ivtOff3 = cpu.mem.readU16(3 * 4);
+    const bd3 = emu._dosBiosDefaultVectors.get(3) ?? ((0xF000 << 16) | (3 * 5));
+    const ivt3 = (ivtSeg3 << 16) | ivtOff3;
+    // If IVT still points to BIOS default, handle in JS
+    if (ivt3 === bd3 || ivtSeg3 === 0xF000) {
+      return handleUcdosInt3(cpu, emu);
+    }
+    // Otherwise let IVT dispatch run the program's own handler
+  }
   if (cpu.realMode) {
     const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
     const fromSyntheticStub = isFromSyntheticBiosStub(cpu, biosDefault);
-    const vec = emu._dosIntVectors.get(intNum) ?? biosDefault;
+    // Check both _dosIntVectors (set via INT 21h/AH=25h) and IVT memory
+    // (written directly by programs like PoP's sound driver).
+    const ivtOff = cpu.mem.readU16(intNum * 4);
+    const ivtSeg = cpu.mem.readU16(intNum * 4 + 2);
+    const ivtVec = (ivtSeg << 16) | ivtOff;
+    let vec: number;
+    if (ivtVec !== biosDefault && ivtSeg !== 0xF000) {
+      vec = ivtVec;
+    } else {
+      vec = emu._dosIntVectors.get(intNum) ?? biosDefault;
+    }
     if (vec !== biosDefault && !fromSyntheticStub) {
       const seg = (vec >>> 16) & 0xFFFF;
       const off = vec & 0xFFFF;
@@ -41,12 +64,20 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
   }
 
   switch (intNum) {
+    case 0x03: // INT 3 — NOP if no UCDOS (UCDOS case handled above)
+      return true;
     case 0x08: { // Timer tick (IRQ0) — update BIOS tick counter at 0x46C
       emu.memory.writeU32(0x46C, (emu.memory.readU32(0x46C) + 1) >>> 0);
       // Chain to INT 1Ch (user timer tick hook) like real BIOS.
       // Programs like QBasic install INT 1Ch handlers for time-based processing.
-      const vec1C = emu._dosIntVectors.get(0x1C);
       const bios1C = emu._dosBiosDefaultVectors.get(0x1C) ?? ((0xF000 << 16) | (0x1C * 5));
+      // Check IVT memory first — programs may write INT 1Ch directly
+      const ivt1COff = cpu.mem.readU16(0x1C * 4);
+      const ivt1CSeg = cpu.mem.readU16(0x1C * 4 + 2);
+      const ivt1CVec = (ivt1CSeg << 16) | ivt1COff;
+      const vec1C = (ivt1CVec !== bios1C && ivt1CSeg !== 0xF000)
+        ? ivt1CVec
+        : (emu._dosIntVectors.get(0x1C) ?? bios1C);
       if (vec1C && vec1C !== bios1C) {
         const seg = (vec1C >>> 16) & 0xFFFF;
         const off = vec1C & 0xFFFF;
@@ -89,6 +120,8 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       cpu.setReg16(EAX, 0x0002);
       return true;
     }
+    case 0x79: return handleInt79(cpu, emu);
+    case 0x7F: return handleInt7F(cpu, emu);
     case XMS_INT: return handleXms(cpu, emu);
     default:
       if (cpu.realMode) {

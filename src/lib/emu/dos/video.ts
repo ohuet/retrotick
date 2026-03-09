@@ -905,6 +905,16 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
+    case 0x21: {
+      // UCDOS display driver — status query
+      // Caller checks: CMP BX, 00C8h; JNE continue → BX=C8 is error
+      // BX ≠ C8h means display driver is active/ready
+      // AH=0 (returned status), BX = current display rows
+      cpu.setReg16(EBX, 0x0019); // BX = 25 (rows), not 0xC8
+      cpu.setReg8(EAX + 4, 0x00); // AH=0
+      break;
+    }
+
     case 0xFE: // Get video buffer
       break;
 

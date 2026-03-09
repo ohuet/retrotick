@@ -261,12 +261,8 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     // DOS mode: inject hardware scancodes via INT 09h path.
     // The BIOS INT 09h handler converts scancodes to ASCII and pushes to dosKeyBuffer.
     if (emu.isDOS) {
-      // Initialize audio on first user gesture
-      if (!emu.audioContext || emu.audioContext.state === 'suspended') {
-        if (emu.audioContext) emu.audioContext.close();
-        emu.audioContext = new AudioContext();
-        emu.dosAudio.init(emu.audioContext);
-      }
+      // Resume AudioContext if suspended (user gesture)
+      if (emu.audioContext?.state === 'suspended') emu.audioContext.resume();
       const modScan = getModifierScan(e.code);
       if (modScan !== undefined) {
         // Modifier keydown: make only; break is sent on keyup.
