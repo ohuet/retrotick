@@ -1246,6 +1246,7 @@ function renderMdiChildOverlay(
     if (!emu) return;
     const childWnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
     if (!childWnd) return;
+    const mdiClient = emu.handles.get<WindowInfo>(childWnd.parent);
     // Restore from minimized state
     const saved = childWnd._preMinRect ?? { x: 0, y: 0, w: 300, h: 200 };
     childWnd.x = saved.x;
@@ -1256,6 +1257,8 @@ function renderMdiChildOverlay(
     childWnd.minimized = false;
     childWnd.visible = true;
     childWnd.needsPaint = true;
+    // MDICLIENT background needs repaint after child layout change
+    if (mdiClient) { mdiClient.needsPaint = true; mdiClient.needsErase = true; }
     const { cw, ch } = getClientSize(childWnd.style, false, childWnd.width, childWnd.height, !!emu.isNE);
     emu.postMessage(ctrl.childHwnd, 0x0005, 0, makeLParam(cw, ch)); // WM_SIZE SIZE_RESTORED
     emu.notifyControlOverlays();
@@ -1288,6 +1291,9 @@ function renderMdiChildOverlay(
       childWnd.height = saved.h;
       childWnd._preMaxRect = undefined;
       childWnd.maximized = false;
+      // MDICLIENT background was hidden by maximized child — needs repaint
+      mdiClient.needsPaint = true;
+      mdiClient.needsErase = true;
     } else {
       // Save pre-maximize state
       childWnd._preMaxRect = { x: childWnd.x, y: childWnd.y, w: childWnd.width, h: childWnd.height };
@@ -1315,6 +1321,9 @@ function renderMdiChildOverlay(
     if (childWnd.maximized) {
       // _preMaxRect already saved, just clear maximized
       childWnd.maximized = false;
+      // MDICLIENT background was hidden by maximized child — needs repaint
+      mdiClient.needsPaint = true;
+      mdiClient.needsErase = true;
     }
     // Save pre-minimize rect (use current or _preMaxRect if was maximized)
     if (!childWnd._preMinRect) {
@@ -2023,6 +2032,12 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
             // Trigger main window repaint so canvas content follows the MDI child
             const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
             if (mainWnd) mainWnd.needsPaint = true;
+            // Repaint MDICLIENT background where child was
+            const mdiClient = emu.handles.get<WindowInfo>(childWnd.parent);
+            if (mdiClient && mdiClient.classInfo?.hbrBackground) {
+              mdiClient.needsPaint = true;
+              mdiClient.needsErase = true;
+            }
             emu.notifyControlOverlays();
           }
         }
@@ -2052,6 +2067,12 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
             childWnd.needsPaint = true;
             const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
             if (mainWnd) mainWnd.needsPaint = true;
+            // Repaint MDICLIENT background where child was
+            const mdiClient = emu.handles.get<WindowInfo>(childWnd.parent);
+            if (mdiClient && mdiClient.classInfo?.hbrBackground) {
+              mdiClient.needsPaint = true;
+              mdiClient.needsErase = true;
+            }
             emu.notifyControlOverlays();
           }
         }
