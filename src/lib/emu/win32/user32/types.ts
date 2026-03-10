@@ -90,6 +90,8 @@ export interface WindowInfo {
   editModified?: boolean; // EM_SETMODIFY / EM_GETMODIFY
   editBufferHandle?: number; // EM_GETHANDLE local heap handle
   ownerThreadId?: number; // thread that created this window
+  /** Nesting counter to limit recursive WM_SIZE during MoveWindow/SetWindowPos */
+  _wmSizeNest?: number;
   /** Per-control canvas for custom drawing (overlay companion canvas) */
   domCanvas?: HTMLCanvasElement;
   /** DOM input/textarea element for EDIT controls (clipboard operations) */

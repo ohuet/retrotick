@@ -627,6 +627,11 @@ export class Emulator {
 
   drawItemStructAddr = 0;
 
+  /** Pending resize lParam for the main window (set by applyCanvasToEmu, consumed by GetMessage).
+   *  This avoids WM_SIZE queue flooding during rapid resize drags and guarantees
+   *  WM_SIZE + WM_PAINT are delivered in the same tick. */
+  _pendingResizeLParam: number | null = null;
+
 
   // Screen dirty flag — set by GDI draw ops that write to screen DC,
   // checked by tick() to yield to browser for rendering intermediate frames

@@ -329,6 +329,26 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
   // ───────────────────────────────────────────────────────────────────────────
   user.register('GetMessage', 10, () => {
     const [lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax] = emu.readPascalArgs16([4, 2, 2, 2]);
+    // Synthesize WM_SIZE from pending resize (set by applyCanvasToEmu during drag).
+    // Checked before the queue so the latest size is always used, and WM_PAINT
+    // can follow in the same tick (no queue flooding).
+    if (emu._pendingResizeLParam !== null && emu.mainWindow) {
+      const lParam = emu._pendingResizeLParam;
+      emu._pendingResizeLParam = null;
+      // Drain any queued WM_SIZE for mainWindow to prevent duplicates
+      const q = emu.messageQueue;
+      for (let i = q.length - 1; i >= 0; i--) {
+        if (q[i].hwnd === emu.mainWindow && q[i].message === 0x0005) {
+          q.splice(i, 1);
+        }
+      }
+      emu.memory.writeU16(lpMsg, emu.mainWindow & 0xFFFF);
+      emu.memory.writeU16(lpMsg + 2, 0x0005); // WM_SIZE
+      emu.memory.writeU16(lpMsg + 4, 0);
+      emu.memory.writeU32(lpMsg + 6, lParam);
+      emu.memory.writeU32(lpMsg + 10, Date.now() & 0xFFFFFFFF);
+      return 1;
+    }
     if (emu.messageQueue.length > 0) {
       const msg = emu.messageQueue.shift()!;
       emu.memory.writeU16(lpMsg, msg.hwnd);
