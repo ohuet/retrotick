@@ -912,7 +912,26 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('GetClassLong', 4, () => 0, 131);
 
   // Ordinal 134: SetWindowWord(hWnd, nIndex, wNewWord) — 6 bytes (2+2+2)
-  user.register('SetWindowWord', 6, () => 0, 134);
+  user.register('SetWindowWord', 6, () => {
+    const [hWnd, nIndex, wNewWord] = emu.readPascalArgs16([2, 2, 2]);
+    const wnd = emu.handles.get<WindowInfo>(hWnd);
+    if (!wnd) return 0;
+    const signedIndex = (nIndex << 16) >> 16;
+    // GWW_HINSTANCE = -6, GWW_HWNDPARENT = -8, GWW_ID = -12
+    if (signedIndex === -6) return 0; // read-only
+    if (signedIndex === -12 && wnd) {
+      const old = wnd.controlId ?? 0;
+      wnd.controlId = wNewWord;
+      return old;
+    }
+    if (wnd.extraBytes && nIndex >= 0 && nIndex + 2 <= wnd.extraBytes.length) {
+      const old = wnd.extraBytes[nIndex] | (wnd.extraBytes[nIndex + 1] << 8);
+      wnd.extraBytes[nIndex] = wNewWord & 0xFF;
+      wnd.extraBytes[nIndex + 1] = (wNewWord >> 8) & 0xFF;
+      return old;
+    }
+    return 0;
+  }, 134);
 
   // Ordinal 137: OpenClipboard(hWnd) — 2 bytes
   user.register('OpenClipboard', 2, () => 1, 137);
