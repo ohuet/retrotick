@@ -360,7 +360,8 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     }
     // Synthesize WM_PAINT for windows that need repainting
     for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
-      if (wnd && wnd.needsPaint && wnd.wndProc) {
+      if (!wnd || !wnd.needsPaint) continue;
+      if (wnd.wndProc) {
         if (wnd.needsErase) {
           wnd.needsErase = false;
           const hdc = emu.getWindowDC(handle);
@@ -377,6 +378,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         emu.memory.writeU32(lpMsg + 6, 0);
         emu.memory.writeU32(lpMsg + 10, Date.now() & 0xFFFFFFFF);
         return 1;
+      }
+      // Built-in windows (no wndProc) with a class brush: erase background directly
+      if (wnd.needsErase && wnd.classInfo.hbrBackground) {
+        wnd.needsErase = false;
+        wnd.needsPaint = false;
+        const hdc = emu.getWindowDC(handle);
+        const dc = emu.getDC(hdc);
+        if (dc) {
+          const brush = emu.getBrush(wnd.classInfo.hbrBackground);
+          if (brush && !brush.isNull) {
+            const r = brush.color & 0xFF, g = (brush.color >> 8) & 0xFF, b = (brush.color >> 16) & 0xFF;
+            dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
+            dc.ctx.fillRect(0, 0, wnd.width, wnd.height);
+            emu.syncDCToCanvas(hdc);
+          }
+        }
+      } else {
+        wnd.needsPaint = false;
       }
     }
     // No messages — wait for one
@@ -414,7 +433,8 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     // Check for synthesized WM_PAINT
     if (emu.messageQueue.length === 0 && emu.wndProcDepth === 0) {
       for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
-        if (wnd && wnd.needsPaint && wnd.wndProc) {
+        if (!wnd || !wnd.needsPaint) continue;
+        if (wnd.wndProc) {
           const hasFilter = wMsgFilterMin !== 0 || wMsgFilterMax !== 0;
           const WM_PAINT = 0x000F;
           if (!hasFilter || (WM_PAINT >= wMsgFilterMin && WM_PAINT <= wMsgFilterMax)) {
@@ -428,6 +448,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
             wnd.needsPaint = false;
             return 1;
           }
+        }
+        // Built-in windows (no wndProc): erase background directly
+        if (wnd.needsErase && wnd.classInfo.hbrBackground) {
+          wnd.needsErase = false;
+          wnd.needsPaint = false;
+          const hdc = emu.getWindowDC(handle);
+          const dc = emu.getDC(hdc);
+          if (dc) {
+            const brush = emu.getBrush(wnd.classInfo.hbrBackground);
+            if (brush && !brush.isNull) {
+              const r = brush.color & 0xFF, g = (brush.color >> 8) & 0xFF, b = (brush.color >> 16) & 0xFF;
+              dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
+              dc.ctx.fillRect(0, 0, wnd.width, wnd.height);
+              emu.syncDCToCanvas(hdc);
+            }
+          }
+        } else {
+          wnd.needsPaint = false;
         }
       }
     }
