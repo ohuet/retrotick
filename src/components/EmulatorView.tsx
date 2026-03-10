@@ -1991,6 +1991,18 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const menuH = wnd.hMenu ? 19 : 0;
     wnd.width = w + 2 * bw;
     wnd.height = h + 2 * bw + captionH + menuH;
+    // Coalesce: remove any pending WM_SIZE for the main window from the queue
+    const queue = emu.messageQueue;
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].hwnd === emu.mainWindow && queue[i].message === WM_SIZE) {
+        queue.splice(i, 1);
+      }
+    }
+    // For NE (Win16) apps: also store pending resize so GetMessage can
+    // synthesize it before the queue, ensuring WM_SIZE+WM_PAINT in same tick.
+    if (emu.isNE) {
+      emu._pendingResizeLParam = makeLParam(w, h);
+    }
     emu.postMessage(emu.mainWindow, WM_SIZE, 0, makeLParam(w, h));
     wnd.needsPaint = true;
     wnd.needsErase = true;

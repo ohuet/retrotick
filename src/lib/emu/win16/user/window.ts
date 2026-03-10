@@ -335,33 +335,35 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
       wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
+      const sizeChanged = wnd.width !== w || wnd.height !== height;
       wnd.width = w; wnd.height = height;
-      const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
-      if (hWnd === emu.mainWindow) {
-        emu.setupCanvasSize(cw, ch);
-        emu.onWindowChange?.(wnd);
-      }
-      const WM_SIZE = 0x0005;
-      const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-      if (wnd.wndProc) {
-        // Sync WM_SIZE at shallow nesting so children resize immediately;
-        // async at deeper levels to prevent recursive stack overflow
-        if (emu.wndProcDepth < 3) {
-          emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lParam);
-        } else {
-          emu.postMessage(hWnd, WM_SIZE, 0, lParam);
+      if (sizeChanged) {
+        const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
+        if (hWnd === emu.mainWindow) {
+          emu.setupCanvasSize(cw, ch);
+          emu.onWindowChange?.(wnd);
         }
-      }
-      // MDICLIENT: resize maximized MDI children to fill new area
-      if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
-        for (const childHwnd of wnd.childList) {
-          const child = emu.handles.get<WindowInfo>(childHwnd);
-          if (child && child.maximized) {
-            child.x = 0; child.y = 0;
-            child.width = cw; child.height = ch;
-            child.needsPaint = true; child.needsErase = true;
-            const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
-            emu.postMessage(childHwnd, WM_SIZE, 2, ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
+        const WM_SIZE = 0x0005;
+        const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
+        if (wnd.wndProc) {
+          const nest = wnd._wmSizeNest || 0;
+          if (nest < 2) {
+            wnd._wmSizeNest = nest + 1;
+            emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lParam);
+            wnd._wmSizeNest = nest;
+          }
+        }
+        // MDICLIENT: resize maximized MDI children to fill new area
+        if (wnd.classInfo?.className?.toUpperCase() === 'MDICLIENT' && wnd.childList) {
+          for (const childHwnd of wnd.childList) {
+            const child = emu.handles.get<WindowInfo>(childHwnd);
+            if (child && child.maximized) {
+              child.x = 0; child.y = 0;
+              child.width = cw; child.height = ch;
+              child.needsPaint = true; child.needsErase = true;
+              const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
+              emu.postMessage(childHwnd, WM_SIZE, 2, ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
+            }
           }
         }
       }
@@ -535,13 +537,12 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
       const WM_SIZE = 0x0005;
       if (wnd.wndProc) {
-        // Sync WM_SIZE at shallow nesting so children resize immediately;
-        // async at deeper levels to prevent recursive stack overflow
         const lp = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-        if (emu.wndProcDepth < 3) {
+        const nest = wnd._wmSizeNest || 0;
+        if (nest < 2) {
+          wnd._wmSizeNest = nest + 1;
           emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lp);
-        } else {
-          emu.postMessage(hWnd, WM_SIZE, 0, lp);
+          wnd._wmSizeNest = nest;
         }
       }
       // MDICLIENT: resize maximized MDI children to fill new area
@@ -552,7 +553,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
             child.x = 0; child.y = 0;
             child.width = cw; child.height = ch;
             child.needsPaint = true; child.needsErase = true;
-            // Queue WM_SIZE via postMessage to avoid recursive stack overflow
             const { cw: ccw, ch: cch } = getClientSize(child.style, !!child.hMenu, cw, ch, true);
             emu.postMessage(childHwnd, WM_SIZE, 2, ((cch & 0xFFFF) << 16) | (ccw & 0xFFFF));
           }
