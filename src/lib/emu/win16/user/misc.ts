@@ -425,7 +425,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     let cls = emu.windowClasses.get(upperName);
     // For built-in system classes (hInstance=0 or any), return success
     if (!cls && BUILTIN_CLASSES.includes(upperName)) {
-      cls = { className: upperName, wndProc: 0, style: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hbrBackground: 0, hIcon: 0, hCursor: 0 } as any;
+      cls = { className: upperName, wndProc: 0, style: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hbrBackground: upperName === 'MDICLIENT' ? 13 : 0, hIcon: 0, hCursor: 0 } as any;
     }
     // console.log(`[WIN16] GetClassInfo("${className}") → ${cls ? 'found' : 'not found'}`);
     if (cls && lpWndClass) {

@@ -129,7 +129,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     // MDICLIENT is always visible in practice (container for MDI children)
     const isMDIClient = className.toUpperCase() === 'MDICLIENT';
     const hwnd = emu.handles.alloc('window', {
-      classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
+      classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: isMDIClient ? 13 : 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: windowName,
       style: adjustedStyle,
       exStyle: 0,
@@ -145,7 +145,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
       children: new Map(),
     });
-    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) { w.hwnd = hwnd; if ((dwStyle & 0x10000000) || isMDIClient) { w.needsPaint = true; } } }
+    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) { w.hwnd = hwnd; if ((dwStyle & 0x10000000) || isMDIClient) { w.needsPaint = true; w.needsErase = true; } } }
 
     // Register child in parent's childList (mirrors Win32 create-window.ts)
     if (hWndParent) {
@@ -677,7 +677,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     // MDICLIENT is always visible in practice (container for MDI children)
     const isMDIClient = className.toUpperCase() === 'MDICLIENT';
     const hwnd = emu.handles.alloc('window', {
-      classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
+      classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: isMDIClient ? 13 : 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: windowName,
       style: adjustedStyleEx,
       exStyle: dwExStyle,
@@ -693,7 +693,7 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       extraBytes: new Uint8Array(classInfo?.cbWndExtra || 0),
       children: new Map(),
     });
-    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) { w.hwnd = hwnd; if ((dwStyle & 0x10000000) || isMDIClient) { w.needsPaint = true; } } }
+    { const w = emu.handles.get<WindowInfo>(hwnd); if (w) { w.hwnd = hwnd; if ((dwStyle & 0x10000000) || isMDIClient) { w.needsPaint = true; w.needsErase = true; } } }
 
     // Register child in parent's childList (mirrors Win32 create-window.ts)
     if (hWndParent) {
