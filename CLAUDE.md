@@ -86,6 +86,11 @@ No test runner or linter scripts are configured.
 - Language detection from PE resource language IDs, propagated as `lang` attributes for correct CJK font rendering
 - OpenGL 1.x immediate-mode pipeline mapped to WebGL2 for 3D screen savers
 
+### Code Style Rules
+
+1. **File size limit**: Keep each file under 500 lines. When a file grows beyond this, split independent functionality into separate files.
+2. **Constants in shared locations**: Define Win32/Win16 constants (message codes, style flags, struct sizes, etc.) in shared `types.ts` or `constants.ts` files — not scattered across individual handler files. Import from the shared location.
+
 ## Skill: Supporting a New EXE
 
 When asked to make `examples/<name>.exe` run in the emulator, follow this iterative workflow:

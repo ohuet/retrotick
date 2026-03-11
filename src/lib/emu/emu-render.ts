@@ -155,7 +155,11 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
     // Custom-class child controls with their own wndProc: send WM_PAINT
     if (child.wndProc && !['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT'].includes(className)) {
       child.needsPaint = true;
-      emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT
+      if (emu.isNE) {
+        emu.callWndProc16(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (16-bit)
+      } else {
+        emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT
+      }
       child.needsPaint = false;
     }
   }
@@ -192,7 +196,26 @@ function sendDrawItem(emu: Emulator, parentHwnd: number, parentWnd: WindowInfo, 
   emu.memory.writeU32(addr + 40, child.height);// rcItem.bottom
   emu.memory.writeU32(addr + 44, 0);           // itemData
 
-  emu.callWndProc(parentWnd.wndProc, parentHwnd, 0x002B, controlId, addr);
+  if (emu.isNE) {
+    // Win16 DRAWITEMSTRUCT uses 16-bit fields; build a 16-bit version
+    // Layout: CtlType(2) CtlID(2) itemID(2) itemAction(2) itemState(2) hwndItem(2) hDC(2) rcItem(8=4x2) itemData(4)
+    const addr16 = emu.drawItemStructAddr;
+    emu.memory.writeU16(addr16 + 0,  4);           // CtlType = ODT_BUTTON
+    emu.memory.writeU16(addr16 + 2,  controlId);   // CtlID
+    emu.memory.writeU16(addr16 + 4,  0);           // itemID
+    emu.memory.writeU16(addr16 + 6,  1);           // itemAction = ODA_DRAWENTIRE
+    emu.memory.writeU16(addr16 + 8,  (child.style & 0x08000000) ? 0x4 : 0); // itemState
+    emu.memory.writeU16(addr16 + 10, childHwnd);   // hwndItem
+    emu.memory.writeU16(addr16 + 12, hdc);         // hDC
+    emu.memory.writeU16(addr16 + 14, 0);           // rcItem.left
+    emu.memory.writeU16(addr16 + 16, 0);           // rcItem.top
+    emu.memory.writeU16(addr16 + 18, child.width); // rcItem.right
+    emu.memory.writeU16(addr16 + 20, child.height);// rcItem.bottom
+    emu.memory.writeU32(addr16 + 22, 0);           // itemData
+    emu.callWndProc16(parentWnd.wndProc, parentHwnd, 0x002B, controlId, addr16);
+  } else {
+    emu.callWndProc(parentWnd.wndProc, parentHwnd, 0x002B, controlId, addr);
+  }
 
   // Restore DC transform
   if (dc && !useDomCanvas) {

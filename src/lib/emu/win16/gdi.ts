@@ -1446,8 +1446,10 @@ export function registerWin16Gdi(emu: Emulator): void {
       if (dc) {
         dc.ctx.font = getFontCSS(hdc);
         const sample = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-        aveCharWidth = Math.round(dc.ctx.measureText(sample).width / sample.length);
-        maxCharWidth = Math.ceil(dc.ctx.measureText('W').width);
+        const measured = Math.round(dc.ctx.measureText(sample).width / sample.length);
+        const measuredMax = Math.ceil(dc.ctx.measureText('W').width);
+        if (measured > 0) aveCharWidth = measured;
+        if (measuredMax > 0) maxCharWidth = measuredMax;
       }
       let off = 0;
       emu.memory.writeI16(lptm + off, fontSize);      off += 2; // tmHeight

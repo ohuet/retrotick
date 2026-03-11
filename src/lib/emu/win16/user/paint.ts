@@ -1,6 +1,6 @@
 import type { Emulator, Win16Module } from '../../emulator';
 import type { WindowInfo } from '../../win32/user32/types';
-import { getClientSize } from '../../win32/user32/_helpers';
+import { getClientSize, getNonClientMetrics } from '../../win32/user32/_helpers';
 import type { Win16UserHelpers } from './index';
 
 // Win16 USER module — Painting & DC
@@ -14,7 +14,26 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
     if (lpRect) {
       const wnd = emu.handles.get<WindowInfo>(hWnd || emu.mainWindow);
       if (wnd) {
-        h.writeRect(lpRect, wnd.x || 0, wnd.y || 0, (wnd.x || 0) + wnd.width, (wnd.y || 0) + wnd.height);
+        // Convert to screen coordinates by walking parent chain (same as Win32)
+        const WS_CHILD = 0x40000000;
+        let sx = wnd.x || 0, sy = wnd.y || 0;
+        if (wnd.style & WS_CHILD) {
+          let cur = wnd.parent ? emu.handles.get<WindowInfo>(wnd.parent) : null;
+          while (cur) {
+            if (cur.style & WS_CHILD) {
+              sx += cur.x || 0;
+              sy += cur.y || 0;
+            } else {
+              // Top-level parent: add screen position + client area offset
+              const { bw, captionH, menuH } = getNonClientMetrics(cur.style, cur.hMenu !== 0, true);
+              sx += (cur.x || 0) + bw;
+              sy += (cur.y || 0) + bw + captionH + menuH;
+              break;
+            }
+            cur = cur.parent ? emu.handles.get<WindowInfo>(cur.parent) : null;
+          }
+        }
+        h.writeRect(lpRect, sx, sy, sx + wnd.width, sy + wnd.height);
       } else {
         h.writeRect(lpRect, 0, 0, 640, 480);
       }

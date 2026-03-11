@@ -115,21 +115,29 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
 
     const className = resolveClassName16(emu, classNameRaw, lpClassName);
     const windowName = lpWindowName ? emu.memory.readCString(lpWindowName) : '';
-
     const classInfo = emu.windowClasses.get(className.toUpperCase());
     let effectiveMenu = hMenu;
     if (!effectiveMenu && classInfo?.menuName) {
       effectiveMenu = 1;
     }
+    // Windows adjusts style: WS_SYSMENU/WS_MINIMIZEBOX/WS_MAXIMIZEBOX imply WS_CAPTION
+    const WS_CAPTION = 0x00C00000;
+    const WS_SYSMENU = 0x00080000;
+    let adjustedStyle = dwStyle;
+    if ((dwStyle & WS_SYSMENU) && !(dwStyle & WS_CAPTION)) {
+      adjustedStyle |= WS_CAPTION;
+    }
+    // Win16 CW_USEDEFAULT: if x=0x8000, both x and y default; if cx=0x8000, both cx and cy default
+    const CW_USEDEFAULT = 0x8000;
     const hwnd = emu.handles.alloc('window', {
       classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: windowName,
-      style: dwStyle,
+      style: adjustedStyle,
       exStyle: 0,
-      x: x === 0x8000 ? 0 : x,
-      y: y === 0x8000 ? 0 : y,
-      width: w === 0x8000 ? 320 : w,
-      height: height === 0x8000 ? 200 : height,
+      x: x === CW_USEDEFAULT ? 0 : x,
+      y: x === CW_USEDEFAULT ? 0 : y,
+      width: w === CW_USEDEFAULT ? 320 : w,
+      height: w === CW_USEDEFAULT ? 200 : height,
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
@@ -225,7 +233,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
       const WM_SIZE = 0x0005;
       const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
-      emu.postMessage(hWnd, WM_SIZE, 0, lParam);
+      // Send WM_SIZE synchronously (like real Windows SendMessage) so the
+      // window proc can resize children before initialization continues
+      emu.callWndProc16(wnd.wndProc, hWnd, WM_SIZE, 0, lParam);
     }
     // Notify control overlays so child controls (EDIT, BUTTON, etc.) get DOM elements
     if (hWnd === emu.mainWindow) emu.notifyControlOverlays();
@@ -328,7 +338,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     if (wnd) {
       wnd.x = (x << 16 >> 16); wnd.y = (y << 16 >> 16);
       wnd.width = w; wnd.height = height;
-      // console.log(`[WIN16] MoveWindow hwnd=0x${hWnd.toString(16)} class="${wnd.classInfo?.className}" x=${wnd.x} y=${wnd.y} w=${w} h=${height}`);
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
       if (hWnd === emu.mainWindow) {
         emu.setupCanvasSize(cw, ch);
@@ -612,16 +621,25 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const className = resolveClassName16(emu, classNameRaw, lpClassName);
     const windowName = lpWindowName ? emu.memory.readCString(lpWindowName) : '';
 
+    // Windows adjusts style: WS_SYSMENU implies WS_CAPTION
+    const WS_CAPTION_EX = 0x00C00000;
+    const WS_SYSMENU_EX = 0x00080000;
+    let adjustedStyleEx = dwStyle;
+    if ((dwStyle & WS_SYSMENU_EX) && !(dwStyle & WS_CAPTION_EX)) {
+      adjustedStyleEx |= WS_CAPTION_EX;
+    }
+
     const classInfo = emu.windowClasses.get(className.toUpperCase());
+    const CW_USEDEFAULT = 0x8000;
     const hwnd = emu.handles.alloc('window', {
       classInfo: classInfo || { className, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
       title: windowName,
-      style: dwStyle,
+      style: adjustedStyleEx,
       exStyle: dwExStyle,
-      x: x === 0x8000 ? 0 : x,
-      y: y === 0x8000 ? 0 : y,
-      width: w === 0x8000 ? 320 : w,
-      height: height === 0x8000 ? 200 : height,
+      x: x === CW_USEDEFAULT ? 0 : x,
+      y: x === CW_USEDEFAULT ? 0 : y,
+      width: w === CW_USEDEFAULT ? 320 : w,
+      height: w === CW_USEDEFAULT ? 200 : height,
       hMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,

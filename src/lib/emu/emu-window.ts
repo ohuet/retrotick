@@ -550,21 +550,47 @@ export function loadBitmapResourceFromModule(emu: Emulator, hInstance: number, r
 }
 
 export function loadBitmapResourceByName(emu: Emulator, name: string): number {
+  const nameUpper = name.toUpperCase();
+
+  // Check cache first
+  const cached = emu.bitmapNameCache?.get(nameUpper);
+  if (cached) {
+    if (emu.handles.get(cached)) return cached;
+    emu.bitmapNameCache!.delete(nameUpper);
+  }
+
+  // NE (16-bit) path: search NE resource table by name
+  if (emu.isNE && emu.ne) {
+    let entry = emu.ne.resources.find(r => r.typeID === 2 && r.name && r.name.toUpperCase() === nameUpper);
+    let srcBuf = emu.arrayBuffer;
+    if (!entry) {
+      for (const dllInfo of emu.neDllResources) {
+        entry = dllInfo.resources.find(r => r.typeID === 2 && r.name && r.name.toUpperCase() === nameUpper);
+        if (entry) { srcBuf = dllInfo.arrayBuffer; break; }
+      }
+    }
+    if (!entry) return 0;
+    try {
+      const dibData = new Uint8Array(srcBuf, entry.fileOffset, entry.length);
+      const { canvas, ctx, imageData, width, height } = decodeDib(dibData);
+      const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
+      const hBitmap = emu.handles.alloc('bitmap', bmp);
+      if (!emu.bitmapNameCache) emu.bitmapNameCache = new Map();
+      emu.bitmapNameCache.set(nameUpper, hBitmap);
+      console.log(`[NE] Loaded bitmap resource "${name}": ${width}x${height} → handle ${hBitmap}`);
+      return hBitmap;
+    } catch (e: unknown) {
+      console.warn(`Failed to load NE bitmap resource "${name}": ${e instanceof Error ? e.message : String(e)}`);
+      return 0;
+    }
+  }
+
   if (!emu.peInfo.resources) return 0;
   const bitmapType = emu.peInfo.resources.find(r => r.typeId === 2);
   if (!bitmapType) return 0;
 
-  const nameUpper = name.toUpperCase();
   const entry = bitmapType.entries.find(e => e.name && e.name.toUpperCase() === nameUpper);
   if (!entry || entry.languages.length === 0) return 0;
-
-  // Use a string-based cache key
-  const cacheKey = nameUpper;
-  const cached = emu.bitmapNameCache?.get(cacheKey);
-  if (cached) {
-    if (emu.handles.get(cached)) return cached;
-    emu.bitmapNameCache!.delete(cacheKey);
-  }
 
   const lang = entry.languages[0];
   try {
@@ -580,7 +606,7 @@ export function loadBitmapResourceByName(emu: Emulator, name: string): number {
     const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
     const hBitmap = emu.handles.alloc('bitmap', bmp);
     if (!emu.bitmapNameCache) emu.bitmapNameCache = new Map();
-    emu.bitmapNameCache.set(cacheKey, hBitmap);
+    emu.bitmapNameCache.set(nameUpper, hBitmap);
     console.log(`[PE] Loaded bitmap resource "${name}": ${width}x${height}`);
     return hBitmap;
   } catch (e: unknown) {

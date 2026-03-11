@@ -166,8 +166,10 @@ export function registerText(emu: Emulator): void {
       dc.ctx.font = getFontCSS(hdc);
       // Measure average width using standard TEXTMETRIC method (average of a-z, A-Z)
       const sample = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      aveCharWidth = Math.round(dc.ctx.measureText(sample).width / sample.length);
-      maxCharWidth = Math.ceil(dc.ctx.measureText('W').width);
+      const measured = Math.round(dc.ctx.measureText(sample).width / sample.length);
+      const measuredMax = Math.ceil(dc.ctx.measureText('W').width);
+      if (measured > 0) aveCharWidth = measured;
+      if (measuredMax > 0) maxCharWidth = measuredMax;
     }
     const ascent = Math.round(fontSize * 0.8);
     const descent = fontSize - ascent;
