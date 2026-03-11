@@ -120,6 +120,13 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     if (!effectiveMenu && classInfo?.menuName) {
       effectiveMenu = 1;
     }
+    // Windows adjusts style: WS_SYSMENU implies WS_CAPTION
+    const WS_CAPTION = 0x00C00000;
+    const WS_SYSMENU = 0x00080000;
+    let adjustedStyle = dwStyle;
+    if ((dwStyle & WS_SYSMENU) && !(dwStyle & WS_CAPTION)) {
+      adjustedStyle |= WS_CAPTION;
+    }
     // Sign-extend 16-bit values for positions (can be negative)
     const sx = (x << 16 >> 16);
     const sy = (y << 16 >> 16);
@@ -134,9 +141,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       style: adjustedStyle,
       exStyle: 0,
       x: sx === CW_USEDEFAULT ? 0 : sx,
-      y: sy === CW_USEDEFAULT ? 0 : sy,
+      y: sx === CW_USEDEFAULT ? 0 : sy,
       width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      height: sw === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
@@ -682,9 +689,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       style: adjustedStyleEx,
       exStyle: dwExStyle,
       x: sx === CW_USEDEFAULT ? 0 : sx,
-      y: sy === CW_USEDEFAULT ? 0 : sy,
+      y: sx === CW_USEDEFAULT ? 0 : sy,
       width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      height: sw === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
       hMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
