@@ -560,7 +560,10 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
               // CCS_TOP: dock to top of parent, full width
               wnd.x = 0; wnd.y = 0;
               wnd.width = parentCW;
-              // height was set by the x86 wndProc via SetWindowPos
+              // COMMCTRL x86 code may compute height from multi-state bitmap
+              // (e.g. WINFILE bitmap 100 is 208x55 with 3 rows of 15px buttons).
+              // Cap to standard Win3.1 toolbar height of 27px.
+              if (wnd.height > 30) wnd.height = 27;
             } else {
               // Statusbar: dock to bottom of parent, full width
               const MIN_SB = 20;
