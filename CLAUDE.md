@@ -10,7 +10,7 @@ RetroTick is a browser-based x86 emulator that runs classic Windows PE/NE/MZ exe
 
 - `npm run build` — Production build to `dist/`
 - `npm run check` — Alias for `npm run build` (catches type errors and regressions)
-- `timeout 2 npx tsx test-<name>.mjs` — Run a headless test for a specific exe
+- `timeout 2 npx tsx tests/test-<name>.mjs` — Run a headless test for a specific exe
 
 No test runner or linter scripts are configured.
 
@@ -97,19 +97,19 @@ When asked to make `examples/<name>.exe` run in the emulator, follow this iterat
 
 ### Important Rules
 
-1. **Always use `timeout 2`** when test-running to save time: `timeout 2 npx tsx test-<name>.mjs 2>&1`
+1. **Always use `timeout 2`** when test-running to save time: `timeout 2 npx tsx tests/test-<name>.mjs 2>&1`
 2. **Always check Microsoft documentation or public headers** for constant value definitions, API argument counts, struct types and sizes. Never guess these — look them up in official sources.
 3. **Always fix Unimplemented APIs and missing arg counts first** before fixing other issues (unknown opcodes, WILD EIP, etc.). Most crashes and opcode errors are caused by unimplemented APIs returning bad values or missing stackBytes corrupting the stack — fix the root cause first.
 4. **Always define constant values as named `const`** — look up the correct value from Microsoft documentation or public headers, then define it as a named constant (e.g. `const WM_PAINT = 0x000F;`). Never hardcode magic numbers directly into the code.
 
 ### Step 1: Create test harness
 
-Copy an existing `test-*.mjs` (e.g. `test-calc.mjs`), change the filename to the target exe. The test file runs the emulator **headlessly via Node.js** — no dev server needed. It uses mock Canvas/OffscreenCanvas objects, loads the PE, creates an Emulator, and runs ticks until `emu.waitingForMessage` becomes true (= reached message loop = success).
+Copy an existing `tests/test-*.mjs` (e.g. `tests/test-calc.mjs`), change the filename to the target exe. The test file runs the emulator **headlessly via Node.js** — no dev server needed. It uses mock Canvas/OffscreenCanvas objects, loads the PE, creates an Emulator, and runs ticks until `emu.waitingForMessage` becomes true (= reached message loop = success).
 
 After reaching the message loop, the test can simulate user input via `emu.postMessage()` (e.g. `WM_COMMAND` for button clicks, `WM_KEYDOWN`/`WM_CHAR` for keyboard input) and verify results by inspecting window state (child windows, control text, title bar, etc.).
 
 ```bash
-timeout 2 npx tsx test-<name>.mjs 2>&1
+timeout 2 npx tsx tests/test-<name>.mjs 2>&1
 ```
 
 ### Step 2: Fix `No API definition` warnings
