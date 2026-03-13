@@ -100,6 +100,18 @@ export function registerInput(emu: Emulator): void {
     return layout.hkl;
   });
 
+  // LoadKeyboardLayoutA(pwszKLID, Flags) — return current HKL
+  user32.register('LoadKeyboardLayoutA', 2, () => {
+    const layout = getKeyboardLayout(loadSettings().keyboardLayout);
+    return layout.hkl;
+  });
+
+  // ActivateKeyboardLayout(HKL, Flags) — return previous HKL
+  user32.register('ActivateKeyboardLayout', 2, () => {
+    const layout = getKeyboardLayout(loadSettings().keyboardLayout);
+    return layout.hkl;
+  });
+
   // GetKeyboardLayoutList(nBuff, lpList) - returns count of keyboard layouts
   user32.register('GetKeyboardLayoutList', 2, () => {
     const nBuff = emu.readArg(0);

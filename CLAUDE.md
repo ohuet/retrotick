@@ -108,6 +108,8 @@ Copy an existing `test-*.mjs` (e.g. `test-calc.mjs`), change the filename to the
 
 After reaching the message loop, the test can simulate user input via `emu.postMessage()` (e.g. `WM_COMMAND` for button clicks, `WM_KEYDOWN`/`WM_CHAR` for keyboard input) and verify results by inspecting window state (child windows, control text, title bar, etc.).
 
+**API tracing**: Set `emu.traceApi = true` to log every Win32/Win16 API call (prints `[API] DLL:FuncName` to console). Useful for debugging which APIs are called during specific message handling.
+
 ```bash
 timeout 2 npx tsx test-<name>.mjs 2>&1
 ```

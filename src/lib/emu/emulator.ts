@@ -16,7 +16,7 @@ import type { FileManager } from './file-manager';
 import { renderChildControls as _renderChildControls, notifyControlOverlays as _notifyControlOverlays } from './emu-render';
 import { getDC as _getDC, getWindowDC as _getWindowDC, promoteToMainWindow as _promoteToMainWindow, setupCanvasSize as _setupCanvasSize, beginPaint as _beginPaint, endPaint as _endPaint, syncDCToCanvas as _syncDCToCanvas, releaseChildDC as _releaseChildDC, dispatchToSehHandler as _dispatchToSehHandler, getBrush as _getBrush, getPen as _getPen, loadBitmapResource as _loadBitmapResource, loadBitmapResourceFromModule as _loadBitmapResourceFromModule, loadBitmapResourceByName as _loadBitmapResourceByName, loadCursorResourceByName as _loadCursorResourceByName, loadStringResource as _loadStringResource, loadIconResource as _loadIconResource } from './emu-window';
 import { emuLoad, emuFindResourceEntry } from './emu-load';
-import { emuTick, emuCallWndProc, emuCallWndProc16, emuCallNative } from './emu-exec';
+import { emuTick, emuCallWndProc, emuCallWndProc16, emuCallNative, emuCallCallback } from './emu-exec';
 import { Thread } from './thread';
 
 export { fillTextBitmap } from './emu-render';
@@ -1184,7 +1184,11 @@ export class Emulator {
   beginPaint(hwnd: number): number { return _beginPaint(this, hwnd); }
   endPaint(hwnd: number, hdc: number): void { _endPaint(this, hwnd, hdc); }
   renderChildControls(hwnd: number): void { _renderChildControls(this, hwnd); }
+  private _repaintingChildren = false;
   repaintChildWindows(hwnd: number): void {
+    if (this._repaintingChildren) return;
+    this._repaintingChildren = true;
+    try {
     const wnd = this.handles.get<WindowInfo>(hwnd);
     if (!wnd?.childList) return;
     const WM_PAINT = 0x000F;
@@ -1199,6 +1203,7 @@ export class Emulator {
       }
       child.needsPaint = false;
     }
+    } finally { this._repaintingChildren = false; }
   }
   /** Hit-test: find the deepest visible child window at (x,y) in the main window's client area.
    *  Returns { hwnd, x, y } with coordinates relative to the found window's client area. */
@@ -1248,6 +1253,10 @@ export class Emulator {
 
   callNative(addr: number): number | undefined {
     return emuCallNative(this, addr);
+  }
+
+  callCallback(addr: number, args: number[]): number | undefined {
+    return emuCallCallback(this, addr, args);
   }
 
   /** Resolve a pending console input wait (ReadConsoleW, ReadConsoleInput, _getch, WaitForSingleObject stdin) */

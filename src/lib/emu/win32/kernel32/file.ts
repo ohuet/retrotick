@@ -981,10 +981,11 @@ export function registerFile(emu: Emulator): void {
     const lpBytesPerSector = emu.readArg(2);
     const lpNumberOfFreeClusters = emu.readArg(3);
     const lpTotalNumberOfClusters = emu.readArg(4);
-    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 8);
+    // Use FAT16-style values (all under 65536) to avoid 16-bit overflow in older games
+    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 64);
     if (lpBytesPerSector) emu.memory.writeU32(lpBytesPerSector, 512);
-    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 262144);
-    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 2621440);
+    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 32760);   // ~1GB free
+    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 65520); // ~2GB total
     return 1;
   });
 
@@ -994,10 +995,11 @@ export function registerFile(emu: Emulator): void {
     const lpBytesPerSector = emu.readArg(2);
     const lpNumberOfFreeClusters = emu.readArg(3);
     const lpTotalNumberOfClusters = emu.readArg(4);
-    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 8);
+    // Use FAT16-style values (all under 65536) to avoid 16-bit overflow in older games
+    if (lpSectorsPerCluster) emu.memory.writeU32(lpSectorsPerCluster, 64);
     if (lpBytesPerSector) emu.memory.writeU32(lpBytesPerSector, 512);
-    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 262144);
-    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 2621440);
+    if (lpNumberOfFreeClusters) emu.memory.writeU32(lpNumberOfFreeClusters, 32760);   // ~1GB free
+    if (lpTotalNumberOfClusters) emu.memory.writeU32(lpTotalNumberOfClusters, 65520); // ~2GB total
     return 1;
   });
 

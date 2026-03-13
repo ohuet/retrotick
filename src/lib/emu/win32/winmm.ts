@@ -372,7 +372,19 @@ export function registerWinmm(emu: Emulator): void {
     const data = findWavResource(emu, name);
     if (data) return data;
 
-    // Could be a filename — we don't have a filesystem, return null
+    // Try as a filename — resolve path and look up in filesystem/additionalFiles
+    const resolved = emu.resolvePath(name);
+    const fileInfo = emu.fs.findFile(resolved, emu.additionalFiles);
+    if (fileInfo) {
+      if (fileInfo.source === 'additional') {
+        const ab = emu.additionalFiles.get(fileInfo.name);
+        if (ab) return new Uint8Array(ab);
+      } else if (fileInfo.source === 'external') {
+        const ext = emu.fs.externalFiles.get(resolved.toUpperCase());
+        if (ext) return ext.data;
+      }
+    }
+
     console.log(`[WINMM] PlaySound: cannot find sound "${name}"`);
     return null;
   }
@@ -1096,4 +1108,12 @@ export function registerWinmm(emu: Emulator): void {
 
   winmm.register('mmioGetInfo', 3, () => 0);
   winmm.register('mmioSetInfo', 3, () => 0);
+
+  // Joystick APIs
+  const JOYERR_UNPLUGGED = 167;
+  winmm.register('joyGetNumDevs', 0, () => 0); // no joysticks
+  winmm.register('joyGetDevCapsA', 3, () => JOYERR_UNPLUGGED);
+  winmm.register('joyGetDevCapsW', 3, () => JOYERR_UNPLUGGED);
+  winmm.register('joyGetPos', 2, () => JOYERR_UNPLUGGED);
+  winmm.register('joyGetPosEx', 2, () => JOYERR_UNPLUGGED);
 }

@@ -120,6 +120,16 @@ export function registerAdvapi32(emu: Emulator): void {
   const DEFAULT_DWORD_VALUES: Record<string, number> = {
     'enableextensions': 1,
     'delayedexpansion': 0,
+    // Jazz Jackrabbit 2 defaults
+    'last videomode': 0,       // first mode (640x480x8)
+    'free scale': 0,
+    'music active': 1,
+    'music volume': 100,
+    'sound fx active': 1,
+    'sound fx volume': 100,
+    'sound mixing rate': 22050,
+    'sound mixing options': 0,
+    'spy': 0,
   };
 
   function queryRegDefault(valueName: string, typePtr: number, dataPtr: number, cbDataPtr: number): number {
@@ -171,7 +181,11 @@ export function registerAdvapi32(emu: Emulator): void {
       console.log(`[REG] RegQueryValueExA(${hkeyName(hKey)}, "${valueName}") => ${fmtType(val.type)} ${fmtData(val.type, val.data)}`);
       return ERROR_SUCCESS;
     }
-    return queryRegDefault(valueName, typePtr, dataPtr, cbDataPtr);
+    const result = queryRegDefault(valueName, typePtr, dataPtr, cbDataPtr);
+    if (result !== ERROR_SUCCESS) {
+      console.log(`[REG] RegQueryValueExA(0x${hKey.toString(16)}, "${valueName}") => NOT_FOUND (no store)`);
+    }
+    return result;
   });
 
   advapi32.register('RegQueryValueA', 4, () => {

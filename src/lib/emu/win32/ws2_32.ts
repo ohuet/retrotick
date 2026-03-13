@@ -112,7 +112,9 @@ export function registerWs2_32(emu: Emulator): void {
   ws2_32.register('WSACancelBlockingCall', 0, () => 0);
   ws2_32.register('WSACancelAsyncRequest', 1, () => 0);
   ws2_32.register('WSAAsyncGetProtoByName', 5, () => 0);
+  ws2_32.register('WSAAsyncGetProtoByNumber', 5, () => 0);
   ws2_32.register('WSAAsyncGetHostByName', 5, () => 0);
+  ws2_32.register('WSAAsyncGetHostByAddr', 7, () => 0);
   ws2_32.register('getsockopt', 5, () => SOCKET_ERROR);
   ws2_32.register('sendto', 6, () => SOCKET_ERROR);
   ws2_32.register('recvfrom', 6, () => SOCKET_ERROR);

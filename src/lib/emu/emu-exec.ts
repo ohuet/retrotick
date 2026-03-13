@@ -52,7 +52,9 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
         }
       }
     }
-    if (!isThunk && !inImage) {
+    const inVirtualAlloc = addr >= emu.virtualBase && addr < emu.virtualPtr;
+    if (!isThunk && !inImage && !inVirtualAlloc) {
+      console.error(`[callStdcall] addr 0x${(addr >>> 0).toString(16)} is outside known ranges: image=0x${emu.pe.imageBase.toString(16)}..0x${(emu.pe.imageBase + emu.pe.sizeOfImage).toString(16)}, virtualAlloc=0x${emu.virtualBase.toString(16)}..0x${emu.virtualPtr.toString(16)}, args=[${args.map(a => '0x' + (a >>> 0).toString(16))}]`);
       return 0;
     }
   }
@@ -81,8 +83,7 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
 
   const targetDepth = emu.wndProcDepth - 1;
   let steps = 0;
-  const MAX_STEPS = 20000000;
-
+  const MAX_STEPS = (emu as any)._callStdcallMaxSteps ?? 20000000;
   while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted && steps < MAX_STEPS) {
     const eip = emu.cpu.eip >>> 0;
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
@@ -167,6 +168,11 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
 
 export function emuCallWndProc(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
   return callStdcall(emu, wndProc, [hwnd, message, wParam, lParam]);
+}
+
+/** Call any stdcall callback with arbitrary args. Used for COM enumeration callbacks etc. */
+export function emuCallCallback(emu: Emulator, addr: number, args: number[]): number | undefined {
+  return callStdcall(emu, addr, args);
 }
 
 export function emuCallTimerProc(emu: Emulator, callback: number, timerId: number, dwUser: number): number | undefined {
@@ -693,7 +699,7 @@ export function emuTick(emu: Emulator): void {
     }
     // Detect wild EIP
     const newEip = emu.cpu.eip >>> 0;
-    if (newEip !== 0 && !emu.thunkToApi.has(newEip)) {
+    if (!emu.thunkToApi.has(newEip)) {
       let inImage = false;
       if (emu.isNE && emu.ne) {
         for (const seg of emu.ne.segments) {

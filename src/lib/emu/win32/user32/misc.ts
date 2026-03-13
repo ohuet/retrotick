@@ -482,8 +482,7 @@ export function registerMisc(emu: Emulator): void {
     return cchLength;
   });
 
-  // SetMenuDefaultItem(hMenu, uItem, fByPos) → BOOL
-  user32.register('SetMenuDefaultItem', 3, () => 1);
+  // SetMenuDefaultItem — moved to menu.ts
 
   // EnumWindowStationsW(lpEnumFunc, lParam) → BOOL
   user32.register('EnumWindowStationsW', 2, () => 1);
@@ -559,8 +558,7 @@ export function registerMisc(emu: Emulator): void {
   // GetShellWindow() → HWND
   user32.register('GetShellWindow', 0, () => 0);
 
-  // GetMenuItemInfoW(hMenu, uItem, fByPosition, lpmii) → BOOL
-  user32.register('GetMenuItemInfoW', 4, () => 0); // fail
+  // GetMenuItemInfoW — moved to menu.ts
 
   // GetUpdateRgn(hwnd, hRgn, bErase) → int
   user32.register('GetUpdateRgn', 3, () => 1); // NULLREGION
@@ -585,8 +583,8 @@ export function registerMisc(emu: Emulator): void {
   user32.register('MonitorFromPoint', 3, () => 0xD0000001);
   user32.register('MonitorFromRect', 2, () => 0xD0000001);
 
-  // GetMonitorInfoW: fill MONITORINFO struct with screen dimensions
-  user32.register('GetMonitorInfoW', 2, () => {
+  // GetMonitorInfoA/W: fill MONITORINFO struct with screen dimensions
+  const getMonitorInfo = () => {
     const _hMonitor = emu.readArg(0);
     const lpmi = emu.readArg(1);
     if (!lpmi) return 0;
@@ -604,7 +602,9 @@ export function registerMisc(emu: Emulator): void {
     emu.memory.writeU32(lpmi + 32, h);  // rcWork.bottom
     emu.memory.writeU32(lpmi + 36, 1);  // dwFlags = MONITORINFOF_PRIMARY
     return 1;
-  });
+  };
+  user32.register('GetMonitorInfoA', 2, getMonitorInfo);
+  user32.register('GetMonitorInfoW', 2, getMonitorInfo);
 
   // EnumDisplayMonitors(hdc, lprcClip, lpfnEnum, dwData) → BOOL
   user32.register('EnumDisplayMonitors', 4, () => {
