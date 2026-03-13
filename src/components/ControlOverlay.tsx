@@ -526,8 +526,15 @@ export function renderControlOverlay(
       if (parent) {
         const WM_COMMAND = 0x0111;
         const CBN_SELCHANGE = 1;
-        const wParam = ((CBN_SELCHANGE << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
-        emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+        if (emu.ne) {
+          // Win16 format: wParam=controlId, lParam=MAKELONG(hwnd, notifyCode)
+          const lParam16 = ((CBN_SELCHANGE << 16) | (ctrl.childHwnd & 0xFFFF)) >>> 0;
+          emu.postMessage(parent, WM_COMMAND, ctrl.controlId & 0xFFFF, lParam16);
+        } else {
+          // Win32 format: wParam=MAKELONG(controlId, notifyCode), lParam=hwnd
+          const wParam = ((CBN_SELCHANGE << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
+          emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
+        }
       }
       const parentWnd = emu.handles.get<WindowInfo>(parent);
       if (parentWnd) parentWnd.needsPaint = true;

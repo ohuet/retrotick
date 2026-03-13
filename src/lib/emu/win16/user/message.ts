@@ -37,6 +37,182 @@ const LB16_GETITEMRECT   = 0x0422;
 const LB16_FINDSTRINGEXACT = 0x0423;
 const LB16_ERR = -1;
 
+// Win16 CB_ messages (WM_USER + offset, different from Win32 0x014x!)
+const CB16_GETEDITSEL      = 0x0400;
+const CB16_LIMITTEXT       = 0x0401;
+const CB16_SETEDITSEL      = 0x0402;
+const CB16_ADDSTRING       = 0x0403;
+const CB16_DELETESTRING    = 0x0404;
+const CB16_DIR             = 0x0405;
+const CB16_GETCOUNT        = 0x0406;
+const CB16_GETCURSEL       = 0x0407;
+const CB16_GETLBTEXT       = 0x0408;
+const CB16_GETLBTEXTLEN    = 0x0409;
+const CB16_INSERTSTRING    = 0x040A;
+const CB16_RESETCONTENT    = 0x040B;
+const CB16_FINDSTRING      = 0x040C;
+const CB16_SELECTSTRING    = 0x040D;
+const CB16_SETCURSEL       = 0x040E;
+const CB16_SHOWDROPDOWN    = 0x040F;
+const CB16_GETITEMDATA     = 0x0410;
+const CB16_SETITEMDATA     = 0x0411;
+const CB16_SETITEMHEIGHT   = 0x0413;
+const CB16_GETITEMHEIGHT   = 0x0414;
+const CB16_SETEXTENDEDUI   = 0x0415;
+const CB16_GETEXTENDEDUI   = 0x0416;
+const CB16_GETDROPPEDSTATE = 0x0417;
+const CB16_FINDSTRINGEXACT = 0x0418;
+const CB16_ERR = -1;
+
+// CBS style flags
+const CBS_OWNERDRAWFIXED    = 0x0010;
+const CBS_OWNERDRAWVARIABLE = 0x0020;
+const CBS_HASSTRINGS        = 0x0200;
+
+export function handleComboBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
+  if (!wnd.cbItems) { wnd.cbItems = []; wnd.cbItemData = []; }
+
+  const style = wnd.style ?? 0;
+  const isOwnerDrawNoStrings = ((style & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE)) !== 0)
+    && ((style & CBS_HASSTRINGS) === 0);
+
+  // Helper: generate display text for owner-draw items (drive indices → "C:", etc.)
+  function ownerDrawDisplayText(data: number): string {
+    if (data >= 0 && data <= 25) return String.fromCharCode(65 + data) + ':';
+    return `#${data}`;
+  }
+
+  if (message === CB16_ADDSTRING) {
+    if (isOwnerDrawNoStrings) {
+      wnd.cbItems.push(ownerDrawDisplayText(lParam));
+      wnd.cbItemData!.push(lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.cbItems.push(text);
+      wnd.cbItemData!.push(0);
+    }
+    return wnd.cbItems.length - 1;
+  }
+  if (message === CB16_INSERTSTRING) {
+    const idx = wParam === 0xFFFF || wParam >= wnd.cbItems.length ? wnd.cbItems.length : wParam;
+    if (isOwnerDrawNoStrings) {
+      wnd.cbItems.splice(idx, 0, ownerDrawDisplayText(lParam));
+      wnd.cbItemData!.splice(idx, 0, lParam);
+    } else {
+      const addr = emu.resolveFarPtr(lParam);
+      const text = addr ? emu.memory.readCString(addr) : '';
+      wnd.cbItems.splice(idx, 0, text);
+      wnd.cbItemData!.splice(idx, 0, 0);
+    }
+    return idx;
+  }
+  if (message === CB16_DELETESTRING) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    wnd.cbItems.splice(wParam, 1);
+    wnd.cbItemData!.splice(wParam, 1);
+    return wnd.cbItems.length;
+  }
+  if (message === CB16_RESETCONTENT) {
+    wnd.cbItems.length = 0;
+    wnd.cbItemData!.length = 0;
+    wnd.cbSelectedIndex = undefined;
+    return 0;
+  }
+  if (message === CB16_GETCOUNT) return wnd.cbItems.length;
+  if (message === CB16_GETCURSEL) return wnd.cbSelectedIndex ?? CB16_ERR;
+  if (message === CB16_SETCURSEL) {
+    wnd.cbSelectedIndex = wParam === 0xFFFF ? undefined : wParam;
+    return wParam === 0xFFFF ? CB16_ERR : wParam;
+  }
+  if (message === CB16_GETLBTEXT) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    const addr = emu.resolveFarPtr(lParam);
+    if (isOwnerDrawNoStrings) {
+      if (addr) emu.memory.writeU32(addr, wnd.cbItemData![wParam] ?? 0);
+      return 4;
+    }
+    const text = wnd.cbItems[wParam];
+    if (addr) emu.memory.writeCString(addr, text);
+    return text.length;
+  }
+  if (message === CB16_GETLBTEXTLEN) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    if (isOwnerDrawNoStrings) return 4;
+    return wnd.cbItems[wParam].length;
+  }
+  if (message === CB16_SETITEMDATA) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    wnd.cbItemData![wParam] = lParam;
+    return 0;
+  }
+  if (message === CB16_GETITEMDATA) {
+    if (wParam >= wnd.cbItems.length) return CB16_ERR;
+    return wnd.cbItemData![wParam] ?? 0;
+  }
+  if (message === CB16_FINDSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.cbItems.length;
+    for (let n = 0; n < wnd.cbItems.length; n++) {
+      const i = (start + n) % wnd.cbItems.length;
+      if (wnd.cbItems[i].toLowerCase().startsWith(search)) return i;
+    }
+    return CB16_ERR;
+  }
+  if (message === CB16_FINDSTRINGEXACT) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.cbItems.length;
+    for (let n = 0; n < wnd.cbItems.length; n++) {
+      const i = (start + n) % wnd.cbItems.length;
+      if (wnd.cbItems[i].toLowerCase() === search) return i;
+    }
+    return CB16_ERR;
+  }
+  if (message === CB16_SELECTSTRING) {
+    const addr = emu.resolveFarPtr(lParam);
+    const search = addr ? emu.memory.readCString(addr).toLowerCase() : '';
+    const start = wParam === 0xFFFF ? 0 : (wParam + 1) % wnd.cbItems.length;
+    for (let n = 0; n < wnd.cbItems.length; n++) {
+      const i = (start + n) % wnd.cbItems.length;
+      if (wnd.cbItems[i].toLowerCase().startsWith(search)) {
+        wnd.cbSelectedIndex = i;
+        return i;
+      }
+    }
+    return CB16_ERR;
+  }
+  if (message === CB16_DIR) {
+    const DDL_DRIVES = 0x4000;
+    const addr = emu.resolveFarPtr(lParam);
+    const attrs = wParam & 0xFFFF;
+    if (attrs & DDL_DRIVES) {
+      wnd.cbItems.push('[-c-]'); wnd.cbItemData!.push(0);
+      wnd.cbItems.push('[-d-]'); wnd.cbItemData!.push(0);
+      wnd.cbItems.push('[-e-]'); wnd.cbItemData!.push(0);
+    }
+    return wnd.cbItems.length > 0 ? wnd.cbItems.length - 1 : CB16_ERR;
+  }
+  if (message === CB16_SHOWDROPDOWN) return 0;
+  if (message === CB16_SETITEMHEIGHT) { wnd.cbItemHeight = lParam & 0xFFFF; return 0; }
+  if (message === CB16_GETITEMHEIGHT) return wnd.cbItemHeight ?? 16;
+  if (message === CB16_SETEXTENDEDUI) return 0;
+  if (message === CB16_GETEXTENDEDUI) return 0;
+  if (message === CB16_GETDROPPEDSTATE) return 0;
+  if (message === CB16_GETEDITSEL) return 0;
+  if (message === CB16_LIMITTEXT) return 0;
+  if (message === CB16_SETEDITSEL) return 0;
+  // WM_SETTEXT / WM_GETTEXT / WM_GETTEXTLENGTH
+  if (message === 0x000C) { // WM_SETTEXT
+    const addr = emu.resolveFarPtr(lParam);
+    wnd.title = addr ? emu.memory.readCString(addr) : '';
+    return 1;
+  }
+  if (message === 0x000E) return wnd.title?.length || 0; // WM_GETTEXTLENGTH
+  return 0;
+}
+
 export function handleListBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
   if (!wnd.lbItems) { wnd.lbItems = []; wnd.lbItemData = []; }
 
@@ -847,6 +1023,11 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
     // Handle messages for built-in LISTBOX controls
     if (wnd && cn && cn.toUpperCase() === 'LISTBOX') {
       return handleListBoxMessage16(emu, wnd, message, wParam, lParam);
+    }
+
+    // Handle messages for built-in COMBOBOX controls
+    if (wnd && cn && cn.toUpperCase() === 'COMBOBOX') {
+      return handleComboBoxMessage16(emu, wnd, message, wParam, lParam);
     }
 
     // Handle messages for status bar controls (MSCTLS_STATUSBAR / MSCTLS_STATUSBAR32)
