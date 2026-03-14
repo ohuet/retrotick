@@ -522,7 +522,14 @@ export function renderControlOverlay(
       const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
       if (!wnd) return;
       wnd.cbSelectedIndex = idx;
-      const parent = wnd.parent || emu.mainWindow || 0;
+      // Walk up past CCS containers (toolbar/statusbar) so the notification
+      // reaches the frame — x86 COMMCTRL may not forward WM_COMMAND.
+      let parent = wnd.parent || emu.mainWindow || 0;
+      const parentWndInfo = emu.handles.get<WindowInfo>(parent);
+      const pcn = parentWndInfo?.classInfo?.className?.toUpperCase();
+      if (pcn === 'TOOLBARWINDOW' || pcn === 'MSCTLS_STATUSBAR') {
+        parent = parentWndInfo?.parent || emu.mainWindow || 0;
+      }
       if (parent) {
         const WM_COMMAND = 0x0111;
         const CBN_SELCHANGE = 1;
