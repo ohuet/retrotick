@@ -14,7 +14,7 @@ RetroTick is an x86 virtual machine and Windows/DOS API compatibility layer buil
 
 | Category | Programs |
 |----------|----------|
-| Games | FreeCell, Solitaire, Minesweeper, SkiFree, Prince of Persia (DOS) |
+| Games | FreeCell, Solitaire, Minesweeper, SkiFree, Prince of Persia (DOS), Chinese Paladin (DOS) |
 | Programs | Calculator, Clock, Command Prompt, Task Manager, Sound Recorder, QBasic, GLX Gears |
 | Screen Savers | 3D Maze (OpenGL), 3D Pipes (OpenGL), Mystify, Starfield, Bezier, Flower Box, Marquee |
 
