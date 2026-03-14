@@ -1047,7 +1047,18 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const y = Math.round((e.clientY - rect.top) * canvas.height / rect.height);
     const wParam = buildMKFlags(e);
     if (emu.capturedWindow) {
-      emu.postMessage(emu.capturedWindow, msg, wParam, makeLParam(x, y));
+      // SetCapture: convert canvas coords to coords relative to captured window.
+      // Walk up the parent chain to compute absolute canvas position, stopping
+      // at the main window (canvas coords = main window's coordinate space).
+      let ox = 0, oy = 0;
+      let hwnd = emu.capturedWindow;
+      while (hwnd && hwnd !== emu.mainWindow) {
+        const w = emu.handles.get<WindowInfo>(hwnd);
+        if (!w) break;
+        ox += w.x; oy += w.y;
+        hwnd = w.parent;
+      }
+      emu.postMessage(emu.capturedWindow, msg, wParam, makeLParam(x - ox, y - oy));
     } else {
       // Hit-test to find the correct child window and convert coordinates
       const hit = emu.windowFromPoint(x, y);

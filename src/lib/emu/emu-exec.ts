@@ -179,9 +179,16 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
   const savedEDI = emu.cpu.reg[7];
   const savedEBP = emu.cpu.reg[5];
 
-  // Ensure DS points to the auto-data segment (MakeProcInstance would set this)
+  // Set DS to the module that owns this wndProc (MakeProcInstance would set this).
+  // DLL wndProcs (e.g. COMMCTRL toolbar) need the DLL's DS, not the app's.
   if (emu.isNE && emu.ne) {
-    emu.cpu.ds = emu.ne.dataSegSelector;
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
+    const classHInst = wnd?.classInfo?.hInstance;
+    if (classHInst && emu.neDllDataSegs.has(classHInst)) {
+      emu.cpu.ds = classHInst;
+    } else {
+      emu.cpu.ds = emu.ne.dataSegSelector;
+    }
   }
 
   // Push PASCAL args (left to right): hwnd, message, wParam, lParam
@@ -215,6 +222,7 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     // No segment contains this address — can't execute, bail out
     console.warn(`[MSG16] callWndProc16: no segment for wndProc=0x${wndProc.toString(16)} msg=0x${message.toString(16)} hwnd=0x${hwnd.toString(16)}`);
     emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+    emu.cpu.ds = savedDS;
     emu.cpu.reg[3] = savedEBX;
     emu.cpu.reg[5] = savedEBP;
     emu.cpu.reg[6] = savedESI;
@@ -315,10 +323,12 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     emu.wndProcDepth = targetDepth;
   }
 
-  // Synchronous return — always restore SP and callee-saved registers.
+  // Synchronous return — always restore SP, DS, and callee-saved registers.
   // SP restoration is critical: even if the WndProc completed normally
   // (RETF cleaned up args), we force SP back to guarantee no leak.
+  // DS restoration is critical for DLL wndProcs that use a different DS.
   emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+  emu.cpu.ds = savedDS;
   emu.cpu.reg[3] = savedEBX;
   emu.cpu.reg[5] = savedEBP;
   emu.cpu.reg[6] = savedESI;

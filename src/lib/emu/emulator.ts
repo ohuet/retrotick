@@ -627,6 +627,9 @@ export class Emulator {
   // NE DLL resources (for LoadBitmap etc. to search across DLLs)
   neDllResources: Array<{ resources: NEResourceEntry[]; arrayBuffer: ArrayBuffer }> = [];
 
+  // NE DLL data segment selectors (for correct DS when calling DLL wndProcs)
+  neDllDataSegs = new Set<number>();
+
   // Virtual allocator
   virtualBase = 0;
   virtualPtr = 0;
@@ -1087,7 +1090,6 @@ export class Emulator {
     const onAvail = targetThread ? targetThread._onMessageAvailable : this._onMessageAvailable;
 
     if (message === 0x0113) { // WM_TIMER
-      console.log(`[POST] WM_TIMER hwnd=0x${hwnd.toString(16)} wParam=${wParam} lParam=0x${lParam.toString(16)} waiting=${this.waitingForMessage} qLen=${queue.length}`);
       if (queue.some(m => m.message === 0x0113 && m.hwnd === hwnd && m.wParam === wParam)) {
         return;
       }

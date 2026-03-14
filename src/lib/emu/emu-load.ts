@@ -704,6 +704,11 @@ function loadNEDlls(emu: Emulator): NEDllEntry[] {
       emu.segStaticEnd.set(dll.dataSegSelector, dll.autoDataStaticSize);
     }
 
+    // Track DLL data segment selectors for correct DS in wndProc dispatch
+    if (dll.dataSegSelector) {
+      emu.neDllDataSegs.add(dll.dataSegSelector);
+    }
+
     // Merge DLL's API thunks (its imports from KERNEL/USER/etc) into the main apiMap
     for (const [addr, info] of dll.apiMap) {
       ne.apiMap.set(addr, info);
