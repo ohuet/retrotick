@@ -522,29 +522,55 @@ export function renderControlOverlay(
       const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
       if (!wnd) return;
       wnd.cbSelectedIndex = idx;
-      // Walk up past CCS containers (toolbar/statusbar) so the notification
-      // reaches the frame — x86 COMMCTRL may not forward WM_COMMAND.
+
+      // Check if this combobox is inside a toolbar — if so, try to simulate
+      // a drivebar click instead of WM_COMMAND (WINFILE ignores CBN_* notifications
+      // for drive changes; it only reacts to drivebar button clicks).
+      const parentWnd = wnd.parent ? emu.handles.get<WindowInfo>(wnd.parent) : null;
+      const pcn = parentWnd?.classInfo?.className?.toUpperCase();
+      if (pcn === 'TOOLBARWINDOW') {
+        // Find the WFS_Drives (drivebar) sibling window
+        const frameHwnd = parentWnd?.parent || emu.mainWindow || 0;
+        const frameWnd = emu.handles.get<WindowInfo>(frameHwnd);
+        if (frameWnd?.childList) {
+          for (const childHwnd of frameWnd.childList) {
+            const child = emu.handles.get<WindowInfo>(childHwnd);
+            if (child?.classInfo?.className === 'WFS_Drives' && child.wndProc) {
+              // Simulate drivebar click at the selected drive's button position.
+              // Drive buttons are laid out horizontally; estimate position from index.
+              // Each button is approximately 35px wide (16px icon + letter + padding).
+              const BUTTON_WIDTH = 35;
+              const clickX = idx * BUTTON_WIDTH + Math.round(BUTTON_WIDTH / 2);
+              const clickY = 5;
+              const WM_LBUTTONDOWN = 0x0201;
+              const WM_LBUTTONUP = 0x0202;
+              const lParam = ((clickY << 16) | clickX) >>> 0;
+              emu.postMessage(childHwnd, WM_LBUTTONDOWN, 1, lParam);
+              emu.postMessage(childHwnd, WM_LBUTTONUP, 0, lParam);
+              return;
+            }
+          }
+        }
+      }
+
+      // Generic fallback: post WM_COMMAND to parent (walk past CCS containers)
       let parent = wnd.parent || emu.mainWindow || 0;
-      const parentWndInfo = emu.handles.get<WindowInfo>(parent);
-      const pcn = parentWndInfo?.classInfo?.className?.toUpperCase();
       if (pcn === 'TOOLBARWINDOW' || pcn === 'MSCTLS_STATUSBAR') {
-        parent = parentWndInfo?.parent || emu.mainWindow || 0;
+        parent = parentWnd?.parent || emu.mainWindow || 0;
       }
       if (parent) {
         const WM_COMMAND = 0x0111;
         const CBN_SELCHANGE = 1;
         if (emu.ne) {
-          // Win16 format: wParam=controlId, lParam=MAKELONG(hwnd, notifyCode)
           const lParam16 = ((CBN_SELCHANGE << 16) | (ctrl.childHwnd & 0xFFFF)) >>> 0;
           emu.postMessage(parent, WM_COMMAND, ctrl.controlId & 0xFFFF, lParam16);
         } else {
-          // Win32 format: wParam=MAKELONG(controlId, notifyCode), lParam=hwnd
           const wParam = ((CBN_SELCHANGE << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
           emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
         }
       }
-      const parentWnd = emu.handles.get<WindowInfo>(parent);
-      if (parentWnd) parentWnd.needsPaint = true;
+      const pWnd = emu.handles.get<WindowInfo>(parent);
+      if (pWnd) pWnd.needsPaint = true;
     };
 
     // ComboBox display height is always one row; the full height is for the dropdown
