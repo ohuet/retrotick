@@ -155,7 +155,6 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   // ───────────────────────────────────────────────────────────────────────────
   user.register('InvalidateRect', 8, () => {
     const [hWnd, _lpRect, bErase] = emu.readPascalArgs16([2, 4, 2]);
-    // console.log(`[WIN16] InvalidateRect hwnd=0x${hWnd.toString(16)} erase=${bErase}`);
     if (hWnd) {
       const wnd = emu.handles.get<WindowInfo>(hWnd);
       if (wnd) {

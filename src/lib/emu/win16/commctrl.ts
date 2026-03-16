@@ -24,13 +24,20 @@ export function registerWin16Commctrl(emu: Emulator): void {
     const STATUS_HEIGHT = 20;
     const WS_VISIBLE = 0x10000000;
 
+    // Use registered class from COMMCTRL x86 LibMain (try both names)
+    const registeredClass = emu.windowClasses.get('MSCTLS_STATUSBAR') || emu.windowClasses.get('MSCTLS_STATUSBAR32');
+    const classInfo = registeredClass
+      ? { ...registeredClass }
+      : { className: 'MSCTLS_STATUSBAR32', style: 0, wndProc: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hIcon: 0, hCursor: 0, hbrBackground: 0, menuName: 0 };
+    const cbExtra = Math.max(registeredClass?.cbWndExtra ?? 0, 4);
+
     const wnd: WindowInfo = {
       hwnd: 0,
-      classInfo: { className: 'MSCTLS_STATUSBAR32', style: 0, wndProc: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hIcon: 0, hCursor: 0, hbrBackground: 0, menuName: 0 },
-      wndProc: 0, parent: hwndParent,
+      classInfo,
+      wndProc: classInfo.wndProc || 0, parent: hwndParent,
       x: 0, y: parentCh - STATUS_HEIGHT, width: parentWnd?.width || 320, height: STATUS_HEIGHT,
       style: style | WS_VISIBLE | 0x40000000, exStyle: 0, title: text, visible: true,
-      hMenu: 0, extraBytes: new Uint8Array(0), userData: 0, controlId: wID,
+      hMenu: 0, extraBytes: new Uint8Array(cbExtra), userData: 0, controlId: wID,
       statusTexts: text ? [text] : [],
     };
     const hwnd = emu.handles.alloc('window', wnd);
@@ -54,13 +61,20 @@ export function registerWin16Commctrl(emu: Emulator): void {
     const TOOLBAR_HEIGHT = 27; // standard Win3.1 toolbar height
     const WS_VISIBLE = 0x10000000;
 
+    // Use the class registered by COMMCTRL's x86 LibMain (has correct wndProc + hInstance for DS)
+    const registeredClass = emu.windowClasses.get('TOOLBARWINDOW');
+    const classInfo = registeredClass
+      ? { ...registeredClass }
+      : { className: 'ToolbarWindow', style: 0, wndProc: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hIcon: 0, hCursor: 0, hbrBackground: 0, menuName: 0 };
+    const cbExtra = Math.max(registeredClass?.cbWndExtra ?? 0, 8);
+
     const wnd: WindowInfo = {
       hwnd: 0,
-      classInfo: { className: 'ToolbarWindow', style: 0, wndProc: 0, cbClsExtra: 0, cbWndExtra: 0, hInstance: 0, hIcon: 0, hCursor: 0, hbrBackground: 0, menuName: 0 },
-      wndProc: 0, parent: hwndParent,
+      classInfo,
+      wndProc: classInfo.wndProc || 0, parent: hwndParent,
       x: 0, y: 0, width: parentWidth, height: TOOLBAR_HEIGHT,
       style: ws | WS_VISIBLE | 0x40000000, exStyle: 0, title: '', visible: !!(ws & WS_VISIBLE),
-      hMenu: 0, extraBytes: new Uint8Array(8), userData: 0, controlId: wID,
+      hMenu: 0, extraBytes: new Uint8Array(cbExtra), userData: 0, controlId: wID,
     };
     const hwnd = emu.handles.alloc('window', wnd);
     wnd.hwnd = hwnd;

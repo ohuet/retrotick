@@ -71,7 +71,6 @@ const CBS_HASSTRINGS        = 0x0200;
 
 export function handleComboBoxMessage16(emu: Emulator, wnd: WindowInfo, message: number, wParam: number, lParam: number): number {
   if (!wnd.cbItems) { wnd.cbItems = []; wnd.cbItemData = []; }
-
   const style = wnd.style ?? 0;
   const isOwnerDrawNoStrings = ((style & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE)) !== 0)
     && ((style & CBS_HASSTRINGS) === 0);
@@ -735,6 +734,15 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           }
           if (!wnd.statusTexts) wnd.statusTexts = [];
         }
+      }
+    }
+    // Track TB_CHECKBUTTON for toolbar windows
+    const TB_CHECKBUTTON = 0x0402;
+    if (wnd?.wndProc && wnd.classInfo?.className?.toUpperCase() === 'TOOLBARWINDOW') {
+      if (message === TB_CHECKBUTTON) {
+        if (!wnd.toolbarChecked) wnd.toolbarChecked = new Set();
+        if (lParam) wnd.toolbarChecked.add(wParam);
+        else wnd.toolbarChecked.delete(wParam);
       }
     }
     if (wnd?.wndProc) {
