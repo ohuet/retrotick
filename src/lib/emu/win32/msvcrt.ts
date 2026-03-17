@@ -1302,10 +1302,16 @@ export function registerMsvcrt(emu: Emulator): void {
     }
 
     if (!fileData) {
-      // Try file system
-      const file = emu.fs.openFile(path, mode.includes('w') || mode.includes('a') ? 0x40000000 : 0x80000000, 3);
-      if (file) {
-        fileData = file.data;
+      // Try file system (findFile + sync data)
+      const resolvedPath = emu.resolvePath(path);
+      const fileInfo = emu.fs.findFile(resolvedPath, emu.additionalFiles);
+      if (fileInfo) {
+        if (fileInfo.source === 'additional') {
+          fileData = emu.additionalFiles.get(fileInfo.name) ?? undefined;
+        } else if (fileInfo.source === 'external') {
+          const ext = emu.fs.externalFiles.get(resolvedPath.toUpperCase());
+          if (ext) fileData = ext.data.buffer.slice(ext.data.byteOffset, ext.data.byteOffset + ext.data.byteLength) as ArrayBuffer;
+        }
       }
     }
 
