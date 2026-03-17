@@ -698,7 +698,7 @@ export function emuTick(emu: Emulator): void {
     }
 
     // Tight loop fast-forward (dual-period consecutive match, same as callStdcall)
-    if (!emu.isDOS) {
+    {
       let tkTry = false;
       if ((stepCount & 0xFF) === 0 && stepCount > 0) {
         if (eip === tkEipA) { if (++tkHitA >= 2) tkTry = true; } else { tkEipA = eip; tkHitA = 0; }
