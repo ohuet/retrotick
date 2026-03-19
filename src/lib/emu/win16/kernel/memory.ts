@@ -341,6 +341,9 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
       for (let i = oldSize; i < bytes; i++) emu.memory.writeU8(newAddr + i, 0);
     }
     state.localSizes.set(newHandle, bytes);
+    // Track relocation so LocalLock(oldHandle) returns the new address
+    if (!state.localRelocations) state.localRelocations = new Map();
+    state.localRelocations.set(handle, newHandle);
     console.log(`[KERNEL16] LocalReAlloc(handle=0x${handle.toString(16)}, bytes=${bytes}, flags=0x${flags.toString(16)}) → 0x${newHandle.toString(16)}`);
     return newHandle;
   }, 6);
@@ -356,7 +359,15 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
 
   // --- Ordinal 8: LocalLock(handle) — 2 bytes (word) ---
   kernel.register('LocalLock', 2, () => {
-    const handle = emu.readArg16(0);
+    let handle = emu.readArg16(0);
+    // Follow relocation chain (LocalReAlloc may have moved the block)
+    if (state.localRelocations) {
+      let steps = 0;
+      while (state.localRelocations.has(handle) && steps < 20) {
+        handle = state.localRelocations.get(handle)!;
+        steps++;
+      }
+    }
     state.localLockCounts.set(handle, (state.localLockCounts.get(handle) || 0) + 1);
     return handle;
   }, 8);

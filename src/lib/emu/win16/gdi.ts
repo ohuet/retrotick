@@ -2,6 +2,7 @@ import type { Emulator } from '../emulator';
 import type { DCInfo, BitmapInfo, BrushInfo, PenInfo, PaletteInfo } from '../win32/gdi32/types';
 import { OPAQUE } from '../win32/types';
 import { fillTextBitmap } from '../emu-render';
+import { adjustCanvasSaveDepth } from '../emu-window';
 import { decodeDib } from '../../pe/decode-dib';
 
 function bresenhamLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number): void {
@@ -16,6 +17,7 @@ function bresenhamLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingC
     if (e2 < dx) { err += dx; y0 += sy; }
   }
 }
+
 
 function colorToCSS(bgr: number): string {
   const r = bgr & 0xFF;
@@ -749,7 +751,10 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('SaveDC', 2, () => {
     const hdc = emu.readArg16(0);
     const dc = emu.getDC(hdc);
-    if (dc) dc.ctx.save();
+    if (dc) {
+      dc.ctx.save();
+      if (dc.ctx === emu.canvasCtx) adjustCanvasSaveDepth(1);
+    }
     return 1;
   }, 30);
 
@@ -908,9 +913,55 @@ export function registerWin16Gdi(emu: Emulator): void {
         dstData.data[i+2] ^= srcData.data[i+2];
       }
       dstDC.ctx.putImageData(dstData, xDst, yDst);
+    } else if (rop === 0xe20746) {
+      // ROP: DSPDxax = (D AND NOT S) OR (P AND S)
+      // Transform-aware pixel read/write for child window DCs
+      const tf = dstDC.ctx.getTransform();
+      const cX = Math.round(tf.e + xDst * tf.a);
+      const cY = Math.round(tf.f + yDst * tf.d);
+      const dstData = dstDC.ctx.getImageData(cX, cY, w, h);
+      const srcData = srcDC.ctx.getImageData(xSrc, ySrc, w, h);
+
+      // Get pattern brush colors
+      const brush = emu.getBrush(dstDC.selectedBrush);
+      const txC = dstDC.textColor, bkC = dstDC.bkColor;
+      const txR = txC & 0xFF, txG = (txC >> 8) & 0xFF, txB = (txC >> 16) & 0xFF;
+      const bkR = bkC & 0xFF, bkG = (bkC >> 8) & 0xFF, bkB = (bkC >> 16) & 0xFF;
+      let patPixels: Uint8ClampedArray | null = null;
+      let patW = 8, patH = 8;
+      if (brush?.patternBitmap) {
+        const patCtx = brush.patternBitmap.getContext('2d')!;
+        patW = brush.patternBitmap.width || 8;
+        patH = brush.patternBitmap.height || 8;
+        patPixels = patCtx.getImageData(0, 0, patW, patH).data;
+      }
+
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const i = (py * w + px) * 4;
+          const sr = srcData.data[i];
+          if (sr > 128) {
+            // Mask white → apply pattern
+            let pR: number, pG: number, pB: number;
+            if (patPixels) {
+              const tileX = ((cX + px) % patW + patW) % patW;
+              const tileY = ((cY + py) % patH + patH) % patH;
+              const isBlack = patPixels[(tileY * patW + tileX) * 4] === 0;
+              pR = isBlack ? txR : bkR;
+              pG = isBlack ? txG : bkG;
+              pB = isBlack ? txB : bkB;
+            } else {
+              pR = txR; pG = txG; pB = txB;
+            }
+            dstData.data[i] = pR; dstData.data[i+1] = pG; dstData.data[i+2] = pB;
+            dstData.data[i+3] = 255;
+          }
+          // sr <= 128 → mask black → destination preserved (icon)
+        }
+      }
+      dstDC.ctx.putImageData(dstData, cX, cY);
     } else {
-      // Fallback for unimplemented ROPs (including 0xE20746).
-      // TODO: implement ternary ROPs properly.
+      // Fallback for other unimplemented ROPs.
       dstDC.ctx.drawImage(srcDC.canvas, xSrc, ySrc, w, h, xDst, yDst, w, h);
     }
     return 1;
@@ -987,7 +1038,10 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('RestoreDC', 4, () => {
     const [hdc] = emu.readPascalArgs16([2, 2]);
     const dc = emu.getDC(hdc);
-    if (dc) dc.ctx.restore();
+    if (dc) {
+      dc.ctx.restore();
+      if (dc.ctx === emu.canvasCtx) adjustCanvasSaveDepth(-1);
+    }
     return 1;
   }, 39);
 
@@ -1097,7 +1151,9 @@ export function registerWin16Gdi(emu: Emulator): void {
     const bw = w || 1, bh = h || 1;
     const canvas = new OffscreenCanvas(bw, bh);
     const ctx = canvas.getContext('2d')!;
-    if (lpBits && nBitCount === 1) {
+    // lpBits is a Win16 far pointer (SEG:OFF) — resolve to linear address
+    const linearBits = lpBits ? emu.resolveFarPtr(lpBits) : 0;
+    if (linearBits && nBitCount === 1) {
       // Monochrome bitmap: read bits and render
       const imgData = ctx.createImageData(bw, bh);
       const bytesPerRow = Math.ceil(bw / 16) * 2; // WORD-aligned
@@ -1105,7 +1161,7 @@ export function registerWin16Gdi(emu: Emulator): void {
         for (let x = 0; x < bw; x++) {
           const byteIdx = Math.floor(x / 8);
           const bitIdx = 7 - (x % 8);
-          const b = emu.memory.readU8(lpBits + y * bytesPerRow + byteIdx);
+          const b = emu.memory.readU8(linearBits + y * bytesPerRow + byteIdx);
           const set = (b >> bitIdx) & 1;
           const off = (y * bw + x) * 4;
           imgData.data[off] = imgData.data[off + 1] = imgData.data[off + 2] = set ? 255 : 0;

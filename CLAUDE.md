@@ -86,6 +86,10 @@ No test runner or linter scripts are configured.
 - Language detection from PE resource language IDs, propagated as `lang` attributes for correct CJK font rendering
 - OpenGL 1.x immediate-mode pipeline mapped to WebGL2 for 3D screen savers
 
+### Generic Emulator Rule
+
+RetroTick is a **generic Windows emulator**, not an emulator for any specific application. Every fix and every API implementation must benefit **all** executables, never just one. Never add app-specific hacks or workarounds (e.g. "if this is WINFILE then..."). When something doesn't work for a particular app, find out what Windows actually does (Microsoft docs, Wine source) and implement the correct API behavior. The app's misbehavior is a symptom — fix the root cause in the emulator.
+
 ### Code Style Rules
 
 1. **File size limit**: Keep each file under 500 lines. When a file grows beyond this, split independent functionality into separate files.

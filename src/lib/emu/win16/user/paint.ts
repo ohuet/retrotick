@@ -84,8 +84,8 @@ export function registerWin16UserPaint(emu: Emulator, user: Win16Module, h: Win1
   user.register('BeginPaint', 6, () => {
     const [hWnd, lpPaint] = emu.readPascalArgs16([2, 4]);
     const targetHwnd = hWnd || emu.mainWindow;
-    const hdc = emu.beginPaint(targetHwnd);
     const wndBP = emu.handles.get<WindowInfo>(targetHwnd);
+    const hdc = emu.beginPaint(targetHwnd);
     if (wndBP) { wndBP.needsPaint = false; wndBP.needsErase = false; }
     if (lpPaint) {
       emu.memory.writeU16(lpPaint, hdc);

@@ -749,8 +749,6 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
           if (mainWnd) mainWnd.needsPaint = true;
         }
-        // DIAG: log ALL TB_CHECKBUTTON calls to detect reverts
-        console.log(`[TB] TB_CHECKBUTTON id=${wParam} check=${lParam} checked=[${[...(wnd.toolbarChecked || [])].join(',')}]`);
       }
     }
     if (wnd?.wndProc) {
@@ -784,7 +782,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           }
         }
       }
-      const result = emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+      emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
       // CCS controls: re-fix position AFTER the wndProc in case x86 code overrode it
       // via SetWindowPos. Keep the height the x86 code set, but enforce x/y/width.
       if (message === WM_SIZE && wnd.parent) {
