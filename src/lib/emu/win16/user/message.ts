@@ -782,7 +782,7 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
           }
         }
       }
-      emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
+      const result = emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
       // CCS controls: re-fix position AFTER the wndProc in case x86 code overrode it
       // via SetWindowPos. Keep the height the x86 code set, but enforce x/y/width.
       if (message === WM_SIZE && wnd.parent) {
