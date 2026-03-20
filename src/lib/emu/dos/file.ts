@@ -139,6 +139,17 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
 /** 0x3D: Open file (AL=mode, DS:DX=filename) */
 export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
+  // DOS device driver detection: EMMXXXX0 (EMS), NUL, CON, etc.
+  const baseName = name.replace(/^[*\\\/]*/, '').toUpperCase();
+  if (baseName === 'EMMXXXX0') {
+    // EMS driver present — return a dummy handle
+    const handle = allocDosHandle(emu);
+    emu._dosFiles.set(handle, { data: new Uint8Array(0), pos: 0, name: 'EMMXXXX0' });
+    cpu.setReg16(EAX, handle);
+    cpu.setFlag(CF, false);
+    console.log(`[DOS] Open "${name}" -> CF=0 AX=0x${handle.toString(16)} (EMS device)`);
+    return;
+  }
   const resolved = dosResolvePath(emu, name);
   openFileByPath(cpu, emu, name, resolved);
   // Don't log on async path (waitingForMessage) — AX hasn't been set yet;
