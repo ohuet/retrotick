@@ -433,6 +433,25 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4C: { // Terminate with return code
       const retCode = al;
       if (dosExecReturn(cpu, emu, retCode)) break;
+      // Check PSP terminate address (offset 0x0A) — used by custom loaders
+      // that set up a child PSP with a return address (like Second Reality's runexe)
+      {
+        const pspLin = (emu._dosPSP || 0x100) * 16;
+        const termIP = cpu.mem.readU16(pspLin + 0x0A);
+        const termCS = cpu.mem.readU16(pspLin + 0x0C);
+        const parentPSP = cpu.mem.readU16(pspLin + 0x16);
+        // If terminate address points to real code (not BIOS stub) and parent PSP differs
+        if (termCS !== 0xF000 && termCS !== 0 && parentPSP !== (emu._dosPSP || 0x100)) {
+          console.log(`[INT 21h] AH=4C: child PSP=${(emu._dosPSP||0x100).toString(16)} returning to ${termCS.toString(16)}:${termIP.toString(16)} parent=${parentPSP.toString(16)}`);
+          emu._dosExitCode = retCode;
+          // Restore parent PSP
+          emu._dosPSP = parentPSP;
+          // Jump to terminate address
+          cpu.cs = termCS;
+          cpu.eip = cpu.segBase(termCS) + termIP;
+          break;
+        }
+      }
       emu.exitedNormally = true;
       emu.halted = true;
       cpu.halted = true;
