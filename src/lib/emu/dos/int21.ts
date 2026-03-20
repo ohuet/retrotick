@@ -433,6 +433,40 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4C: { // Terminate with return code
       const retCode = al;
       if (dosExecReturn(cpu, emu, retCode)) break;
+      // Check PSP terminate address (offset 0x0A) — used by custom loaders
+      // that set up a child PSP with a return address (like Second Reality's runexe)
+      {
+        const pspLin = (emu._dosPSP || 0x100) * 16;
+        const termIP = cpu.mem.readU16(pspLin + 0x0A);
+        const termCS = cpu.mem.readU16(pspLin + 0x0C);
+        const parentPSP = cpu.mem.readU16(pspLin + 0x16);
+        // If terminate address points to real code (not BIOS stub) and parent PSP differs
+        if (termCS !== 0xF000 && termCS !== 0 && parentPSP !== (emu._dosPSP || 0x100)) {
+          console.log(`[INT 21h] AH=4C: child PSP=${(emu._dosPSP||0x100).toString(16)} returning to ${termCS.toString(16)}:${termIP.toString(16)} parent=${parentPSP.toString(16)}`);
+          emu._dosExitCode = retCode;
+          // Restore parent PSP
+          emu._dosPSP = parentPSP;
+          // Jump to terminate address
+          cpu.cs = termCS;
+          cpu.eip = cpu.segBase(termCS) + termIP;
+          break;
+        }
+      }
+      const ssBase = (cpu.ss << 4) >>> 0;
+      const sp = cpu.getReg16(4); // ESP & 0xFFFF
+      console.warn(`[INT21h-4C] Terminate with code=${retCode} at CS:IP=${cpu.cs.toString(16)}:${((cpu.eip - (cpu.cs << 4)) >>> 0).toString(16)} SS:SP=${cpu.ss.toString(16)}:${sp.toString(16)}`);
+      console.warn(`[INT21h-4C] AX=0x${(cpu.reg[EAX]>>>0).toString(16)} BX=0x${(cpu.reg[EBX]>>>0).toString(16)} CX=0x${(cpu.reg[ECX]>>>0).toString(16)} DX=0x${(cpu.reg[EDX]>>>0).toString(16)}`);
+      console.warn(`[INT21h-4C] SI=0x${(cpu.reg[ESI]>>>0).toString(16)} DI=0x${(cpu.reg[EDI]>>>0).toString(16)} BP=0x${(cpu.reg[5]>>>0).toString(16)} DS=0x${cpu.ds.toString(16)} ES=0x${cpu.es.toString(16)}`);
+      // Dump stack
+      const stackDump: string[] = [];
+      for (let s = 0; s < 20; s++) {
+        const addr = ssBase + ((sp + s * 2) & 0xFFFF);
+        stackDump.push(cpu.mem.readU16(addr).toString(16).padStart(4, '0'));
+      }
+      console.warn(`[INT21h-4C] Stack: ${stackDump.join(' ')}`);
+      // Dump INT 21h trace
+      console.warn(`[INT21h-4C] === Last ${_int21Trace.length} INT 21h calls ===`);
+      for (const t of _int21Trace) console.warn(`  ${t}`);
       emu.exitedNormally = true;
       emu.halted = true;
       cpu.halted = true;
