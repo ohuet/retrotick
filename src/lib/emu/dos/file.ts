@@ -112,6 +112,21 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
       cpu.setFlag(CF, false);
       return;
     }
+    // Before going async, check if additionalFiles has a sync copy under a different key
+    // (e.g., "SECOND.EXE" in additionalFiles vs "2nd_real/SECOND.EXE" in virtual FS)
+    const baseName2 = resolved.replace(/^.*[\\\/]/, '').toUpperCase();
+    for (const [key, buf] of emu.additionalFiles) {
+      if (key.toUpperCase() === baseName2 || key.toUpperCase().endsWith('\\' + baseName2) || key.toUpperCase().endsWith('/' + baseName2)) {
+        const handle = allocDosHandle(emu);
+        const data = new Uint8Array(buf);
+        emu._dosFiles.set(handle, { data, pos: 0, name });
+        emu.handles.set(handle, 'file', { path: resolved, access: 0x80000000, pos: 0, data, size: data.length, modified: false });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+        return;
+      }
+    }
+
     // Async path: fetch data into cache, then rewind EIP to replay the INT 21h
     const fileNameForCache = fileInfo.name;
     fs.fetchFileData(fileInfo, emu.additionalFiles, resolved).then(() => {
