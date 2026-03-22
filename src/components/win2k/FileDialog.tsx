@@ -465,6 +465,7 @@ export function FileDialog({
               onClick={() => { setDriveOpen(false); setFilterOpen(false); }}
               style={{
                 flex: 1, height: '22px', boxSizing: 'border-box',
+                background: '#FFF',
                 border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
                 boxShadow: 'inset 1px 1px 0 #404040',
                 font: FONT, padding: '2px 4px', outline: 'none',

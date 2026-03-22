@@ -144,8 +144,15 @@ export class DefaultFileManager implements FileManager {
       const relPath = file.path.substring(3);
       const vf = this.virtualFiles.find(f => this.vfToRelPath(f.name) === relPath);
       const name = vf ? vf.name : relPath.replace(/\\/g, '/');
-      if (vf) vf.size = file.data.length;
-      const ab = file.data.buffer.slice(file.data.byteOffset, file.data.byteOffset + file.data.byteLength) as ArrayBuffer;
+      // Trim data to actual file size (buffer may be over-allocated by _lwrite)
+      const actualSize = Math.min(file.size, file.data.byteLength);
+      const ab = file.data.buffer.slice(file.data.byteOffset, file.data.byteOffset + actualSize) as ArrayBuffer;
+      if (vf) {
+        vf.size = actualSize;
+      } else {
+        // New file — add to virtualFiles so it's visible immediately
+        this.virtualFiles.push({ name, size: actualSize });
+      }
       this.virtualFileCache.set(name.toUpperCase(), ab);
       this.onFileSave(name, ab);
     }
