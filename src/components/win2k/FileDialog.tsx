@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { useLayoutEffect } from 'preact/hooks';
 import { Window, WS_CAPTION, WS_SYSMENU } from './Window';
 import { Button } from './Button';
+import { MessageBox, MB_YESNO, MB_ICONWARNING, IDYES } from './MessageBox';
 import type { FileManager, DirEntry } from '../../lib/emu/file-manager';
 import { t } from '../../lib/regional-settings';
 
@@ -152,9 +153,9 @@ export function FileDialog({
   onResult, focused = true, flashTrigger, parentRef,
 }: FileDialogProps) {
   const s = t();
-  const defaultTitle = mode === 'open' ? s.open : s.save;
+  const defaultTitle = mode === 'open' ? s.open : s.saveAs;
   const dialogTitle = title || defaultTitle;
-  const filters = parseFilters(filter);
+  const filters = useMemo(() => parseFilters(filter), [filter]);
 
   // State
   const [currentDir, setCurrentDir] = useState(() => {
@@ -173,6 +174,7 @@ export function FileDialog({
   const [filterOpen, setFilterOpen] = useState(false);
   const [initialPos, setInitialPos] = useState<{ x: number; y: number } | undefined>();
   const [visible, setVisible] = useState(false);
+  const [overwriteConfirm, setOverwriteConfirm] = useState<string | null>(null);
   const measureRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -190,7 +192,7 @@ export function FileDialog({
 
   useEffect(() => { if (initialPos) setVisible(true); }, [initialPos]);
 
-  // Refresh file list when directory or filter changes
+  // Refresh file list
   const refreshEntries = useCallback(() => {
     const pattern = currentDir + '*.*';
     const raw = fileManager.getVirtualDirListing(pattern, additionalFiles);
@@ -205,8 +207,10 @@ export function FileDialog({
       return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
     });
     setEntries(filtered);
-    setSelectedName(null);
   }, [currentDir, filterIdx, fileManager, additionalFiles, filters]);
+
+  // Clear selection when directory or filter changes
+  useEffect(() => { setSelectedName(null); }, [currentDir, filterIdx]);
 
   useEffect(() => {
     refreshEntries();
@@ -234,6 +238,12 @@ export function FileDialog({
   // Pre-fetch virtual file data (IndexedDB) into cache before returning result
   const confirmOpen = useCallback((path: string) => {
     if (mode === 'save') {
+      // Check if file already exists — prompt for overwrite confirmation
+      const existing = fileManager.findFile(path, additionalFiles);
+      if (existing) {
+        setOverwriteConfirm(path);
+        return;
+      }
       onResult({ path });
       return;
     }
@@ -558,6 +568,18 @@ export function FileDialog({
           </div>
         </div>
       </Window>
+      {overwriteConfirm && (
+        <MessageBox
+          caption={dialogTitle}
+          text={s.confirmOverwrite.replace('{0}', overwriteConfirm.substring(overwriteConfirm.lastIndexOf('\\') + 1))}
+          type={MB_YESNO | MB_ICONWARNING}
+          focused
+          onDismiss={(id) => {
+            if (id === IDYES) onResult({ path: overwriteConfirm });
+            setOverwriteConfirm(null);
+          }}
+        />
+      )}
     </div>
   );
 }

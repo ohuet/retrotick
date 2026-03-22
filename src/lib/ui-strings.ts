@@ -71,9 +71,11 @@ export interface UiStrings {
   fileName: string;
   filesOfType: string;
   save: string;
+  saveAs: string;
   importFromPC: string;
   newFolderPrompt: string;
   empty: string;
+  confirmOverwrite: string;
 }
 
 const en: UiStrings = {
@@ -141,9 +143,11 @@ const en: UiStrings = {
   fileName: 'File name:',
   filesOfType: 'Files of type:',
   save: 'Save',
+  saveAs: 'Save As',
   importFromPC: 'Import from local computer...',
   newFolderPrompt: 'New folder name:',
   empty: '(empty)',
+  confirmOverwrite: '{0} already exists.\nDo you want to replace it?',
 };
 
 const fr: UiStrings = {
@@ -211,9 +215,11 @@ const fr: UiStrings = {
   fileName: 'Nom du fichier :',
   filesOfType: 'Type de fichiers :',
   save: 'Enregistrer',
+  saveAs: 'Enregistrer sous',
   importFromPC: "Importer depuis l'ordinateur...",
   newFolderPrompt: 'Nom du nouveau dossier :',
   empty: '(vide)',
+  confirmOverwrite: '{0} existe d\u00e9j\u00e0.\nVoulez-vous le remplacer ?',
 };
 
 const de: UiStrings = {
@@ -281,9 +287,11 @@ const de: UiStrings = {
   fileName: 'Dateiname:',
   filesOfType: 'Dateityp:',
   save: 'Speichern',
+  saveAs: 'Speichern unter',
   importFromPC: 'Vom lokalen Computer importieren...',
   newFolderPrompt: 'Name des neuen Ordners:',
   empty: '(leer)',
+  confirmOverwrite: '{0} ist bereits vorhanden.\nM\u00f6chten Sie die Datei ersetzen?',
 };
 
 const es: UiStrings = {
@@ -351,9 +359,11 @@ const es: UiStrings = {
   fileName: 'Nombre de archivo:',
   filesOfType: 'Tipo de archivos:',
   save: 'Guardar',
+  saveAs: 'Guardar como',
   importFromPC: 'Importar desde el equipo local...',
   newFolderPrompt: 'Nombre de la nueva carpeta:',
   empty: '(vac\u00edo)',
+  confirmOverwrite: '{0} ya existe.\n\u00bfDesea reemplazarlo?',
 };
 
 const ja: UiStrings = {
@@ -421,9 +431,11 @@ const ja: UiStrings = {
   fileName: '\u30d5\u30a1\u30a4\u30eb\u540d:',
   filesOfType: '\u30d5\u30a1\u30a4\u30eb\u306e\u7a2e\u985e:',
   save: '\u4fdd\u5b58',
+  saveAs: '\u540d\u524d\u3092\u4ed8\u3051\u3066\u4fdd\u5b58',
   importFromPC: '\u30ed\u30fc\u30ab\u30eb\u30b3\u30f3\u30d4\u30e5\u30fc\u30bf\u304b\u3089\u30a4\u30f3\u30dd\u30fc\u30c8...',
   newFolderPrompt: '\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0\u540d:',
   empty: '(\u7a7a)',
+  confirmOverwrite: '{0} \u306f\u65e2\u306b\u5b58\u5728\u3057\u307e\u3059\u3002\n\u7f6e\u304d\u63db\u3048\u307e\u3059\u304b?',
 };
 
 const zhCN: UiStrings = {
@@ -491,9 +503,11 @@ const zhCN: UiStrings = {
   fileName: '\u6587\u4ef6\u540d:',
   filesOfType: '\u6587\u4ef6\u7c7b\u578b:',
   save: '\u4fdd\u5b58',
+  saveAs: '\u53e6\u5b58\u4e3a',
   importFromPC: '\u4ece\u672c\u5730\u7535\u8111\u5bfc\u5165...',
   newFolderPrompt: '\u65b0\u5efa\u6587\u4ef6\u5939\u540d\u79f0:',
   empty: '(\u7a7a)',
+  confirmOverwrite: '{0} \u5df2\u7ecf\u5b58\u5728\u3002\n\u8981\u66ff\u6362\u5b83\u5417\uff1f',
 };
 
 const ptBR: UiStrings = {
@@ -561,9 +575,11 @@ const ptBR: UiStrings = {
   fileName: 'Nome do arquivo:',
   filesOfType: 'Tipo de arquivo:',
   save: 'Salvar',
+  saveAs: 'Salvar como',
   importFromPC: 'Importar do computador local...',
   newFolderPrompt: 'Nome da nova pasta:',
   empty: '(vazio)',
+  confirmOverwrite: '{0} j\u00e1 existe.\nDeseja substitu\u00ed-lo?',
 };
 
 const it: UiStrings = {
@@ -631,9 +647,11 @@ const it: UiStrings = {
   fileName: 'Nome file:',
   filesOfType: 'Tipo file:',
   save: 'Salva',
+  saveAs: 'Salva con nome',
   importFromPC: 'Importa dal computer locale...',
   newFolderPrompt: 'Nome della nuova cartella:',
   empty: '(vuoto)',
+  confirmOverwrite: '{0} esiste gi\u00e0.\nSostituirlo?',
 };
 
 const pl: UiStrings = {
@@ -701,9 +719,11 @@ const pl: UiStrings = {
   fileName: 'Nazwa pliku:',
   filesOfType: 'Typ plik\u00f3w:',
   save: 'Zapisz',
+  saveAs: 'Zapisz jako',
   importFromPC: 'Importuj z komputera lokalnego...',
   newFolderPrompt: 'Nazwa nowego folderu:',
   empty: '(pusty)',
+  confirmOverwrite: '{0} ju\u017c istnieje.\nCzy chcesz go zast\u0105pi\u0107?',
 };
 
 const ko: UiStrings = {
@@ -771,9 +791,11 @@ const ko: UiStrings = {
   fileName: '\ud30c\uc77c \uc774\ub984:',
   filesOfType: '\ud30c\uc77c \ud615\uc2dd:',
   save: '\uc800\uc7a5',
+  saveAs: '\ub2e4\ub978 \uc774\ub984\uc73c\ub85c \uc800\uc7a5',
   importFromPC: '\ub85c\uceec \ucef4\ud4e8\ud130\uc5d0\uc11c \uac00\uc838\uc624\uae30...',
   newFolderPrompt: '\uc0c8 \ud3f4\ub354 \uc774\ub984:',
   empty: '(\ube44\uc5b4 \uc788\uc74c)',
+  confirmOverwrite: '{0}\uc774(\uac00) \uc774\ubbf8 \uc788\uc2b5\ub2c8\ub2e4.\n\ubc14\uafb8\uc2dc\uaca0\uc2b5\ub2c8\uae4c?',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.
