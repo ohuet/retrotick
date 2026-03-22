@@ -1281,7 +1281,14 @@ export function cpuStep(cpu: CPU): void {
     }
     case 0xE7: {
       const port = cpu.fetch8();
-      cpu.emu?.portOut(port, opSize === 16 ? cpu.getReg16(EAX) : cpu.reg[EAX]);
+      if (opSize === 16) {
+        // 16-bit OUT: write low byte to port, high byte to port+1
+        const val16 = cpu.getReg16(EAX);
+        cpu.emu?.portOut(port, val16 & 0xFF);
+        cpu.emu?.portOut(port + 1, (val16 >> 8) & 0xFF);
+      } else {
+        cpu.emu?.portOut(port, cpu.reg[EAX]);
+      }
       break;
     }
 
@@ -1290,9 +1297,15 @@ export function cpuStep(cpu: CPU): void {
       cpu.setReg8(EAX, cpu.emu?.portIn(cpu.getReg16(EDX)) ?? 0xFF);
       break;
     case 0xED: {
-      const val = cpu.emu?.portIn(cpu.getReg16(EDX)) ?? 0xFFFF;
-      if (opSize === 16) cpu.setReg16(EAX, val & 0xFFFF);
-      else cpu.reg[EAX] = val >>> 0;
+      const port = cpu.getReg16(EDX);
+      if (opSize === 16) {
+        // 16-bit IN: read low byte from port, high byte from port+1
+        const lo = cpu.emu?.portIn(port) ?? 0xFF;
+        const hi = cpu.emu?.portIn(port + 1) ?? 0xFF;
+        cpu.setReg16(EAX, (hi << 8) | lo);
+      } else {
+        cpu.reg[EAX] = (cpu.emu?.portIn(port) ?? 0xFFFFFFFF) >>> 0;
+      }
       break;
     }
 
@@ -1300,9 +1313,18 @@ export function cpuStep(cpu: CPU): void {
     case 0xEE:
       cpu.emu?.portOut(cpu.getReg16(EDX), cpu.getReg8(EAX));
       break;
-    case 0xEF:
-      cpu.emu?.portOut(cpu.getReg16(EDX), opSize === 16 ? cpu.getReg16(EAX) : cpu.reg[EAX]);
+    case 0xEF: {
+      const port = cpu.getReg16(EDX);
+      if (opSize === 16) {
+        // 16-bit OUT: write low byte to port, high byte to port+1
+        const val16 = cpu.getReg16(EAX);
+        cpu.emu?.portOut(port, val16 & 0xFF);
+        cpu.emu?.portOut(port + 1, (val16 >> 8) & 0xFF);
+      } else {
+        cpu.emu?.portOut(port, cpu.reg[EAX]);
+      }
       break;
+    }
 
     // LOCK prefix (ignore)
     case 0xF0:
