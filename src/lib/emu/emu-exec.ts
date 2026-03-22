@@ -587,27 +587,29 @@ export function emuTick(emu: Emulator): void {
     }
     if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
     if ((i & 0xFFF) === 0 && i > 0) {
+      // Periodic time check — amortize performance.now() cost across 4096 instructions
+      const now = performance.now();
       const waitingForPostKeyWindow = dosYieldAfterKeyAt >= 0 && i < dosYieldAfterKeyAt;
-      if (!waitingForPostKeyWindow && performance.now() - tickStart > tickMs) break;
+      if (!waitingForPostKeyWindow && now - tickStart > tickMs) break;
       // Yield after screen draws so browser can render intermediate frames (Win32 only —
       // DOS games do rapid VGA writes and yielding on each one kills throughput)
       if (!emu.isDOS && emu.screenDirty) { emu.screenDirty = false; break; }
-    }
 
-    // DOS timer interrupt (INT 08h) — frequency derived from PIT channel 0
-    if (emu.isDOS) {
-      const now = performance.now();
-      const pitReload = emu._pitCounters[0] || 0x10000;
-      const timerIntervalMs = (pitReload / 1193182) * 1000; // PIT frequency → ms
-      if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-        if (!emu._pendingHwInts.includes(0x08)) {
-          emu._dosLastTimerTick += timerIntervalMs;
-          // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
-          if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-          emu._pendingHwInts.push(0x08);
+      // DOS timer interrupt (INT 08h) — frequency derived from PIT channel 0
+      if (emu.isDOS) {
+        const pitReload = emu._pitCounters[0] || 0x10000;
+        const timerIntervalMs = (pitReload / 1193182) * 1000;
+        if (now - emu._dosLastTimerTick >= timerIntervalMs) {
+          if (!emu._pendingHwInts.includes(0x08)) {
+            emu._dosLastTimerTick += timerIntervalMs;
+            if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
+            emu._pendingHwInts.push(0x08);
+          }
+          emu._dosHalted = false;
         }
-        emu._dosHalted = false; // wake from HLT
       }
+    }
+    if (emu.isDOS) {
       // Advance Sound Blaster DMA transfer (may queue IRQ 7)
       if ((i & 0xFF) === 0) emu.dosAudio.tickDMA();
     }
