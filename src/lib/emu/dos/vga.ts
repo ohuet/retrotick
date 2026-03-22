@@ -817,6 +817,7 @@ export function syncGraphics(emu: Emulator): void {
   const mode = emu.videoMode;
   // Mode X: mode 13h with Chain-4 disabled
   if (mode === 0x13 && emu.vga.unchained) {
+    if (!(emu.vga as any)._mxLog) { (emu.vga as any)._mxLog = true; console.warn(`[VGA] Using Mode X renderer: ${emu.vga.getVisibleHeight()}h pitch=${(emu.vga.crtcRegs[0x13]||40)*2} start=${(emu.vga.crtcRegs[0x0C]<<8)|emu.vga.crtcRegs[0x0D]}`); }
     syncModeX(emu);
     return;
   }
