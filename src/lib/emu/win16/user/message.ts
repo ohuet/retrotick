@@ -1435,6 +1435,18 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
       return emu.callWndProc16(lParam, hWnd, message, wParam, Date.now() & 0xFFFFFFFF);
     }
     const wnd = emu.handles.get<WindowInfo>(hWnd);
+    // CCS_CHILD forwarding: toolbar/statusbar forward child control notifications
+    // (WM_COMMAND with lParam != 0) to their parent. This is standard CCS behavior
+    // that our x86 COMMCTRL stub doesn't implement.
+    if (message === 0x0111 && lParam !== 0 && wnd?.parent) {
+      const ucn = wnd.classInfo?.className?.toUpperCase();
+      if (ucn === 'TOOLBARWINDOW' || ucn === 'MSCTLS_STATUSBAR') {
+        const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parentWnd?.wndProc) {
+          return emu.callWndProc16(parentWnd.wndProc, wnd.parent, message, wParam, lParam);
+        }
+      }
+    }
     if (wnd?.wndProc) {
       return emu.callWndProc16(wnd.wndProc, hWnd, message, wParam, lParam);
     }
