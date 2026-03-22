@@ -309,8 +309,8 @@ export class GUS {
         v.wave.state = hi & 0x7F;
         break;
       case 0x01: // Wave rate (frequency control word)
-        // DOSBox divides by 2: inc = ceil(val/2). The FC is relative to the
-        // GUS internal rate which varies with active voices.
+        // DOSBox: inc = ceil(val/2). The /2 accounts for the GUS internal
+        // position counter being half-rate relative to the FC register value.
         v.wave.inc = Math.ceil(data / 2);
         break;
       case 0x02: // Wave start MSW
@@ -406,10 +406,11 @@ export class GUS {
         // Skip stopped voices
         if ((v.wave.state & CTRL_STOPPED) && (v.vol.state & CTRL_STOPPED)) continue;
 
-        // Read 8-bit sample from GUS RAM (signed: STMIK XORs MSB during upload)
+        // Read 8-bit sample from GUS RAM (signed)
+        // Note: STMIK sets BIT16 flag but uploads 8-bit samples via DRAM poke
         const addr = (v.wave.pos >> WAVE_FRACT_BITS) & 0xFFFFF;
         const b = this.ram[addr];
-        const sample = (b > 127 ? b - 256 : b) / 128; // signed int8 → float [-1,+1]
+        const sample = (b > 127 ? b - 256 : b) / 128;
 
         // Volume: get scalar from position
         const volIdx = Math.max(0, Math.min(VOLUME_LEVELS - 1,
@@ -447,8 +448,9 @@ export class GUS {
   private advanceCtrl(ctrl: VoiceCtrl, voiceIdx: number, isWave: boolean): void {
     if (ctrl.state & CTRL_STOPPED) return;
 
-    // Check rollover: for wave control, if vol has BIT16 and wave has no LOOP,
-    // the voice continues past the boundary without stopping or looping (rollover).
+    // Rollover: for wave control, if vol has BIT16 and wave has no LOOP,
+    // voice continues past boundary (GUS SDK section 3.11). STMIK uses
+    // this with a 512-byte continuation buffer for seamless looping.
     const rollover = isWave && this.checkRollover(voiceIdx);
 
     if (ctrl.state & CTRL_DECREASING) {
