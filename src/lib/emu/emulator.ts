@@ -335,6 +335,8 @@ export class Emulator {
   _dosHwKeyReadThisTick = false;
   _dosDTA = 0;
   _dosDtaSeg?: number;
+  /** Win16 local heap relocation tracking (set by kernel/memory.ts) */
+  _localRelocations?: Map<number, number>;
   _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;
