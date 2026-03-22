@@ -141,7 +141,7 @@ const en: UiStrings = {
   fileName: 'File name:',
   filesOfType: 'Files of type:',
   save: 'Save',
-  importFromPC: 'Import from PC...',
+  importFromPC: 'Import from local computer...',
   newFolderPrompt: 'New folder name:',
   empty: '(empty)',
 };
@@ -211,7 +211,7 @@ const fr: UiStrings = {
   fileName: 'Nom du fichier :',
   filesOfType: 'Type de fichiers :',
   save: 'Enregistrer',
-  importFromPC: 'Importer depuis le PC...',
+  importFromPC: "Importer depuis l'ordinateur...",
   newFolderPrompt: 'Nom du nouveau dossier :',
   empty: '(vide)',
 };
@@ -281,7 +281,7 @@ const de: UiStrings = {
   fileName: 'Dateiname:',
   filesOfType: 'Dateityp:',
   save: 'Speichern',
-  importFromPC: 'Vom PC importieren...',
+  importFromPC: 'Vom lokalen Computer importieren...',
   newFolderPrompt: 'Name des neuen Ordners:',
   empty: '(leer)',
 };
@@ -351,7 +351,7 @@ const es: UiStrings = {
   fileName: 'Nombre de archivo:',
   filesOfType: 'Tipo de archivos:',
   save: 'Guardar',
-  importFromPC: 'Importar desde el PC...',
+  importFromPC: 'Importar desde el equipo local...',
   newFolderPrompt: 'Nombre de la nueva carpeta:',
   empty: '(vac\u00edo)',
 };
@@ -421,7 +421,7 @@ const ja: UiStrings = {
   fileName: '\u30d5\u30a1\u30a4\u30eb\u540d:',
   filesOfType: '\u30d5\u30a1\u30a4\u30eb\u306e\u7a2e\u985e:',
   save: '\u4fdd\u5b58',
-  importFromPC: 'PC\u304b\u3089\u30a4\u30f3\u30dd\u30fc\u30c8...',
+  importFromPC: '\u30ed\u30fc\u30ab\u30eb\u30b3\u30f3\u30d4\u30e5\u30fc\u30bf\u304b\u3089\u30a4\u30f3\u30dd\u30fc\u30c8...',
   newFolderPrompt: '\u65b0\u3057\u3044\u30d5\u30a9\u30eb\u30c0\u540d:',
   empty: '(\u7a7a)',
 };
@@ -491,7 +491,7 @@ const zhCN: UiStrings = {
   fileName: '\u6587\u4ef6\u540d:',
   filesOfType: '\u6587\u4ef6\u7c7b\u578b:',
   save: '\u4fdd\u5b58',
-  importFromPC: '\u4ece\u7535\u8111\u5bfc\u5165...',
+  importFromPC: '\u4ece\u672c\u5730\u7535\u8111\u5bfc\u5165...',
   newFolderPrompt: '\u65b0\u5efa\u6587\u4ef6\u5939\u540d\u79f0:',
   empty: '(\u7a7a)',
 };
@@ -561,7 +561,7 @@ const ptBR: UiStrings = {
   fileName: 'Nome do arquivo:',
   filesOfType: 'Tipo de arquivo:',
   save: 'Salvar',
-  importFromPC: 'Importar do PC...',
+  importFromPC: 'Importar do computador local...',
   newFolderPrompt: 'Nome da nova pasta:',
   empty: '(vazio)',
 };
@@ -631,7 +631,7 @@ const it: UiStrings = {
   fileName: 'Nome file:',
   filesOfType: 'Tipo file:',
   save: 'Salva',
-  importFromPC: 'Importa dal PC...',
+  importFromPC: 'Importa dal computer locale...',
   newFolderPrompt: 'Nome della nuova cartella:',
   empty: '(vuoto)',
 };
@@ -701,7 +701,7 @@ const pl: UiStrings = {
   fileName: 'Nazwa pliku:',
   filesOfType: 'Typ plik\u00f3w:',
   save: 'Zapisz',
-  importFromPC: 'Importuj z PC...',
+  importFromPC: 'Importuj z komputera lokalnego...',
   newFolderPrompt: 'Nazwa nowego folderu:',
   empty: '(pusty)',
 };
@@ -771,7 +771,7 @@ const ko: UiStrings = {
   fileName: '\ud30c\uc77c \uc774\ub984:',
   filesOfType: '\ud30c\uc77c \ud615\uc2dd:',
   save: '\uc800\uc7a5',
-  importFromPC: 'PC\uc5d0\uc11c \uac00\uc838\uc624\uae30...',
+  importFromPC: '\ub85c\uceec \ucef4\ud4e8\ud130\uc5d0\uc11c \uac00\uc838\uc624\uae30...',
   newFolderPrompt: '\uc0c8 \ud3f4\ub354 \uc774\ub984:',
   empty: '(\ube44\uc5b4 \uc788\uc74c)',
 };
