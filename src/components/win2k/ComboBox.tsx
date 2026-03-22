@@ -98,23 +98,29 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
     }
   };
 
+  const arrowColor = disabled ? '#808080' : '#000';
+
   return (
     <div ref={containerRef} style={{
       position: 'relative', width: '100%', height: '100%',
     }}>
+      {/* Outer sunken container — the whole combobox shares one border */}
       <div
         style={{
           display: 'flex', width: '100%', height: '100%',
+          boxSizing: 'border-box',
+          border: '1px solid',
+          borderColor: '#808080 #FFF #FFF #808080',
+          boxShadow: 'inset 1px 1px 0 #404040',
+          background: disabled ? '#C0C0C0' : '#FFF',
           cursor: 'default', userSelect: 'none',
         }}
         onClick={toggleOpen}
       >
+        {/* Text area — no border, sits inside the sunken container */}
         <div style={{
-          flex: 1, boxSizing: 'border-box',
-          background: disabled ? '#C0C0C0' : '#FFF',
-          border: '1px solid',
-          borderColor: '#808080 #FFF #FFF #808080',
-          padding: '1px 3px',
+          flex: 1,
+          padding: '0 2px',
           font: fontStyle,
           ...(fontColor ? { color: fontColor } : {}),
           overflow: 'hidden', whiteSpace: 'nowrap',
@@ -122,15 +128,28 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
         }}>
           {selectedText}
         </div>
+        {/* Dropdown button — raised 3D, inside the sunken container */}
         <div style={{
-          width: 17, flexShrink: 0, boxSizing: 'border-box',
-          background: '#C0C0C0',
+          width: 18, flexShrink: 0, boxSizing: 'border-box',
+          background: '#D4D0C8',
           border: '1px solid',
-          borderColor: open ? '#808080 #FFF #FFF #808080' : '#FFF #808080 #808080 #FFF',
+          borderColor: open
+            ? '#808080 #FFF #FFF #808080'
+            : '#FFF #808080 #808080 #FFF',
+          boxShadow: open
+            ? 'inset 1px 1px 0 #404040'
+            : 'inset -1px -1px 0 #404040',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '7px', color: disabled ? '#808080' : '#000',
+          margin: '1px',
         }}>
-          {'\u25BC'}
+          {/* CSS triangle */}
+          <div style={{
+            width: 0, height: 0,
+            borderLeft: '3px solid transparent',
+            borderRight: '3px solid transparent',
+            borderTop: `4px solid ${arrowColor}`,
+            marginTop: open ? 1 : 0,
+          }} />
         </div>
       </div>
 

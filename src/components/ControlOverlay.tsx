@@ -578,7 +578,7 @@ export function renderControlOverlay(
       emu.waitingForMessage = savedWaiting;
     };
 
-    // ComboBox display height is always one row; the full height is for the dropdown
+    // ComboBox display height is always one row; the full height is for the dropdown.
     const cbStyle = { ...posStyle, height: 21 };
 
     return (
