@@ -404,6 +404,7 @@ export class Emulator {
   _pitModes = [3, 2, 3];                   // Counter modes (default: mode 3 for 0/2, mode 2 for 1)
   _pitAccessModes = [3, 3, 3];             // 1=LSB, 2=MSB, 3=LSB then MSB
   _pitWriteHigh = [false, false, false];    // Byte toggle for 16-bit writes
+  _pitStartTime = [0, 0, 0];               // performance.now() when each counter was last programmed
   _pitInsnCount = 0;                        // instruction counter for PIT timing in DOS mode
 
   // VGA state
@@ -1416,13 +1417,11 @@ export class Emulator {
           }
         }
         // Not latched: return running counter estimate based on wall-clock time.
-        // Must use performance.now() (not instruction count) to stay consistent
-        // with the timer interrupt source, which also uses performance.now().
-        // Audio mixers (e.g. STMIK zpollme) read this to measure elapsed time.
-        const freq = 1193182; // PIT base frequency
+        // Uses _pitStartTime to track when the counter was last programmed.
         const reload = this._pitCounters[ch] || 0x10000;
-        const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
-        const count = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+        const elapsedMs = performance.now() - this._pitStartTime[ch];
+        const ticks = Math.floor(elapsedMs * 1193.182) % reload;
+        const count = ((reload - ticks) & 0xFFFF) || reload;
         const accessMode = this._pitAccessModes[ch];
         if (accessMode === 1) return count & 0xFF;
         if (accessMode === 2) return (count >> 8) & 0xFF;
@@ -1507,8 +1506,10 @@ export class Emulator {
         const accessMode = this._pitAccessModes[ch];
         if (accessMode === 1) { // LSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
+          this._pitStartTime[ch] = performance.now();
         } else if (accessMode === 2) { // MSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
+          this._pitStartTime[ch] = performance.now();
         } else { // LSB then MSB
           if (!this._pitWriteHigh[ch]) {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
@@ -1516,6 +1517,7 @@ export class Emulator {
           } else {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
             this._pitWriteHigh[ch] = false;
+            this._pitStartTime[ch] = performance.now(); // reset on MSB write (complete)
           }
         }
         // Update PC speaker when PIT channel 2 changes
@@ -1533,9 +1535,9 @@ export class Emulator {
             if (!(value & 0x20)) { // Latch count
               this._pitLatched[i] = true;
               const reload = this._pitCounters[i] || 0x10000;
-              const freq = 1193182;
-              const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
-              this._pitLatchValues[i] = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+              const elapsedMs = performance.now() - this._pitStartTime[i];
+              const ticks = Math.floor(elapsedMs * 1193.182) % reload;
+              this._pitLatchValues[i] = ((reload - ticks) & 0xFFFF) || reload;
             }
           }
           break;
@@ -1545,9 +1547,9 @@ export class Emulator {
           // Latch command
           this._pitLatched[ch] = true;
           const reload = this._pitCounters[ch] || 0x10000;
-          const freq = 1193182;
-          const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
-          this._pitLatchValues[ch] = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+          const elapsedMs = performance.now() - this._pitStartTime[ch];
+          const ticks = Math.floor(elapsedMs * 1193.182) % reload;
+          this._pitLatchValues[ch] = ((reload - ticks) & 0xFFFF) || reload;
         } else {
           this._pitAccessModes[ch] = accessMode;
           this._pitModes[ch] = (value >> 1) & 7;
