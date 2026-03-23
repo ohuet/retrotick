@@ -4,6 +4,7 @@ import { Window, WS_CAPTION, WS_SYSMENU } from './Window';
 import { Button } from './Button';
 import { MessageBox, MB_YESNO, MB_ICONWARNING, IDYES } from './MessageBox';
 import type { FileManager, DirEntry } from '../../lib/emu/file-manager';
+import { parsePE, extractIcons } from '../../lib/pe';
 import { t } from '../../lib/regional-settings';
 import { fileIcon16 } from './file-icons';
 
@@ -147,6 +148,8 @@ export function FileDialog({
     return (fileManager.currentDirs.get(fileManager.currentDrive) || 'D:\\').toUpperCase();
   });
   const [entries, setEntries] = useState<DirEntry[]>([]);
+  const [iconUrls, setIconUrls] = useState<Map<string, string>>(new Map());
+  const iconUrlsRef = useRef<string[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [fileName, setFileName] = useState(initialFileName || '');
   const [filterIdx, setFilterIdx] = useState(0);
@@ -198,6 +201,44 @@ export function FileDialog({
     const timer = setTimeout(refreshEntries, 500);
     return () => clearTimeout(timer);
   }, [refreshEntries]);
+
+  // Extract PE icons for exe/com files
+  useEffect(() => {
+    // Revoke previous URLs
+    for (const u of iconUrlsRef.current) URL.revokeObjectURL(u);
+    iconUrlsRef.current = [];
+
+    const exeEntries = entries.filter(e => !e.isDir && /\.(exe|com)$/i.test(e.name));
+    if (exeEntries.length === 0) { setIconUrls(new Map()); return; }
+
+    let cancelled = false;
+    (async () => {
+      const map = new Map<string, string>();
+      const urls: string[] = [];
+      for (const entry of exeEntries) {
+        if (cancelled) break;
+        const resolved = currentDir + entry.name.toUpperCase();
+        const fi = fileManager.findFile(resolved, additionalFiles);
+        if (!fi) continue;
+        const data = await fileManager.fetchFileData(fi, additionalFiles, resolved);
+        if (!data || cancelled) continue;
+        try {
+          const pe = parsePE(data);
+          const icons = extractIcons(pe, data);
+          if (icons.length > 0) {
+            const url = URL.createObjectURL(icons[0].blob);
+            map.set(entry.name, url);
+            urls.push(url);
+          }
+        } catch {}
+      }
+      if (!cancelled) {
+        iconUrlsRef.current = urls;
+        setIconUrls(map);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [entries, currentDir, fileManager, additionalFiles]);
 
   // Navigate into a directory
   const navigateTo = useCallback((dir: string) => {
@@ -430,7 +471,7 @@ export function FileDialog({
                     font: FONT, whiteSpace: 'nowrap',
                   }}
                 >
-                  {fileIcon16(entry.name, { isFolder: entry.isDir })}
+                  {fileIcon16(entry.name, { isFolder: entry.isDir, iconUrl: iconUrls.get(entry.name) })}
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {entry.name}
                   </span>
