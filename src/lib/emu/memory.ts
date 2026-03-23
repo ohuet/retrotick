@@ -175,10 +175,13 @@ export class Memory {
   private segments = new Map<number, Uint8Array>();
   private dataViews = new Map<number, DataView>();
 
-  // Hot segment cache — avoids Map lookup for consecutive accesses in the same 64KB segment
-  private _cKey = -1;
-  private _cSeg: Uint8Array = null!;
-  private _cDV: DataView = null!;
+  // Hot segment cache (2-entry LRU) — avoids Map lookup for alternating code/data segments
+  private _cKey0 = -1;
+  private _cSeg0: Uint8Array = null!;
+  private _cDV0: DataView = null!;
+  private _cKey1 = -1;
+  private _cSeg1: Uint8Array = null!;
+  private _cDV1: DataView = null!;
 
   // Flat memory mode: when set, all reads/writes go directly to this buffer (no Map lookup)
   // Used for DOS mode to share the same ArrayBuffer with WASM JIT.
@@ -205,37 +208,46 @@ export class Memory {
 
   // VGA planar memory hook: when set, intercepts reads/writes to A0000-AFFFF
   vgaPlanar: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null = null;
+  _hasVga = false;
+
+  /** Set VGA planar hook and update fast boolean flag */
+  setVgaPlanar(v: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null): void {
+    this.vgaPlanar = v;
+    this._hasVga = v !== null;
+  }
 
   private seg(addr: number): Uint8Array {
     const key = addr >>> SEG_BITS;
-    if (key === this._cKey) return this._cSeg;
+    if (key === this._cKey0) return this._cSeg0;
+    if (key === this._cKey1) return this._cSeg1;
+    // Miss: evict entry 1, shift entry 0 → entry 1, insert new as entry 0
     let s = this.segments.get(key);
     if (!s) {
       s = new Uint8Array(SEG_SIZE);
       this.segments.set(key, s);
       this.dataViews.set(key, new DataView(s.buffer));
     }
-    this._cKey = key;
-    this._cSeg = s;
-    this._cDV = this.dataViews.get(key)!;
+    this._cKey1 = this._cKey0; this._cSeg1 = this._cSeg0; this._cDV1 = this._cDV0;
+    this._cKey0 = key; this._cSeg0 = s; this._cDV0 = this.dataViews.get(key)!;
     return s;
   }
 
   private dv(addr: number): DataView {
     const key = addr >>> SEG_BITS;
-    if (key === this._cKey) return this._cDV;
+    if (key === this._cKey0) return this._cDV0;
+    if (key === this._cKey1) return this._cDV1;
     this.seg(addr);
-    return this._cDV;
+    return this._cDV0;
   }
 
   readU8(addr: number): number {
-    if (this.vgaPlanar && (addr >>> 16) === 0xA) return this.vgaPlanar.planarRead(addr & 0xFFFF);
+    if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar.planarRead(addr & 0xFFFF);
     if (this._flat && addr < this._flatMax) return this._flat[addr];
     return this.seg(addr)[addr & SEG_MASK];
   }
 
   readU16(addr: number): number {
-    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+    if (this._hasVga && (addr >>> 16) === 0xA) {
       return this.readU8(addr) | (this.readU8(addr + 1) << 8);
     }
     if (this._flatDV && addr + 1 < this._flatMax) return this._flatDV.getUint16(addr, true);
@@ -247,7 +259,7 @@ export class Memory {
   }
 
   readU32(addr: number): number {
-    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+    if (this._hasVga && (addr >>> 16) === 0xA) {
       return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
         (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
     }
@@ -291,13 +303,13 @@ export class Memory {
       console.log(`[MEM-WATCH] Write 0x${(val & 0xFF).toString(16)} to 0x${addr.toString(16)}`);
       console.trace();
     }
-    if (this.vgaPlanar && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
+    if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     if (this._flat && addr < this._flatMax) { this._flat[addr] = val & 0xFF; return; }
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
   }
 
   writeU16(addr: number, val: number): void {
-    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+    if (this._hasVga && (addr >>> 16) === 0xA) {
       this.writeU8(addr, val & 0xFF);
       this.writeU8(addr + 1, (val >> 8) & 0xFF);
       return;
@@ -313,7 +325,7 @@ export class Memory {
   }
 
   writeU32(addr: number, val: number): void {
-    if (this.vgaPlanar && (addr >>> 16) === 0xA) {
+    if (this._hasVga && (addr >>> 16) === 0xA) {
       this.writeU8(addr, val & 0xFF);
       this.writeU8(addr + 1, (val >> 8) & 0xFF);
       this.writeU8(addr + 2, (val >> 16) & 0xFF);
