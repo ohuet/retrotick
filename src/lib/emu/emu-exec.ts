@@ -55,6 +55,16 @@ function raiseAccessViolation(emu: Emulator, faultAddr: number): void {
   emu.dispatchToSehHandler(firstReg);
 }
 
+// Fast zero-delay scheduler using MessageChannel (avoids setTimeout's 4ms clamping
+// after 5 nested calls). Used for DOS fast-path tick scheduling.
+let _immedCb: (() => void) | null = null;
+const _immedChan = typeof MessageChannel !== 'undefined' ? new MessageChannel() : null;
+if (_immedChan) { _immedChan.port1.onmessage = () => { if (_immedCb) { const cb = _immedCb; _immedCb = null; cb(); } }; }
+function scheduleImmediate(fn: () => void): void {
+  if (_immedChan) { _immedCb = fn; _immedChan.port2.postMessage(null); }
+  else setTimeout(fn, 0);
+}
+
 export function emuCompleteThunk(emu: Emulator, retVal: number, stackBytes: number): void {
   emu.cpu.reg[0] = retVal | 0; // EAX
   const retAddr = emu.memory.readU32(emu.cpu.reg[4] >>> 0);
@@ -1035,9 +1045,9 @@ export function emuTick(emu: Emulator): void {
       const delay = Math.max(1, timerIntervalMs - elapsed);
       setTimeout(emu.tick, delay);
     } else if (emu.isDOS) {
-      // DOS games need maximum throughput — setTimeout(0) yields to browser
-      // for rendering/input but resumes much faster than requestAnimationFrame (~16ms)
-      setTimeout(emu.tick, 0);
+      // DOS games need maximum throughput — MessageChannel avoids setTimeout's
+      // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
+      scheduleImmediate(emu.tick);
     } else {
       requestAnimationFrame(emu.tick);
     }
