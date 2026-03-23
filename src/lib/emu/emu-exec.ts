@@ -10,6 +10,15 @@ import { materializeFlags } from './x86/flags';
 // A special "return from WndProc" thunk address
 const WNDPROC_RETURN_THUNK = 0x00FE0000;
 
+// Fast zero-delay scheduler using MessageChannel (avoids setTimeout's 4ms clamping
+// after 5 nested calls). Used for DOS fast-path tick scheduling.
+let _immedCb: (() => void) | null = null;
+const _immedChan = typeof MessageChannel !== 'undefined' ? new MessageChannel() : null;
+if (_immedChan) { _immedChan.port1.onmessage = () => { if (_immedCb) { const cb = _immedCb; _immedCb = null; cb(); } }; }
+function scheduleImmediate(fn: () => void): void {
+  if (_immedChan) { _immedCb = fn; _immedChan.port2.postMessage(null); }
+  else setTimeout(fn, 0);
+}
 
 export function emuCompleteThunk(emu: Emulator, retVal: number, stackBytes: number): void {
   emu.cpu.reg[0] = retVal | 0; // EAX
@@ -109,12 +118,13 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
 
   const targetDepth = emu.wndProcDepth - 1;
   let steps = 0;
-  // Tight loop detection: two consecutive-match samplers at different periods.
+  // Tight loop detection: three consecutive-match samplers at different periods.
   // P=256 catches loops of length 1,2,4,8,16... (powers of 2).
   // P=252 catches loops of length 1,2,3,4,6,7,9,12,14... (highly composite).
-  // Together they cover all common loop lengths 1-12.
+  // P=64 catches short-lived loops (100-300 iterations) before the larger periods trigger.
   let csEipA = 0, csHitA = 0;  // period 256
   let csEipB = 0, csHitB = 0, csNextB = 252;  // period 252
+  let csEipC = 0, csHitC = 0;  // period 64
   while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted) {
     const eip = emu.cpu.eip >>> 0;
 
@@ -129,10 +139,13 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
           csEipB = eip; csHitB = 0;
       }
     }
+    if ((steps & 0x3F) === 0 && steps > 0) {
+      if (eip === csEipC) { if (++csHitC >= 2) csTry = true; } else { csEipC = eip; csHitC = 0; }
+    }
     if (csTry) {
       const iters = tryFastLoop(emu.cpu, emu.memory);
-      if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
-      csHitA = csHitB = 0;
+      if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = csHitC = 0; csNextB = steps + 252; continue; }
+      csHitA = csHitB = csHitC = 0;
     }
 
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
@@ -509,7 +522,7 @@ export function emuTick(emu: Emulator): void {
 
   const tickStart = performance.now();
   let stepCount = 0;
-  const DOS_TICK_MS = 14; // run close to one frame (~16ms) for throughput
+  const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
   const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
   let dosYieldAfterKeyAt = -1;
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
@@ -566,6 +579,8 @@ export function emuTick(emu: Emulator): void {
   }
 
   let tkEipA = 0, tkHitA = 0, tkEipB = 0, tkHitB = 0, tkNextB = 252;
+  let tkEipC = 0, tkHitC = 0; // period 64
+  const hasThunks = emu.thunkPages.size > 0; // DOS programs have no thunks
 
   for (let i = 0; i < BATCH_SIZE; i++) {
     if (emu._int09ReturnCS >= 0) {
@@ -590,8 +605,8 @@ export function emuTick(emu: Emulator): void {
       dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
     }
     if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
-    if ((i & 0xFFF) === 0 && i > 0) {
-      // Periodic time check — amortize performance.now() cost across 4096 instructions
+    if ((i & 0x1FFF) === 0 && i > 0) {
+      // Periodic time check — amortize performance.now() cost across 8192 instructions
       const now = performance.now();
       const waitingForPostKeyWindow = dosYieldAfterKeyAt >= 0 && i < dosYieldAfterKeyAt;
       if (!waitingForPostKeyWindow && now - tickStart > tickMs) break;
@@ -615,7 +630,7 @@ export function emuTick(emu: Emulator): void {
     }
     if (emu.isDOS) {
       // Advance Sound Blaster DMA transfer (may queue IRQ 7)
-      if ((i & 0xFF) === 0) emu.dosAudio.tickDMA();
+      if ((i & 0x1FF) === 0) emu.dosAudio.tickDMA();
     }
 
     // Deliver queued scancodes one at a time, throttled to ~30 Hz to match
@@ -715,7 +730,7 @@ export function emuTick(emu: Emulator): void {
 
     const eip = emu.cpu.eip >>> 0;
 
-    const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
+    const thunk = hasThunks ? (emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined) : undefined;
     if (thunk) {
       stepCount += 999; // thunks represent significant work (~1000 real instructions)
       emu._lastThunkTick = emu._tickCount;
@@ -794,9 +809,12 @@ export function emuTick(emu: Emulator): void {
         tkNextB = stepCount + 252;
         if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
       }
+      if ((stepCount & 0x3F) === 0 && stepCount > 0) {
+        if (eip === tkEipC) { if (++tkHitC >= 2) tkTry = true; } else { tkEipC = eip; tkHitC = 0; }
+      }
       if (tkTry) {
         const it = tryFastLoop(emu.cpu, emu.memory);
-        if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+        if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = tkHitC = 0; tkNextB = stepCount + 252; continue; }
         // Fast-loop failed — try WASM JIT (zero-copy via shared flat buffer)
         if (emu.flatMemory && !(emu.cpu.flagsCache & 0x100)) {
           const regionBase = eip & ~0xFFFF;
@@ -845,13 +863,12 @@ export function emuTick(emu: Emulator): void {
             }
           }
         }
-        tkHitA = tkHitB = 0;
+        tkHitA = tkHitB = tkHitC = 0;
       }
     }
 
     const prevEip = eip;
     emu.cpu.step();
-    emu._pitInsnCount++;
     if (emu.isDOS) {
       const curDosKeyBufferLen = emu.dosKeyBuffer.length;
       if (dosYieldAfterKeyAt < 0 && curDosKeyBufferLen < prevDosKeyBufferLen) {
@@ -952,6 +969,7 @@ export function emuTick(emu: Emulator): void {
     }
   }
   emu.cpuSteps += stepCount;
+  emu._pitInsnCount += stepCount;
   } catch (err) {
     console.error(`[EMU] tick() error at EIP=0x${(emu.cpu.eip >>> 0).toString(16)}:`, err);
     emu.haltReason = 'internal emulator error';
@@ -969,7 +987,7 @@ export function emuTick(emu: Emulator): void {
       const now = performance.now();
       // Sync on VBlank (normal path), or every ~33ms as fallback for games
       // that don't poll 0x3DA (ensures display still updates).
-      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 33) {
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 16) {
         emu.vga.pendingSync = false;
         emu.vga.lastSyncTime = now;
         syncGraphics(emu);
@@ -982,16 +1000,21 @@ export function emuTick(emu: Emulator): void {
   if (emu.running && !emu.halted && !emu.waitingForMessage) {
     emu._tickCount++;
     if (emu._dosHalted) {
-      // HLT: sleep until next timer tick instead of busy-spinning
+      // HLT: sleep until next timer tick. Use scheduleImmediate for short
+      // delays (≤4ms) to avoid setTimeout's 4ms clamping after nested calls.
       const pitReload = emu._pitCounters[0] || 0x10000;
       const timerIntervalMs = (pitReload / 1193182) * 1000;
       const elapsed = performance.now() - emu._dosLastTimerTick;
-      const delay = Math.max(1, timerIntervalMs - elapsed);
-      setTimeout(emu.tick, delay);
+      const delay = timerIntervalMs - elapsed;
+      if (delay <= 4) {
+        scheduleImmediate(emu.tick);
+      } else {
+        setTimeout(emu.tick, delay);
+      }
     } else if (emu.isDOS) {
-      // DOS games need maximum throughput — setTimeout(0) yields to browser
-      // for rendering/input but resumes much faster than requestAnimationFrame (~16ms)
-      setTimeout(emu.tick, 0);
+      // DOS games need maximum throughput — MessageChannel avoids setTimeout's
+      // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
+      scheduleImmediate(emu.tick);
     } else {
       requestAnimationFrame(emu.tick);
     }
