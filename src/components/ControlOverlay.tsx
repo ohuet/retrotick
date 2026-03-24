@@ -14,6 +14,7 @@ import { Trackbar } from './win2k/Trackbar';
 import { TabControl } from './win2k/TabControl';
 import { Static } from './win2k/Static';
 import { formatMnemonic } from '../lib/format';
+import { ComboBox } from './win2k/ComboBox';
 
 export function ctrlFont(ctrl: ControlOverlay): string {
   const size = ctrl.fontHeight ? `${Math.abs(ctrl.fontHeight)}px` : '12px';
@@ -529,84 +530,81 @@ export function renderControlOverlay(
   if (effectiveClass(ctrl) === 'COMBOBOX') {
     const cbItems = ctrl.cbItems || [];
     const selIdx = ctrl.cbSelectedIndex ?? -1;
+    const isDisabled = !!(ctrl.style & 0x08000000); // WS_DISABLED
 
+    // Helper: post a CBN_ notification to the combobox's parent
+    const postCBN = (notifyCode: number) => {
+      const emu = emuRef.current;
+      if (!emu) return;
+      const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
+      if (!wnd) return;
+      const target = wnd.parent || emu.mainWindow || 0;
+      if (emu.isNE) {
+        const lp = ((notifyCode << 16) | (ctrl.childHwnd & 0xFFFF)) >>> 0;
+        emu.postMessage(target, WM_COMMAND, ctrl.controlId & 0xFFFF, lp);
+      } else {
+        const wp = ((notifyCode << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
+        emu.postMessage(target, WM_COMMAND, wp, ctrl.childHwnd);
+      }
+    };
+
+    // Called when the dropdown OPENS — sends CBN_SETFOCUS + CBN_DROPDOWN
+    // while cbSelectedIndex still holds the OLD value. This lets the app
+    // save the current selection (e.g. WINFILE's DriveListMessage saves iSel).
+    const onDropdownOpen = () => {
+      const CBN_SETFOCUS = 3;
+      const CBN_DROPDOWN = 7;
+      postCBN(CBN_SETFOCUS);
+      postCBN(CBN_DROPDOWN);
+    };
+
+    // Called when the user SELECTS an item — updates index then sends
+    // CBN_SELCHANGE + CBN_SELENDOK + CBN_CLOSEUP with the new value.
     const onSelChange = (idx: number) => {
       const emu = emuRef.current;
       if (!emu) return;
       const wnd = emu.handles.get<WindowInfo>(ctrl.childHwnd);
       if (!wnd) return;
+
+      // Update selection
       wnd.cbSelectedIndex = idx;
 
-      // Check if this combobox is inside a toolbar — if so, try to simulate
-      // a drivebar click instead of WM_COMMAND (WINFILE ignores CBN_* notifications
-      // for drive changes; it only reacts to drivebar button clicks).
-      const parentWnd = wnd.parent ? emu.handles.get<WindowInfo>(wnd.parent) : null;
-      const pcn = parentWnd?.classInfo?.className?.toUpperCase();
-      if (pcn === 'TOOLBARWINDOW') {
-        // Find the WFS_Drives (drivebar) sibling window
-        const frameHwnd = parentWnd?.parent || emu.mainWindow || 0;
-        const frameWnd = emu.handles.get<WindowInfo>(frameHwnd);
-        if (frameWnd?.childList) {
-          for (const childHwnd of frameWnd.childList) {
-            const child = emu.handles.get<WindowInfo>(childHwnd);
-            if (child?.classInfo?.className === 'WFS_Drives' && child.wndProc) {
-              // Simulate drivebar click at the selected drive's button position.
-              // Drive buttons are laid out horizontally; estimate position from index.
-              // Each button is approximately 35px wide (16px icon + letter + padding).
-              const BUTTON_WIDTH = 35;
-              const clickX = idx * BUTTON_WIDTH + Math.round(BUTTON_WIDTH / 2);
-              const clickY = 5;
-              const WM_LBUTTONDOWN = 0x0201;
-              const WM_LBUTTONUP = 0x0202;
-              const lParam = ((clickY << 16) | clickX) >>> 0;
-              emu.postMessage(childHwnd, WM_LBUTTONDOWN, 1, lParam);
-              emu.postMessage(childHwnd, WM_LBUTTONUP, 0, lParam);
-              return;
-            }
-          }
-        }
-      }
+      // Notifications with new selection
+      const CBN_SELCHANGE = 1;
+      const CBN_KILLFOCUS = 4;
+      const CBN_SELENDOK = 9;
+      const CBN_CLOSEUP = 8;
+      postCBN(CBN_SELCHANGE);
+      postCBN(CBN_SELENDOK);
+      postCBN(CBN_CLOSEUP);
+      postCBN(CBN_KILLFOCUS);
 
-      // Generic fallback: post WM_COMMAND to parent (walk past CCS containers)
-      let parent = wnd.parent || emu.mainWindow || 0;
-      if (pcn === 'TOOLBARWINDOW' || pcn === 'MSCTLS_STATUSBAR') {
-        parent = parentWnd?.parent || emu.mainWindow || 0;
-      }
-      if (parent) {
-        const WM_COMMAND = 0x0111;
-        const CBN_SELCHANGE = 1;
-        if (emu.ne) {
-          const lParam16 = ((CBN_SELCHANGE << 16) | (ctrl.childHwnd & 0xFFFF)) >>> 0;
-          emu.postMessage(parent, WM_COMMAND, ctrl.controlId & 0xFFFF, lParam16);
-        } else {
-          const wParam = ((CBN_SELCHANGE << 16) | (ctrl.controlId & 0xFFFF)) >>> 0;
-          emu.postMessage(parent, WM_COMMAND, wParam, ctrl.childHwnd);
-        }
-      }
-      const pWnd = emu.handles.get<WindowInfo>(parent);
-      if (pWnd) pWnd.needsPaint = true;
+      // Mark for repaint
+      const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+      if (mainWnd) mainWnd.needsPaint = true;
+      const parentWnd = emu.handles.get<WindowInfo>(wnd.parent || 0);
+      if (parentWnd) parentWnd.needsPaint = true;
+
+      // Refresh overlays
+      const savedWaiting = emu.waitingForMessage;
+      emu.waitingForMessage = false;
+      emu.notifyControlOverlays();
+      emu.waitingForMessage = savedWaiting;
     };
 
-    // ComboBox display height is always one row; the full height is for the dropdown
+    // ComboBox display height is always one row; the full height is for the dropdown.
     const cbStyle = { ...posStyle, height: 21 };
 
     return (
       <div key={ctrl.childHwnd} style={{ ...cbStyle, boxSizing: 'border-box' }}>
-        <select
-          style={{
-            width: '100%', height: '100%', boxSizing: 'border-box',
-            font: ctrlFont(ctrl) || '11px/1 "Tahoma", "MS Sans Serif", sans-serif',
-            border: '1px solid', borderColor: '#808080 #FFF #FFF #808080',
-            background: '#FFF', padding: '0 2px',
-          }}
-          value={selIdx >= 0 ? selIdx : ''}
-          onChange={(e: Event) => onSelChange(parseInt((e.target as HTMLSelectElement).value, 10))}
-        >
-          {selIdx < 0 && <option value="">—</option>}
-          {cbItems.map((text: string, i: number) => (
-            <option key={i} value={i}>{text}</option>
-          ))}
-        </select>
+        <ComboBox
+          items={cbItems}
+          selectedIndex={selIdx}
+          onSelect={onSelChange}
+          onOpen={onDropdownOpen}
+          font={ctrlFont(ctrl)}
+          disabled={isDisabled}
+        />
       </div>
     );
   }

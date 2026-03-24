@@ -46,6 +46,8 @@ export interface BitmapInfo {
   monochrome?: boolean;
   dibBitsPtr?: number;  // emulator memory address of DIB section pixel data
   dibBpp?: number;      // bits per pixel of DIB section
+  dimX?: number;        // logical dimension set by SetBitmapDimension
+  dimY?: number;        // logical dimension set by SetBitmapDimension
 }
 
 export interface PenInfo {
