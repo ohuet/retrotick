@@ -662,6 +662,15 @@ export function emuTick(emu: Emulator): void {
     // IRET pops IP+CS+FLAGS (6 bytes), restoring SP to the pre-dispatch level.
     if (emu._hwIntSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP) {
       emu._hwIntSavedSP = -1;
+      // Restore PM state if we switched to RM for the interrupt handler
+      if (emu._hwIntPMState) {
+        emu._cr0 = emu._hwIntPMState.cr0;
+        emu.cpu.realMode = false;
+        emu.cpu.cs = emu._hwIntPMState.cs;
+        emu.cpu.ss = emu._hwIntPMState.ss;
+        emu.cpu.segBases = emu._hwIntPMState.segBases;
+        emu._hwIntPMState = undefined;
+      }
     }
     if (emu.halted || emu.waitingForMessage || emu._dosHalted) break;
     if (emu.isDOS && dosYieldAfterKeyAt < 0 && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
@@ -763,24 +772,48 @@ export function emuTick(emu: Emulator): void {
         const seg = (vec >>> 16) & 0xFFFF;
         const off = vec & 0xFFFF;
         emu._ioPorts.set(0x64, (emu._ioPorts.get(0x64) ?? 0) | 0x01);
-        const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
-        // Save SP BEFORE pushes — IRET is the only thing that restores SP to
-        // this level (handler's internal push/pop stays below it).
-        emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
-        // On real hardware, interrupts only fire when IF=1, so pushed FLAGS
-        // always have IF=1. We deliver regardless of IF, so force IF=1 in
-        // the saved FLAGS so IRET restores an interrupt-enabled context.
-        emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
-        emu.cpu.push16(emu.cpu.cs);
-        emu.cpu.push16(returnIP);
-        // Hardware interrupt entry clears IF+TF until IRET restores FLAGS.
-        emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
-        if (intNum === 0x09) {
-          emu._int09ReturnCS = emu.cpu.cs;
-          emu._int09ReturnIP = returnIP;
+
+        // In protected mode (PMODEW), IVT handlers are real-mode code.
+        // Temporarily switch to real mode so segment arithmetic is correct
+        // and the handler can use DS/ES as real-mode segments.
+        if (!emu.cpu.realMode) {
+          const pmSSBase = emu.cpu.segBase(emu.cpu.ss);
+          emu._hwIntPMState = {
+            cr0: emu._cr0,
+            cs: emu.cpu.cs,
+            ss: emu.cpu.ss,
+            segBases: new Map(emu.cpu.segBases),
+          };
+          emu._cr0 = 0;
+          emu.cpu.realMode = true;
+          emu.cpu.segBases.clear();
+          // Convert SS to real-mode paragraph (linear address stays the same)
+          emu.cpu.ss = (pmSSBase >>> 4) & 0xFFFF;
+          // Encode PM return address as real-mode seg:off
+          const pmEIP = emu.cpu.eip;
+          const returnSeg = (pmEIP >>> 4) & 0xFFFF;
+          const returnOff = pmEIP & 0xF;
+          emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+          emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
+          emu.cpu.push16(returnSeg);
+          emu.cpu.push16(returnOff);
+          emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
+          emu.cpu.cs = seg;
+          emu.cpu.eip = (seg * 16 + off) >>> 0;
+        } else {
+          const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
+          emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+          emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
+          emu.cpu.push16(emu.cpu.cs);
+          emu.cpu.push16(returnIP);
+          emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
+          if (intNum === 0x09) {
+            emu._int09ReturnCS = emu.cpu.cs;
+            emu._int09ReturnIP = returnIP;
+          }
+          emu.cpu.cs = seg;
+          emu.cpu.eip = emu.cpu.segBase(seg) + off;
         }
-        emu.cpu.cs = seg;
-        emu.cpu.eip = emu.cpu.segBase(seg) + off;
       } else {
         // No custom handler — call built-in BIOS handler directly
         emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;

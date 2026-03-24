@@ -65,7 +65,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     }
   }
 
-  // Set current directory for the exe's drive to its parent folder
+  // Set current drive and directory from the exe's path (mirrors real DOS loader behavior)
   const lastBackslash = emu.exePath.lastIndexOf('\\');
   if (lastBackslash >= 2 && emu.exePath[1] === ':') {
     const drive = emu.exePath[0].toUpperCase();
@@ -73,6 +73,8 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     // Preserve trailing backslash for root directory (e.g. D:\CMD.EXE → D:\, not D:)
     if (dir.length === 2 && dir[1] === ':') dir += '\\';
     emu.currentDirs.set(drive, dir);
+    // DOS sets the current drive to the drive the program was launched from
+    emu.currentDrive = drive;
   }
 
   // Detect ANSI code page from resources.

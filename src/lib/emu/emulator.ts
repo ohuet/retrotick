@@ -381,7 +381,13 @@ export class Emulator {
   _dosExecStack: {
     regs: Int32Array; cs: number; ds: number; es: number; ss: number;
     eip: number; flags: number; psp: number; dta: number;
+    currentDrive: string; currentDirs: Map<string, string>;
   }[] = [];
+  /** Saved drive/dir state for custom PSP child processes (AH=55h + AH=4Ch/INT 20h) */
+  _dosPspDriveState = new Map<number, { drive: string; dirs: Map<string, string> }>();
+  /** Saved IVT + _dosIntVectors for custom PSP children — PMODEW modifies IVT hooks that
+   *  must be restored when the child exits, since we bypass _pm_cleanup. */
+  _dosPspSavedIVT = new Map<number, { ivt: Uint8Array; intVectors: Map<number, number> }>();
   _dosExitCode = 0;
   /** Segment of fake UCDOS TSR stub (0 = not set up) */
   _dosUcdosStubSeg = 0;
@@ -542,6 +548,8 @@ export class Emulator {
   _xmsNextAddr = 0x110000;
   _xmsTotalKB = 16384;     // 16MB total XMS
   _xmsFreeBlocks: { base: number; size: number }[] = [];
+  /** Maps PSP segment → set of XMS handles allocated while that PSP was active */
+  _xmsPspHandles = new Map<number, Set<number>>();
 
   // Threading
   threads: Thread[] = [];
@@ -1649,6 +1657,8 @@ export class Emulator {
   _lastHwKeyDeliverTime = 0; // performance.now() of last non-E0 scancode delivery
   _tickRunning = false; // reentrancy guard for tick()
   _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
+  /** Saved PM state when HW INT handler runs in RM (restored after IRET) */
+  _hwIntPMState: { cr0: number; cs: number; ss: number; segBases: Map<number, number> } | undefined;
   _kbdDataReadsLeft = 0;
   _kbdReplayPending = false;
   _kbdReplayValue = 0xFF;
