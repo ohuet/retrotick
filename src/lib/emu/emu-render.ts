@@ -183,13 +183,14 @@ function collectChildren(emu: Emulator, wnd: WindowInfo, offsetX: number, offset
     // Recurse into child's children (e.g. tab pages, toolbar controls)
     if (child.childList && child.childList.length > 0) {
       let childOffY = offsetY + child.y;
-      // CCS toolbar: shift overlay children down to align with DC-painted buttons.
-      // The DC uses the full ccsYOffset to center the internal coordinate space,
-      // but overlay children only need a fraction because their stored positions
-      // were partially corrected by fixCcsPosition.
+      // CCS toolbar: the x86 COMMCTRL computes an internal height larger than
+      // the displayed height (e.g. 49px vs 27px). Child windows (like combobox)
+      // are positioned by MoveWindow using the internal height, while canvas-
+      // painted buttons use the DC ccsYOffset. Overlay children need a partial
+      // offset to align with DC-shifted button painting.
       const internalH = (child as any)._ccsInternalHeight;
       if (internalH && internalH > child.height) {
-        childOffY += Math.round((internalH - child.height) / 4);
+        childOffY += Math.round((internalH - child.height) / 5);
       }
       collectChildren(emu, child, offsetX + child.x, childOffY, out, mdiParentHwnd);
     }

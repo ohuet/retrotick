@@ -1861,15 +1861,28 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('PtInRegion', 6, () => 0, 161);
 
   // Ordinal 162: GetBitmapDimension(hBitmap) — pascal, 2 bytes
+  // Returns LOGICAL dimensions set by SetBitmapDimension, NOT pixel dimensions.
+  // Default (0,0) if SetBitmapDimension was never called.
   gdi.register('GetBitmapDimension', 2, () => {
     const hbmp = emu.readArg16(0);
     const bmp = emu.handles.get<BitmapInfo>(hbmp);
-    if (bmp) return ((bmp.height & 0xFFFF) << 16) | (bmp.width & 0xFFFF);
+    if (bmp) return (((bmp.dimY ?? 0) & 0xFFFF) << 16) | ((bmp.dimX ?? 0) & 0xFFFF);
     return 0;
   }, 162);
 
   // Ordinal 163: SetBitmapDimension(hBitmap, x, y) — pascal, 6 bytes
-  gdi.register('SetBitmapDimension', 6, () => 0, 163);
+  // Stores logical dimensions; returns previous value as DWORD.
+  gdi.register('SetBitmapDimension', 6, () => {
+    const [hbmp, x, y] = emu.readPascalArgs16([2, 2, 2]);
+    const bmp = emu.handles.get<BitmapInfo>(hbmp);
+    if (bmp) {
+      const prev = (((bmp.dimY ?? 0) & 0xFFFF) << 16) | ((bmp.dimX ?? 0) & 0xFFFF);
+      bmp.dimX = x;
+      bmp.dimY = y;
+      return prev;
+    }
+    return 0;
+  }, 163);
 
   // Ordinal 172: SetRectRgn(hRgn, l, t, r, b) — pascal -ret16, 10 bytes
   gdi.register('SetRectRgn', 10, () => 1, 172);
@@ -2460,13 +2473,14 @@ export function registerWin16Gdi(emu: Emulator): void {
   gdi.register('RectInRegion', 6, () => 0, 466);
 
   // Ordinal 468: GetBitmapDimensionEx(hbmp, lpDimension) — pascal -ret16, 6 bytes (2+4)
+  // Returns LOGICAL dimensions (set by SetBitmapDimension), not pixel dimensions.
   gdi.register('GetBitmapDimensionEx', 6, () => {
     const [hbmp, lpDimension] = emu.readPascalArgs16([2, 4]);
     if (lpDimension) {
       const bmp = emu.handles.get<BitmapInfo>(hbmp);
       if (bmp) {
-        emu.memory.writeU16(lpDimension, bmp.width);
-        emu.memory.writeU16(lpDimension + 2, bmp.height);
+        emu.memory.writeU16(lpDimension, bmp.dimX ?? 0);
+        emu.memory.writeU16(lpDimension + 2, bmp.dimY ?? 0);
       } else {
         emu.memory.writeU32(lpDimension, 0);
       }
