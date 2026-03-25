@@ -864,18 +864,24 @@ export function registerLocale(emu: Emulator): void {
   // EnumCalendarInfoW(lpCalInfoEnumProc, Locale, Calendar, CalType) → BOOL
   kernel32.register('EnumCalendarInfoW', 4, () => 0);
 
-  // VerSetConditionMask(conditionMask_lo, conditionMask_hi, typeMask, condition) → ULONGLONG
-  // Real API encodes condition (3 bits) into specific bit positions based on typeMask.
-  // Each VER_xxx type occupies bits [type*3 .. type*3+2] in the 64-bit mask.
-  kernel32.register('VerSetConditionMask', 3, () => {
-    const condMask = emu.readArg(0); // low 32 bits of existing mask
-    const typeMask = emu.readArg(1);
-    const condition = emu.readArg(2) & 0x07;
+  // VerSetConditionMask(ULONGLONG conditionMask, DWORD typeMask, BYTE condition) → ULONGLONG
+  // ULONGLONG = 2 DWORDs on stack, so 4 DWORDs total = stackBytes 16
+  // Encodes condition (3 bits) into specific bit positions based on typeMask.
+  kernel32.register('VerSetConditionMask', 4, () => {
+    const condMaskLo = emu.readArg(0); // low 32 bits of existing mask
+    const condMaskHi = emu.readArg(1); // high 32 bits of existing mask
+    const typeMask = emu.readArg(2);
+    const condition = emu.readArg(3) & 0x07;
     // Map typeMask to bit position: each VER_xxx type is a power of 2
     // VER_MINORVERSION=1, VER_MAJORVERSION=2, VER_BUILDNUMBER=4, ...
     // Shift = log2(typeMask) * 3
-    if (typeMask === 0 || condition === 0) return condMask;
+    if (typeMask === 0 || condition === 0) {
+      emu.cpu.reg[2] = condMaskHi; // EDX = high
+      return condMaskLo;
+    }
     const shift = (Math.log2(typeMask & -typeMask) | 0) * 3;
-    return (condMask | (condition << shift)) >>> 0;
+    const result = (condMaskLo | (condition << shift)) >>> 0;
+    emu.cpu.reg[2] = condMaskHi; // EDX = high (unchanged for low-bit masks)
+    return result;
   });
 }
