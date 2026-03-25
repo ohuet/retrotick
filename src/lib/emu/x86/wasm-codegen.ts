@@ -11,7 +11,7 @@ import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
 import { emitLoadU8, emitLoadU16, emitLoadI32, emitStoreU8WithVGA, emitStoreU16Direct, emitStoreI32Direct, emitAddSegBase, setAddrSize16, setSegOverride } from './wasm-codegen-mem';
 import { emitMOV_rm, emitALU_rm, emitLEA, emitGroup83, emitTEST_rm } from './wasm-codegen-modrm';
 import { LOP_ADD8, LOP_SUB8, LOP_SUB16, LOP_SUB32, LOP_AND8, LOP_OR8, LOP_XOR8, LOP_INC16, LOP_INC32, LOP_DEC16, LOP_DEC32, emitSetLazyFlags, emitSetLazyFlagsImm } from './wasm-codegen-flags';
-import { emit8bitALU, emitALU_eax_imm, emitMOV8_rm, emitMOV_rm8_imm8, emitMOV_rm_imm, emitShift_imm8, emitShift_by1, emitPUSH_imm8, emitPUSH_imm, emitIN_AL_imm8, emitIN_AL_DX, emitOUT_imm8_AL, emitOUT_DX_AL } from './wasm-codegen-ops';
+import { emit8bitALU, emitALU_eax_imm, emitMOV8_rm, emitMOV_rm8_imm8, emitMOV_rm_imm, emitShift_imm8, emitShift_by1, emitPUSH_imm8, emitPUSH_imm, emitIN_AL_imm8, emitIN_AL_DX, emitOUT_imm8_AL, emitOUT_DX_AL, emitLES } from './wasm-codegen-ops';
 import { emitGroup80, emitGroup81, emitGroupFE, emitGroupFF, emitGroupF6, emitGroupF7 } from './wasm-codegen-grp';
 
 // Register local indices (must match the local allocation in wasm-module.ts)
@@ -23,6 +23,7 @@ let TMP1 = 8, TMP2 = 9, TMP3 = 10;
 let STATE_LOCAL = 11, COUNTER_LOCAL = 12;
 
 const DS_BASE = OFF_SEGBASES + 4;
+const ES_BASE = OFF_SEGBASES + 8;
 const SS_BASE = OFF_SEGBASES + 12;
 
 /** Codegen context — tracks state during block compilation */
@@ -412,6 +413,14 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
           b.getLocal(REG_ESI); b.constI32(1); b.addI32(); b.setLocal(REG_ESI);
         }
       b.end();
+      break;
+    }
+
+    // LES reg, [mem] (C4) — load far pointer: reg=[mem], ES=[mem+2]
+    case 0xC4: {
+      const n = emitLES(ctx, pos, is16);
+      if (n < 0) return -1;
+      pos += n;
       break;
     }
 
