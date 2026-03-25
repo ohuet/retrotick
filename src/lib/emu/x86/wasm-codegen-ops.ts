@@ -62,8 +62,8 @@ export function emit8bitALU(
   const { b, mem, tmp1, tmp2 } = ctx;
   const modrm = mem.readU8(pos);
   if (aluOp === 2 || aluOp === 3) return -1;
-  // Bail on [mem] OP reg8 write-back before emitting bytecode
-  if (!toReg && ((modrm >> 6) & 3) !== 3) return -1;
+  // Bail on [mem] OP reg8 write-back before emitting bytecode (but CMP=7 is read-only)
+  if (!toReg && aluOp !== 7 && ((modrm >> 6) & 3) !== 3) return -1;
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   const regF = mr.reg;
 
@@ -109,7 +109,18 @@ export function emit8bitALU(
         b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
       }
     } else {
-      return -1; // [mem] OP reg8 write-back — bail
+      // [mem] OP reg8: only CMP (read-only) reaches here, others bailed early
+      emitAddrMask(b);
+      emitLoadU8(b);          // load [mem] byte
+      b.setLocal(tmp1);       // tmp1 = mem value
+      b.getLocal(tmp1);
+      emitReg8Get(b, regF);   // reg value
+      emitAluInstr(b, aluOp); // CMP: sub
+      b.constI32(0xFF); b.andI32(); b.setLocal(tmp2);
+      emitSetLazyFlagsImm(b, aluLop8(aluOp), tmp2, 0, 0);
+      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+      emitReg8Get(b, regF); b.setLocal(tmp1);
+      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 12);
     }
   }
   return mr.extraBytes;
