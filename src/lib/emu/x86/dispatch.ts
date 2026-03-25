@@ -251,6 +251,7 @@ export function cpuStep(cpu: CPU): void {
     case 0x17:
       cpu.ss = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
       cpu._inhibitTF = true; // POP SS suppresses TF trap
+      cpu._inhibitIRQ = true; // POP SS inhibits HW IRQ for next instruction
       break;
     case 0x1F:
       cpu.ds = opSize === 16 ? cpu.pop16() : cpu.pop32() & 0xFFFF;
@@ -736,7 +737,7 @@ export function cpuStep(cpu: CPU): void {
       switch (d.regField) {
         case 0: cpu.es = d.val & 0xFFFF; break;
         case 1: cpu.loadCS(d.val & 0xFFFF); break;
-        case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; break; // MOV SS suppresses TF
+        case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; cpu._inhibitIRQ = true; break; // MOV SS suppresses TF + IRQ
         case 3: cpu.ds = d.val & 0xFFFF; break;
         case 4: cpu.fs = d.val & 0xFFFF; break;
         case 5: cpu.gs = d.val & 0xFFFF; break;

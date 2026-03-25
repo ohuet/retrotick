@@ -118,6 +118,15 @@ export function handleInt20(cpu: CPU, emu: Emulator): boolean {
       cpu.realMode = true;
       cpu.segBases.clear();
     }
+    if (cpu.emu) {
+      cpu.emu._idtBase = 0;
+      cpu.emu._idtLimit = 0;
+      cpu.emu._gdtBase = 0;
+      cpu.emu._gdtLimit = 0;
+      cpu.emu._hwIntPMActive = false;
+      cpu.emu._picMasterBase = 0x08;
+      cpu.emu._picSlaveBase = 0x70;
+    }
     cpu.cs = termCS;
     cpu.eip = cpu.segBase(termCS) + termIP;
     return true;
@@ -202,8 +211,14 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
     return true;
   }
 
+  if (ax === 0x1687) {
+    // DPMI host detection — AX=0 means present, AX nonzero means not present
+    cpu.setReg16(EAX, 0x0001); // DPMI not present
+    return true;
+  }
+
   if (ax === 0x0500) {
-    cpu.setReg8(EAX, 0xFF); // DPMI not present
+    cpu.setReg8(EAX, 0xFF); // DPMI not present (alternate check)
     return true;
   }
 

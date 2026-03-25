@@ -540,6 +540,16 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
             cpu.realMode = true;
             cpu.segBases.clear();
           }
+          // Reset PM descriptor tables and PIC state left by the exiting sub-EXE
+          if (cpu.emu) {
+            cpu.emu._idtBase = 0;
+            cpu.emu._idtLimit = 0;
+            cpu.emu._gdtBase = 0;
+            cpu.emu._gdtLimit = 0;
+            cpu.emu._hwIntPMActive = false;
+            cpu.emu._picMasterBase = 0x08;
+            cpu.emu._picSlaveBase = 0x70;
+          }
           cpu.cs = termCS;
           cpu.eip = cpu.segBase(termCS) + termIP;
           break;
