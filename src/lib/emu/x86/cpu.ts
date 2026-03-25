@@ -110,7 +110,7 @@ export class CPU {
       const cbase = this.segBases.get(canonical);
       if (cbase !== undefined) return cbase;
     }
-    // Look up in GDT if available
+    // Look up in GDT if available (for protected mode / DOS extender)
     const base = this.loadGdtDescriptorBase(sel);
     if (base !== undefined) {
       this.segBases.set(sel, base);
