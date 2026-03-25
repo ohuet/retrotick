@@ -68,26 +68,38 @@ export function emitGroup80(
   const modrm = mem.readU8(pos);
   const aluOp = (modrm >> 3) & 7;
   if (aluOp === 2 || aluOp === 3) return -1;
-  if (((modrm >> 6) & 3) !== 3) return -1; // bail before emitting bytecode for memory operands
+  // Bail on memory for write-back ops (CMP=7 is read-only, OK with memory)
+  if (aluOp !== 7 && ((modrm >> 6) & 3) !== 3) return -1;
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   const imm = mem.readU8(pos + mr.extraBytes);
 
-  const rm8 = mr.rm;
-  emitReg8Get(b, rm8); b.setLocal(tmp1);
-  b.getLocal(tmp1); b.constI32(imm);
-  emitAluInstr(b, aluOp);
-  const lop = aluLop8(aluOp);
-  if (aluOp === 7) {
-    b.constI32(0xFF); b.andI32(); b.setLocal(tmp2);
-    emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
+  if (mr.isReg) {
+    const rm8 = mr.rm;
+    emitReg8Get(b, rm8); b.setLocal(tmp1);
+    b.getLocal(tmp1); b.constI32(imm);
+    emitAluInstr(b, aluOp);
+    const lop = aluLop8(aluOp);
+    if (aluOp === 7) {
+      b.constI32(0xFF); b.andI32(); b.setLocal(tmp2);
+      emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
+    } else {
+      b.constI32(0xFF); b.andI32();
+      emitReg8Set(b, rm8);
+      emitReg8Get(b, rm8); b.setLocal(tmp2);
+      emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
+    }
+    b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+    b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
   } else {
-    b.constI32(0xFF); b.andI32();
-    emitReg8Set(b, rm8);
-    emitReg8Get(b, rm8); b.setLocal(tmp2);
-    emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
+    // Memory CMP r/m8, imm8 (aluOp=7 only reaches here)
+    emitAddrMask(b);
+    emitLoadU8(b); b.setLocal(tmp1); // tmp1 = [mem]
+    b.getLocal(tmp1); b.constI32(imm);
+    b.subI32(); b.constI32(0xFF); b.andI32(); b.setLocal(tmp2);
+    emitSetLazyFlagsImm(b, LOP_SUB8, tmp2, 0, 0);
+    b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+    b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
   }
-  b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
-  b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
   return mr.extraBytes + 1;
 }
 
@@ -101,25 +113,36 @@ export function emitGroup81(
   const modrm = mem.readU8(pos);
   const aluOp = (modrm >> 3) & 7;
   if (aluOp === 2 || aluOp === 3) return -1; // ADC/SBB
-  if (((modrm >> 6) & 3) !== 3) return -1; // bail before emitting bytecode for memory operands
+  if (aluOp !== 7 && ((modrm >> 6) & 3) !== 3) return -1; // CMP=7 is read-only, OK with memory
   const mr = emitModRM32Addr(b, modrm, mem, pos);
   const immSize = is16 ? 2 : 4;
   const imm = is16 ? mem.readU16(pos + mr.extraBytes) : mem.readU32(pos + mr.extraBytes) | 0;
 
-  const rm = mr.rm;
-  b.getLocal(rm); b.setLocal(tmp1); // save old value
-  if (is16) { emitRegGet16(b, rm); } else { b.getLocal(rm); }
-  b.constI32(imm);
-  const lop = emitAluOp81(b, aluOp, is16);
-  if (aluOp === 7) {
-    // CMP — don't write back
-    b.setLocal(tmp2);
-    emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
-    b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
-    b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
+  if (mr.isReg) {
+    const rm = mr.rm;
+    b.getLocal(rm); b.setLocal(tmp1);
+    if (is16) { emitRegGet16(b, rm); } else { b.getLocal(rm); }
+    b.constI32(imm);
+    const lop = emitAluOp81(b, aluOp, is16);
+    if (aluOp === 7) {
+      b.setLocal(tmp2);
+      emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
+      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+      b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
+    } else {
+      if (is16) { emitRegSet16(b, rm); } else { b.setLocal(rm); }
+      emitSetLazyFlagsImm(b, lop, rm, 0, 0);
+      b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
+      b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
+    }
   } else {
-    if (is16) { emitRegSet16(b, rm); } else { b.setLocal(rm); }
-    emitSetLazyFlagsImm(b, lop, rm, 0, 0);
+    // Memory CMP r/m, imm (aluOp=7 only reaches here)
+    emitAddrMask(b);
+    if (is16) { b.loadU16(0); } else { b.loadI32Unaligned(0); }
+    b.setLocal(tmp1);
+    b.getLocal(tmp1); b.constI32(imm); b.subI32(); b.setLocal(tmp2);
+    const lop = is16 ? LOP_SUB16 : LOP_SUB32;
+    emitSetLazyFlagsImm(b, lop, tmp2, 0, 0);
     b.constI32(0); b.getLocal(tmp1); b.storeI32(OFF_FLAGS + 8);
     b.constI32(0); b.constI32(imm); b.storeI32(OFF_FLAGS + 12);
   }

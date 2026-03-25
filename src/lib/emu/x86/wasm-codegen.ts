@@ -273,6 +273,58 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
       break;
     }
 
+    // XCHG r/m8, reg8 (86) — register-only
+    case 0x86: {
+      const modrm = mem.readU8(pos);
+      if (((modrm >> 6) & 3) !== 3) return -1; // memory bail
+      pos++; // consume ModRM
+      const regF = (modrm >> 3) & 7;
+      const rm = modrm & 7;
+      emitReg8Get(b, rm); b.setLocal(tmp1);   // tmp1 = old rm8
+      emitReg8Get(b, regF); emitReg8Set(b, rm);  // rm8 = regF8
+      b.getLocal(tmp1); emitReg8Set(b, regF);    // regF8 = old rm8
+      break;
+    }
+
+    // XCHG r/m16, reg16 (87) — register-only
+    case 0x87: {
+      const modrm = mem.readU8(pos);
+      if (((modrm >> 6) & 3) !== 3) return -1;
+      pos++;
+      const regF = (modrm >> 3) & 7;
+      const rm = modrm & 7;
+      if (is16) {
+        emitRegGet16(b, rm); b.setLocal(tmp1);
+        emitRegGet16(b, regF); emitRegSet16(b, rm);
+        b.getLocal(tmp1); emitRegSet16(b, regF);
+      } else {
+        b.getLocal(rm); b.setLocal(tmp1);
+        b.getLocal(regF); b.setLocal(rm);
+        b.getLocal(tmp1); b.setLocal(regF);
+      }
+      break;
+    }
+
+    // MOV r/m16, Sreg (8C) — store segment register
+    case 0x8C: {
+      const modrm = mem.readU8(pos);
+      if (((modrm >> 6) & 3) !== 3) return -1; // memory bail
+      pos++;
+      const sreg = (modrm >> 3) & 7; // 0=ES,1=CS,2=SS,3=DS
+      const rm = modrm & 7;
+      // Read segment selector from flat memory: we don't have segment regs in locals.
+      // The segment VALUE (not base) isn't stored in flat memory... bail for now.
+      // Actually, for real-mode DOS: seg base = seg * 16, so seg = base / 16.
+      // Read base, shift right by 4.
+      const segBaseOff = [ES_BASE, OFF_SEGBASES, SS_BASE, DS_BASE][sreg]; // ES,CS,SS,DS
+      if (segBaseOff === undefined) return -1; // FS/GS not stored
+      b.constI32(0); b.loadI32(segBaseOff);
+      b.constI32(4); b.shrUI32(); // base / 16 = selector (real mode)
+      if (is16) { emitRegSet16(b, rm); }
+      else { b.setLocal(rm); }
+      break;
+    }
+
     // CMP AL, imm8 (3C)
     case 0x3C: {
       const imm = mem.readU8(pos); pos++;
