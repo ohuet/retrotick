@@ -8,7 +8,7 @@ import type { CodegenCtx } from './wasm-codegen';
 import { emitReg8Get, emitReg8Set, emitRegGet16, emitRegSet16 } from './wasm-codegen';
 import { REG_EAX, REG_ESP } from './wasm-codegen';
 import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
-import { emitModRM32Addr } from './wasm-codegen-mem';
+import { emitModRM32Addr, emitAddrMask } from './wasm-codegen-mem';
 import {
   emitLoadU8, emitLoadU16, emitLoadI32,
   emitStoreU8WithVGA, emitStoreI32Direct,
@@ -431,4 +431,42 @@ export function emitOUT_DX_AL(ctx: CodegenCtx): number {
   emitReg8Get(b, 0);
   b.call(ctx.portOutIdx);
   return 0;
+}
+
+/** LES reg, [mem] (C4) — load far pointer: reg=[mem], ES=[mem+2]
+ *  Also updates ES segment base in flat memory (real mode: ES*16). */
+export function emitLES(ctx: CodegenCtx, pos: number, is16: boolean): number {
+  const { b, mem, tmp1 } = ctx;
+  const modrm = mem.readU8(pos);
+  // LES requires memory operand
+  if (((modrm >> 6) & 3) === 3) return -1;
+  const mr = emitModRM32Addr(b, modrm, mem, pos);
+  if (mr.extraBytes < 0) return -1;
+  const regF = mr.reg;
+
+  // Address is on stack — mask and save
+  emitAddrMask(b);
+  b.teeLocal(tmp1);
+
+  // Load offset into reg (16-bit or 32-bit)
+  if (is16) {
+    b.loadU16(0);
+    emitRegSet16(b, regF);
+  } else {
+    b.loadI32Unaligned(0);
+    b.setLocal(regF);
+  }
+
+  // Load segment selector from [addr+2]
+  b.getLocal(tmp1);
+  b.constI32(2); b.addI32();
+  b.loadU16(0);
+  // Compute ES base = selector * 16 (real mode) and store to flat memory
+  b.constI32(4); b.shlI32(); // sel * 16
+  b.setLocal(tmp1);           // tmp1 = ES base
+  b.constI32(0);              // addr for store
+  b.getLocal(tmp1);           // value
+  b.storeI32(OFF_SEGBASES + 8); // ES_base = sel * 16
+
+  return mr.extraBytes;
 }
