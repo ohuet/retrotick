@@ -222,6 +222,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       // (e.g. CALL FAR through IVT) get the correct vector
       emu.memory.writeU16(intNo * 4, cpu.getReg16(EDX));     // offset
       emu.memory.writeU16(intNo * 4 + 2, cpu.ds);            // segment
+      cpu.setFlag(CF, false);
       break;
     }
 
@@ -251,6 +252,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       cpu.setReg16(EAX, (DOS_MINOR << 8) | DOS_MAJOR); // AL=major, AH=minor
       cpu.setReg16(EBX, 0x0000); // BH=version flag, BL=OEM serial
       cpu.setReg16(ECX, 0x0000);
+      cpu.setFlag(CF, false);
       break;
     }
 
@@ -271,6 +273,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       }
       cpu.setReg16(EBX, vec & 0xFFFF);
       cpu.es = (vec >>> 16) & 0xFFFF;
+      cpu.setFlag(CF, false);
       break;
     }
 
