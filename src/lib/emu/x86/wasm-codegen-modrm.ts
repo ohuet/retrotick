@@ -141,8 +141,12 @@ export function emitLEA(
   b: WasmBuilder, mem: Memory, pos: number, is16: boolean,
 ): number {
   const modrm = mem.readU8(pos);
+  // LEA computes effective address WITHOUT segment base, but emitModRM16Addr
+  // always adds segment base. Bail for 16-bit addressing until we can pass
+  // a no-segment-base flag.
+  if (((modrm >> 6) & 3) !== 3 && is16) return -1;
   const mr = emitModRM32Addr(b, modrm, mem, pos);
-  if (mr.extraBytes < 0) return -1; // 16-bit addressing unsupported
+  if (mr.extraBytes < 0) return -1;
   if (mr.isReg) return -1; // LEA with register operand is invalid
   // Address is on WASM stack — store to reg
   if (is16) { rs16(b, mr.reg); } else { b.setLocal(mr.reg); }
