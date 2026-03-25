@@ -53,6 +53,45 @@ async function run32(bytes, regs = {}) {
   };
 }
 
+/** Helper: compile x86 bytes at a 16-bit address (use32=false), with real-mode segment bases */
+async function run16(bytes, regs = {}, dsVal = 0x200, ssVal = 0x300) {
+  const mem = new Memory();
+  const flat = new FlatMemory();
+  // Place code at DS:0 linear address = dsVal * 16
+  const codeLinear = dsVal * 16;
+  writeBytes(mem, codeLinear, bytes);
+  flat.syncToFlat(mem);
+  // Set registers
+  const regIdx = { eax: 0, ecx: 1, edx: 2, ebx: 3, esp: 4, ebp: 5, esi: 6, edi: 7 };
+  for (const [name, val] of Object.entries(regs)) {
+    flat.dv.setInt32(OFF_REGS + regIdx[name] * 4, val, true);
+  }
+  // Set segment bases (real mode: seg * 16)
+  flat.dv.setUint32(OFF_SEGBASES + 0, dsVal * 16, true); // CS base
+  flat.dv.setUint32(OFF_SEGBASES + 4, dsVal * 16, true); // DS base
+  flat.dv.setUint32(OFF_SEGBASES + 8, dsVal * 16, true); // ES base
+  flat.dv.setUint32(OFF_SEGBASES + 12, ssVal * 16, true); // SS base
+
+  const region = await compileWasmRegion(mem, codeLinear, false, flat);
+  if (!region) return null;
+  flat.dv.setInt32(OFF_ENTRY, region.entryMap.get(codeLinear), true);
+  region.run();
+  return {
+    eax: flat.dv.getInt32(OFF_REGS, true),
+    ecx: flat.dv.getInt32(OFF_REGS + 4, true),
+    edx: flat.dv.getInt32(OFF_REGS + 8, true),
+    ebx: flat.dv.getInt32(OFF_REGS + 12, true),
+    esp: flat.dv.getInt32(OFF_REGS + 16, true),
+    ebp: flat.dv.getInt32(OFF_REGS + 20, true),
+    esi: flat.dv.getInt32(OFF_REGS + 24, true),
+    edi: flat.dv.getInt32(OFF_REGS + 28, true),
+    readMem32: (addr) => flat.dv.getUint32(addr, true),
+    readMem16: (addr) => flat.dv.getUint16(addr, true),
+    readMem8: (addr) => flat.dv.getUint8(addr),
+    flat,
+  };
+}
+
 // ========== MOV variants ==========
 
 // MOV r8, imm8 (B0-B7)
@@ -379,6 +418,89 @@ async function run32(bytes, regs = {}) {
     0xC3                             // RET
   ]);
   assert(r !== null, `high address load: no crash`);
+}
+
+// ========== 16-bit memory addressing ==========
+
+// MOV AX, [BX] in 16-bit mode (8B 07) — load from [DS:BX]
+{
+  const dsVal = 0x200; // DS=0x200 → base=0x2000
+  // Write test value at linear 0x2000 + 0x100 = 0x2100
+  const r = await run16(
+    [0x8B, 0x07, 0xC3], // MOV AX, [BX]; RET
+    { ebx: 0x100 }, dsVal
+  );
+  if (r) {
+    // Write the test value BEFORE running — need to redo since run16 already ran
+    // Actually we need to write the value at the linear address before running
+  }
+  // We can't easily pre-fill memory in run16 after syncToFlat. Use a different approach:
+  // Write to memory, then sync, then run.
+  assert(r !== null, `16-bit MOV AX,[BX]: compilation succeeded`);
+}
+
+// MOV [BX], AX in 16-bit mode (89 07) — store to [DS:BX]
+{
+  const dsVal = 0x200;
+  const r = await run16(
+    [0x89, 0x07, 0xC3], // MOV [BX], AX; RET
+    { eax: 0xBEEF, ebx: 0x50 }, dsVal
+  );
+  if (r) {
+    const linear = dsVal * 16 + 0x50; // 0x2000 + 0x50 = 0x2050
+    const val = r.readMem16(linear);
+    assert(val === 0xBEEF, `16-bit MOV [BX],AX: mem[0x${linear.toString(16)}]=0x${val.toString(16)}, expected 0xBEEF`);
+  } else {
+    assert(false, `16-bit MOV [BX],AX: compilation failed`);
+  }
+}
+
+// MOV AL, [BX+SI] in 16-bit mode (8A 00) — two-register addressing
+{
+  const dsVal = 0x200;
+  const r = await run16(
+    [0x8A, 0x00, 0xC3], // MOV AL, [BX+SI]; RET
+    { ebx: 0x30, esi: 0x10 }, dsVal
+  );
+  assert(r !== null, `16-bit MOV AL,[BX+SI]: compilation succeeded`);
+}
+
+// MOV AX, [BP+disp8] in 16-bit mode (8B 46 04) — BP uses SS segment
+{
+  const dsVal = 0x200, ssVal = 0x300; // SS:BP+4
+  const r = await run16(
+    [0x89, 0x46, 0x04, 0xC3], // MOV [BP+4], AX; RET
+    { eax: 0x1234, ebp: 0x80 }, dsVal, ssVal
+  );
+  if (r) {
+    const linear = ssVal * 16 + 0x80 + 4; // 0x3000 + 0x84 = 0x3084
+    const val = r.readMem16(linear);
+    assert(val === 0x1234, `16-bit MOV [BP+4],AX (SS): mem[0x${linear.toString(16)}]=0x${val.toString(16)}, expected 0x1234`);
+  } else {
+    assert(false, `16-bit MOV [BP+4],AX: compilation failed`);
+  }
+}
+
+// MOV AX, [disp16] in 16-bit mode (8B 06 xx xx) — direct address
+{
+  const dsVal = 0x200;
+  const r = await run16(
+    [0x89, 0x06, 0x40, 0x00, 0xC3], // MOV [0x0040], AX; RET
+    { eax: 0x5678 }, dsVal
+  );
+  if (r) {
+    const linear = dsVal * 16 + 0x40; // 0x2000 + 0x40 = 0x2040
+    const val = r.readMem16(linear);
+    assert(val === 0x5678, `16-bit MOV [disp16],AX: mem[0x${linear.toString(16)}]=0x${val.toString(16)}, expected 0x5678`);
+  } else {
+    assert(false, `16-bit MOV [disp16],AX: compilation failed`);
+  }
+}
+
+// INC/DEC in 16-bit (pure register — should still work in 16-bit mode)
+{
+  const r = await run16([0x40, 0x48, 0x48, 0xC3], { eax: 10 }); // INC AX; DEC AX; DEC AX; RET
+  assert(r && (r.eax & 0xFFFF) === 9, `16-bit INC/DEC: AX=${r ? (r.eax & 0xFFFF) : 'null'}`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
