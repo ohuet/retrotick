@@ -8,6 +8,7 @@ import { DesktopIcon, INTERNAL_MIME } from './DesktopIcon';
 import { MenuDropdown } from './win2k/MenuBar';
 import { Window, WS_CAPTION, WS_SYSMENU } from './win2k/Window';
 import { Button } from './win2k/Button';
+import { PropertiesDialog } from './PropertiesDialog';
 import { t } from '../lib/regional-settings';
 
 interface Props {
@@ -21,6 +22,8 @@ interface DesktopFile {
   iconUrl: string | null;
   isExe: boolean;
   isFolder: boolean;
+  size: number;
+  addedAt: number;
 }
 
 function extractFirstIconUrl(data: ArrayBuffer): string | null {
@@ -56,6 +59,9 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; name: string; isExe: boolean; isScr: boolean; isFolder: boolean } | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [propertiesFile, setPropertiesFile] = useState<DesktopFile | null>(null);
+  const [propsFlash, setPropsFlash] = useState(0);
+  const [folderContents, setFolderContents] = useState<{ files: number; folders: number; totalSize: number } | null>(null);
   const iconUrls = useRef<string[]>([]);
 
   const loadFiles = useCallback(async () => {
@@ -72,7 +78,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
         if (url) iconUrls.current.push(url);
         isExe = isExeFile(f.data, f.name).ok;
       }
-      return { name: f.name, iconUrl: url, isExe, isFolder: isFolderEntry };
+      return { name: f.name, iconUrl: url, isExe, isFolder: isFolderEntry, size: f.data.byteLength, addedAt: f.addedAt };
     });
     desktopFiles.sort((a, b) => {
       if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
@@ -95,6 +101,19 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
     window.addEventListener('desktop-files-changed', onRefresh);
     return () => window.removeEventListener('desktop-files-changed', onRefresh);
   }, [loadFiles]);
+
+  useEffect(() => {
+    if (!propertiesFile?.isFolder) { setFolderContents(null); return; }
+    const folderPrefix = propertiesFile.name.endsWith('/') ? propertiesFile.name : propertiesFile.name + '/';
+    getAllFiles().then(all => {
+      let files = 0, folders = 0, totalSize = 0;
+      for (const f of all) {
+        if (!f.name.startsWith(folderPrefix)) continue;
+        if (isFolder(f.name)) folders++; else { files++; totalSize += f.data.byteLength; }
+      }
+      setFolderContents({ files, folders, totalSize });
+    });
+  }, [propertiesFile]);
 
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
@@ -339,24 +358,27 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
 
       {/* File context menu */}
       {contextMenu && (() => {
-        const CMD_OPEN = 1, CMD_CONFIGURE = 2, CMD_VIEW = 3, CMD_DELETE = 4, CMD_RENAME = 5;
+        const CMD_OPEN = 1, CMD_CONFIGURE = 2, CMD_VIEW = 3, CMD_DELETE = 4, CMD_RENAME = 5, CMD_PROPS = 6;
         const mi = (id: number, text: string, opts?: Partial<MenuItem>): MenuItem => ({
           id, text, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null, ...opts,
         });
+        const sep: MenuItem = { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null };
         const items: MenuItem[] = [];
         if (contextMenu.isFolder) {
           items.push(mi(CMD_OPEN, t().open, { isDefault: true }));
           items.push(mi(CMD_RENAME, t().rename));
-          items.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
+          items.push(sep);
           items.push(mi(CMD_DELETE, t().delete_));
         } else {
           if (contextMenu.isExe) items.push(mi(CMD_OPEN, t().open, { isDefault: true }));
           if (contextMenu.isScr && contextMenu.isExe) items.push(mi(CMD_CONFIGURE, t().configure));
           items.push(mi(CMD_VIEW, t().viewResources, { isDefault: !contextMenu.isExe }));
           items.push(mi(CMD_RENAME, t().rename));
-          items.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
+          items.push(sep);
           items.push(mi(CMD_DELETE, t().delete_));
         }
+        items.push({ ...sep });
+        items.push(mi(CMD_PROPS, t().properties));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
@@ -369,6 +391,10 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
                 else if (id === CMD_VIEW) handleViewResources(contextMenu.name);
                 else if (id === CMD_RENAME) { setEditingName(contextMenu.name); setSelected(contextMenu.name); }
                 else if (id === CMD_DELETE) { setConfirmDelete(contextMenu.name); setContextMenu(null); }
+                else if (id === CMD_PROPS) {
+                  const f = files.find(df => df.name === contextMenu.name);
+                  if (f) setPropertiesFile(f);
+                }
               }}
               onClose={() => setContextMenu(null)}
             />
@@ -403,6 +429,26 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder }: Props) {
               </div>
             </Window>
           </div>
+        </div>
+      )}
+
+      {/* Properties dialog */}
+      {propertiesFile && (
+        <div onPointerDown={() => setPropsFlash(c => c + 1)}>
+          <PropertiesDialog
+            info={{
+              displayName: displayName(propertiesFile.name),
+              isFolder: propertiesFile.isFolder,
+              isExe: propertiesFile.isExe,
+              iconUrl: propertiesFile.iconUrl,
+              size: propertiesFile.size,
+              addedAt: propertiesFile.addedAt,
+              location: 'D:\\',
+              folderContents,
+            }}
+            flashTrigger={propsFlash}
+            onClose={() => setPropertiesFile(null)}
+          />
         </div>
       )}
     </div>

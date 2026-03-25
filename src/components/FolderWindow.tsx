@@ -5,7 +5,9 @@ import { DesktopIcon, INTERNAL_MIME, FOLDER_ICON_16 } from './DesktopIcon';
 import {
   getItemsInFolder, addFolder, deleteFolder, deleteFile, renameEntry,
   isFolder, displayName, addFile, getAllFiles, readDroppedItems,
+  type StoredFile,
 } from '../lib/file-store';
+import { PropertiesDialog } from './PropertiesDialog';
 import { parsePE, parseCOM, extractIcons } from '../lib/pe';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
@@ -22,6 +24,8 @@ interface FolderItem {
   isFolder: boolean;
   iconUrl: string | null;
   isExe: boolean;
+  size: number;
+  addedAt: number;
 }
 
 interface FolderWindowProps {
@@ -74,6 +78,9 @@ export function FolderWindow({
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [confirmFlash, setConfirmFlash] = useState(0);
+  const [propertiesItem, setPropertiesItem] = useState<FolderItem | null>(null);
+  const [propsFlash, setPropsFlash] = useState(0);
+  const [folderContents, setFolderContents] = useState<{ files: number; folders: number; totalSize: number } | null>(null);
   const iconUrls = useRef<string[]>([]);
 
   const [windowPos, setWindowPos] = useState({ x: 80 + Math.random() * 60, y: 40 + Math.random() * 40 });
@@ -100,7 +107,7 @@ export function FolderWindow({
         if (iconUrl) iconUrls.current.push(iconUrl);
         isExe = isExeFile(f.data, f.name).ok;
       }
-      return { name: f.name, displayName: displayName(f.name), isFolder: isFolderEntry, iconUrl, isExe };
+      return { name: f.name, displayName: displayName(f.name), isFolder: isFolderEntry, iconUrl, isExe, size: f.data.byteLength, addedAt: f.addedAt };
     });
     folderItems.sort((a, b) => {
       if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
@@ -110,6 +117,18 @@ export function FolderWindow({
   }, [prefix]);
 
   useEffect(() => { loadItems(); }, [loadItems]);
+  useEffect(() => {
+    if (!propertiesItem?.isFolder) { setFolderContents(null); return; }
+    const folderPrefix = propertiesItem.name.endsWith('/') ? propertiesItem.name : propertiesItem.name + '/';
+    getAllFiles().then(all => {
+      let files = 0, folders = 0, totalSize = 0;
+      for (const f of all) {
+        if (!f.name.startsWith(folderPrefix)) continue;
+        if (isFolder(f.name)) folders++; else { files++; totalSize += f.data.byteLength; }
+      }
+      setFolderContents({ files, folders, totalSize });
+    });
+  }, [propertiesItem]);
   useEffect(() => {
     const onRefresh = () => { loadItems(); };
     window.addEventListener('desktop-files-changed', onRefresh);
@@ -383,7 +402,7 @@ export function FolderWindow({
 
       {/* Item context menu */}
       {contextMenu && (() => {
-        const CMD_OPEN = 1, CMD_RENAME = 2, CMD_DELETE = 3, CMD_VIEW = 4;
+        const CMD_OPEN = 1, CMD_RENAME = 2, CMD_DELETE = 3, CMD_VIEW = 4, CMD_PROPS = 5;
         const { item } = contextMenu;
         const menuItems: MenuItem[] = [
           mi(CMD_OPEN, t().open, { isDefault: true }),
@@ -392,6 +411,8 @@ export function FolderWindow({
         menuItems.push(mi(CMD_RENAME, t().rename));
         menuItems.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
         menuItems.push(mi(CMD_DELETE, t().delete_));
+        menuItems.push({ id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null });
+        menuItems.push(mi(CMD_PROPS, t().properties));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
@@ -408,6 +429,7 @@ export function FolderWindow({
                   });
                 }
                 else if (id === CMD_DELETE) setConfirmDelete(item.name);
+                else if (id === CMD_PROPS) setPropertiesItem(item);
               }}
               onClose={() => setContextMenu(null)}
             />
@@ -442,6 +464,26 @@ export function FolderWindow({
               </div>
             </Window>
           </div>
+        </div>
+      )}
+
+      {/* Properties dialog */}
+      {propertiesItem && (
+        <div onPointerDown={() => setPropsFlash(c => c + 1)}>
+          <PropertiesDialog
+            info={{
+              displayName: propertiesItem.displayName,
+              isFolder: propertiesItem.isFolder,
+              isExe: propertiesItem.isExe,
+              iconUrl: propertiesItem.iconUrl,
+              size: propertiesItem.size,
+              addedAt: propertiesItem.addedAt,
+              location: folderPath,
+              folderContents,
+            }}
+            flashTrigger={propsFlash}
+            onClose={() => setPropertiesItem(null)}
+          />
         </div>
       )}
     </div>
