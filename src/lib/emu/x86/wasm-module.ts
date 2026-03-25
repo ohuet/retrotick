@@ -254,9 +254,9 @@ function emitBlockTerminator(
     const fallState = addrToState.get(block.fallthrough);
     const cc = block.conditionCode;
 
-    // Inline ZF-based conditions (JE=4, JNE=5) by reading lazyResult directly.
-    // Other conditions bail to interpreter.
-    // Jcc: bail to interpreter (inline ZF test has display corruption bug — needs investigation)
+    // Jcc: bail to interpreter. Inline Jcc crashes (blocks produce wrong
+    // results when chained via br_table — needs per-instruction validation).
+    // See plans/plan-wasm-jit-fixes.md for investigation notes.
   } else if (block.exitType === 'jmp') {
     const targetState = addrToState.get(block.branchTarget);
     if (targetState !== undefined) {
