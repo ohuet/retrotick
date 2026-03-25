@@ -8,7 +8,7 @@
 import type { WasmBuilder } from './wasm-builder';
 import type { Memory } from '../memory';
 import { OFF_FLAGS, OFF_SEGBASES } from './flat-memory';
-import { emitLoadU8, emitLoadU16, emitLoadI32, emitStoreU16Direct, emitStoreI32Direct, emitAddSegBase, setAddrSize16 } from './wasm-codegen-mem';
+import { emitLoadU8, emitLoadU16, emitLoadI32, emitStoreU8WithVGA, emitStoreU16Direct, emitStoreI32Direct, emitAddSegBase, setAddrSize16 } from './wasm-codegen-mem';
 import { emitMOV_rm, emitALU_rm, emitLEA, emitGroup83, emitTEST_rm } from './wasm-codegen-modrm';
 import { LOP_ADD8, LOP_SUB8, LOP_SUB16, LOP_SUB32, LOP_AND8, LOP_OR8, LOP_XOR8, LOP_INC16, LOP_INC32, LOP_DEC16, LOP_DEC32, emitSetLazyFlags, emitSetLazyFlagsImm } from './wasm-codegen-flags';
 import { emit8bitALU, emitALU_eax_imm, emitMOV8_rm, emitMOV_moffs_AL, emitMOV_rm8_imm8, emitMOV_rm_imm, emitShift_imm8, emitShift_by1, emitPUSH_imm8, emitPUSH_imm, emitIN_AL_imm8, emitIN_AL_DX, emitOUT_imm8_AL, emitOUT_DX_AL } from './wasm-codegen-ops';
@@ -347,6 +347,25 @@ export function emitInstruction(ctx: CodegenCtx, addr: number): number {
     }
 
     case 0xA1: { const n = emitMOV_moffs_AL(ctx, pos, true, is16); if (n < 0) return -1; pos += n; break; }
+
+    // MOV [moffs], AL (A2) / MOV [moffs], AX/EAX (A3)
+    case 0xA2: {
+      const addrLen = addrSize16 ? 2 : 4;
+      const moffs = addrSize16 ? mem.readU16(pos) : mem.readU32(pos) | 0;
+      b.constI32(moffs); emitAddSegBase(b, DS_BASE);
+      emitReg8Get(b, 0); // AL
+      emitStoreU8WithVGA(b, ctx.writeVGAIdx, tmp1, tmp2);
+      pos += addrLen; break;
+    }
+    case 0xA3: {
+      const addrLen = addrSize16 ? 2 : 4;
+      const moffs = addrSize16 ? mem.readU16(pos) : mem.readU32(pos) | 0;
+      b.constI32(moffs); emitAddSegBase(b, DS_BASE);
+      if (is16) { emitRegGet16(b, 0); emitStoreU16Direct(b); }
+      else { b.getLocal(0); emitStoreI32Direct(b); }
+      pos += addrLen; break;
+    }
+
     case 0xC6: { const n = emitMOV_rm8_imm8(ctx, pos); if (n < 0) return -1; pos += n; break; }
     case 0xC7: { const n = emitMOV_rm_imm(ctx, pos, is16); if (n < 0) return -1; pos += n; break; }
 

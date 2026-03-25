@@ -858,14 +858,9 @@ export function emuTick(emu: Emulator): void {
                 if (wasmInsns > 64) {
                   // WASM did real work — advance i and force time/PIT check
                   i = (i + wasmInsns) | 0xFFF;
-                } else if (exitReason === 2) {
-                  // Unsupported opcode on first instruction — blacklist this region
-                  region.failCount = (region.failCount || 0) + 1;
-                  if (region.failCount > 10) {
-                    emu.wasmRegions.delete(regionBase);
-                    emu._wasmBlacklist.add(regionBase);
-                  }
                 }
+                // exit_reason=2 (unsupported opcode) is normal — block bails to
+                // interpreter. No blacklisting needed.
               } catch {
                 // WASM OOB or other runtime error — discard this region and fall back to interpreter
                 flat.readRegs(emu.cpu);
