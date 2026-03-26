@@ -1,6 +1,6 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
-import { dosResolvePath } from './path';
+import { dosResolvePath, isDosValidDrive, DOS_LASTDRIVE } from './path';
 import { dumpInstrTrace } from '../x86/dispatch';
 import { teletypeOutput } from './video';
 import {
@@ -135,9 +135,12 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x0E: { // Select default drive (DL=drive number 0=A,1=B,2=C...)
       const dl = cpu.reg[EDX] & 0xFF;
-      const driveLetter = String.fromCharCode(0x41 + Math.min(dl, 25));
-      emu.currentDrive = driveLetter;
-      cpu.setReg8(EAX, 26); // AL = number of logical drives
+      // Only change drive if valid — programs detect invalid drives by reading
+      // back with AH=19h and seeing the drive didn't change
+      if (isDosValidDrive(dl)) {
+        emu.currentDrive = String.fromCharCode(0x41 + dl);
+      }
+      cpu.setReg8(EAX, DOS_LASTDRIVE); // AL = number of logical drives (LASTDRIVE=E → 5)
       break;
     }
 
@@ -152,6 +155,12 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x1C: { // Get drive info (DL=drive, 0=default)
+      const dl1c = cpu.reg[EDX] & 0xFF;
+      const driveIdx1c = dl1c === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (dl1c - 1);
+      if (!isDosValidDrive(driveIdx1c)) {
+        cpu.setReg8(EAX, 0xFF); // AL=0xFF → invalid drive
+        break;
+      }
       // Return: AL=sectors/cluster, CX=bytes/sector, DX=total clusters, DS:BX→media ID byte
       cpu.setReg8(EAX, 8);       // 8 sectors per cluster
       cpu.setReg16(ECX, 512);    // 512 bytes per sector
@@ -220,6 +229,12 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     }
 
     case 0x36: { // Get free disk space (DL=drive, 0=default)
+      const dl36 = cpu.reg[EDX] & 0xFF;
+      const driveIdx36 = dl36 === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (dl36 - 1);
+      if (!isDosValidDrive(driveIdx36)) {
+        cpu.setReg16(EAX, 0xFFFF); // AX=0xFFFF → invalid drive
+        break;
+      }
       // AX=sectors/cluster, BX=available clusters, CX=bytes/sector, DX=total clusters
       cpu.setReg16(EAX, 8);       // 8 sectors per cluster
       cpu.setReg16(EBX, 32768);   // ~128MB free
@@ -237,6 +252,13 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         const ch = cpu.mem.readU8(dsBase + dx + i);
         if (ch === 0) break;
         path += String.fromCharCode(ch);
+      }
+      // Real DOS rejects wildcards in CHDIR — return "path not found"
+      if (path.includes('*') || path.includes('?')) {
+        console.log(`[DOS] CHDIR "${path}" -> REJECTED (wildcards)`);
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 3); // path not found
+        break;
       }
       const resolved = dosResolvePath(emu, path);
       const drive = resolved[0];
@@ -279,6 +301,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       // DOS convention: return path without drive letter and without leading backslash
       // e.g. "C:\WINDOWS\SYSTEM32" → "WINDOWS\SYSTEM32", "C:\" → ""
       let dirStr = curDir.length > 3 ? curDir.substring(3) : '';
+      console.log(`[DOS] GetCurDir drive=${driveLetter} curDir="${curDir}" -> "${dirStr}"`);
       for (let i = 0; i < dirStr.length && i < 63; i++) {
         cpu.mem.writeU8(dsBase + si + i, dirStr.charCodeAt(i));
       }
