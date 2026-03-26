@@ -2,7 +2,7 @@ import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
-import { tryFastLoop } from './fast-loops';
+import { tryFastLoop, tryCachedLoop } from './fast-loops';
 import { AccessViolationError } from './memory';
 
 // A special "return from WndProc" thunk address
