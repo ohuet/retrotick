@@ -562,6 +562,16 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     console.log(`[DLL] DllMain returned EAX=0x${result.toString(16)}`);
   }
 
+  // Mark executable code sections as read-only (prevents code corruption from wild writes).
+  // On real Windows, .text is PAGE_EXECUTE_READ — writes trigger access violations.
+  const IMAGE_SCN_MEM_EXECUTE = 0x20000000;
+  const IMAGE_SCN_MEM_WRITE = 0x80000000;
+  for (const sec of emu.pe.sections) {
+    if (sec.virtualSize > 0 && (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) && !(sec.characteristics & IMAGE_SCN_MEM_WRITE)) {
+      emu.memory.markReadOnly(emu.pe.imageBase + sec.virtualAddress, sec.virtualSize);
+    }
+  }
+
   // CPL applet support: if this is a .cpl file (DLL), call DllMain then bootstrap CPlApplet
   if (emu.exeName.toLowerCase().endsWith('.cpl') && (peInfo.coffHeader.characteristics & 0x2000)) {
     const cplAppletAddr = findCPlAppletExport(emu, arrayBuffer);
