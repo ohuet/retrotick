@@ -166,6 +166,11 @@ export function decodeMBCS(bytes: Uint8Array): string {
   }
 }
 
+/** Thrown when a write targets a read-only page (like .text section). */
+export class AccessViolationError extends Error {
+  constructor(public addr: number) { super(`Access violation writing 0x${addr.toString(16)}`); }
+}
+
 // Sparse 32-bit memory using 64KB segments, lazily allocated
 const SEG_BITS = 16;
 const SEG_SIZE = 1 << SEG_BITS; // 65536
@@ -218,6 +223,19 @@ export class Memory {
   setVgaPlanar(v: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null): void {
     this.vgaPlanar = v;
     this._hasVga = v !== null;
+  }
+
+  // Read-only page ranges (4KB granularity, matching Windows page size): writes throw AccessViolationError
+  private _readOnlyPages = new Set<number>();
+
+  markReadOnly(startAddr: number, size: number): void {
+    const startPage = startAddr >>> 12;
+    const endPage = (startAddr + size - 1) >>> 12;
+    for (let p = startPage; p <= endPage; p++) this._readOnlyPages.add(p);
+  }
+
+  private _isReadOnly(addr: number): boolean {
+    return this._readOnlyPages.has(addr >>> 12);
   }
 
   private seg(addr: number): Uint8Array {
@@ -312,6 +330,7 @@ export class Memory {
       console.trace();
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
+    if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flat && addr < this._flatMax) { this._flat[addr] = val & 0xFF; return; }
     this.seg(addr)[addr & SEG_MASK] = val & 0xFF;
   }
@@ -323,6 +342,7 @@ export class Memory {
       this.writeU8(addr + 1, (val >> 8) & 0xFF);
       return;
     }
+    if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 1 < this._flatMax) { this._flatDV.setUint16(addr, val, true); return; }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 1) {
@@ -342,6 +362,7 @@ export class Memory {
       this.writeU8(addr + 3, (val >> 24) & 0xFF);
       return;
     }
+    if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 3 < this._flatMax) { this._flatDV.setUint32(addr, val, true); return; }
     const off = addr & SEG_MASK;
     if (off < SEG_SIZE - 3) {
