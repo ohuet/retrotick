@@ -814,7 +814,7 @@ export function emuTick(emu: Emulator): void {
           const returnSeg = (pmEIP >>> 4) & 0xFFFF;
           const returnOff = pmEIP & 0xF;
           emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
-          emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
+          emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
           emu.cpu.push16(returnSeg);
           emu.cpu.push16(returnOff);
           emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
@@ -823,7 +823,7 @@ export function emuTick(emu: Emulator): void {
         } else {
           const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
           emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
-          emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
+          emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
           emu.cpu.push16(emu.cpu.cs);
           emu.cpu.push16(returnIP);
           emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
