@@ -188,17 +188,17 @@ export class Memory {
   // VGA planar memory hook: when set, intercepts reads/writes to A0000-AFFFF
   vgaPlanar: { planarWrite(offset: number, val: number): void; planarRead(offset: number): number } | null = null;
 
-  // Read-only page ranges (64KB granularity): writes throw AccessViolationError
+  // Read-only page ranges (4KB granularity, matching Windows page size): writes throw AccessViolationError
   private _readOnlyPages = new Set<number>();
 
   markReadOnly(startAddr: number, size: number): void {
-    const startPage = startAddr >>> SEG_BITS;
-    const endPage = (startAddr + size - 1) >>> SEG_BITS;
+    const startPage = startAddr >>> 12;
+    const endPage = (startAddr + size - 1) >>> 12;
     for (let p = startPage; p <= endPage; p++) this._readOnlyPages.add(p);
   }
 
   private _isReadOnly(addr: number): boolean {
-    return this._readOnlyPages.has(addr >>> SEG_BITS);
+    return this._readOnlyPages.has(addr >>> 12);
   }
 
   private seg(addr: number): Uint8Array {
