@@ -36,6 +36,7 @@ import { registerVdmdbg } from './win32/vdmdbg';
 import { registerNetapi32 } from './win32/netapi32';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
+import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
 import { Thread } from './thread';
 import { parsePE, extractExports, extractMenus } from '../pe';
@@ -142,7 +143,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     }
   }
 
-  // Set current directory for the exe's drive to its parent folder
+  // Set current drive and directory from the exe's path (mirrors real DOS loader behavior)
   const lastBackslash = emu.exePath.lastIndexOf('\\');
   if (lastBackslash >= 2 && emu.exePath[1] === ':') {
     const drive = emu.exePath[0].toUpperCase();
@@ -150,6 +151,8 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     // Preserve trailing backslash for root directory (e.g. D:\CMD.EXE → D:\, not D:)
     if (dir.length === 2 && dir[1] === ':') dir += '\\';
     emu.currentDirs.set(drive, dir);
+    // DOS sets the current drive to the drive the program was launched from
+    emu.currentDrive = drive;
   }
 
   // Detect ANSI code page from resources.
@@ -210,6 +213,7 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.isDOS = true;
     emu.isConsole = true;
     emu.initConsoleBuffer();
+    emu.memory.a20Mask = 0xFFFFF; // A20 off for DOS programs
 
     const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath);
     setupDosEnvironment(emu, mz);
@@ -222,6 +226,16 @@ export function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: PEInfo,
     emu.isDOS = true;
     emu.isConsole = true;
     emu.initConsoleBuffer();
+    // A20 gate off by default: addresses wrap at 1MB (8086 compatibility).
+    // EXEPACK and other packers rely on this wrap behavior.
+    emu.memory.a20Mask = 0xFFFFF;
+
+    // Make the executable itself available for self-reading (overlay data access)
+    // Extract just the filename from exePath for DOS file lookup
+    const exeName = emu.exePath.replace(/^.*[\\\/]/, '');
+    if (exeName && !emu.additionalFiles.has(exeName)) {
+      emu.additionalFiles.set(exeName, arrayBuffer);
+    }
 
     const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath);
     setupDosEnvironment(emu, mz);
@@ -976,6 +990,9 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     emu.memory.writeU8(0xB8000 + i * 2 + 1, 0x07);
   }
 
+  // Enable Mode X (unchained VGA) detection
+  emu.initVgaModeXHook();
+
   // Set up per-interrupt BIOS stubs at F000:i*5, each containing: INT i; RETF 2
   const IRET_SEG = 0xF000;
   const BIOS_BASE = IRET_SEG * 16;
@@ -1054,6 +1071,25 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
 
   setupXmsStub(emu.memory);
 
+  // Write VGA 8x8 ROM font to F000:1000 (2048 bytes, 256 chars × 8 bytes)
+  for (let i = 0; i < VGA_FONT_8X8_ROM.length; i++) {
+    emu.memory.writeU8(ROM_FONT_8X8_ADDR + i, VGA_FONT_8X8_ROM[i]);
+  }
+  // Also write chars 0-127 at F000:FA6E (standard IBM CGA font address)
+  // Many DOS programs hardcode this address to read font data directly
+  for (let i = 0; i < 128 * 8; i++) {
+    emu.memory.writeU8(ROM_FONT_CGA_ADDR + i, VGA_FONT_8X8_ROM[i]);
+  }
+  // INT 43h → points to current font (full 256-char 8x8 font at F000:1000)
+  emu.memory.writeU16(0x43 * 4, ROM_FONT_8X8_OFF);
+  emu.memory.writeU16(0x43 * 4 + 2, ROM_FONT_8X8_SEG);
+  emu._dosIntVectors.set(0x43, (ROM_FONT_8X8_SEG << 16) | ROM_FONT_8X8_OFF);
+  // INT 1Fh → points to chars 128-255 of the 8x8 font (F000:1400)
+  const FONT_HI_OFF = ROM_FONT_8X8_OFF + 128 * 8; // 0x1400
+  emu.memory.writeU16(0x1F * 4, FONT_HI_OFF);
+  emu.memory.writeU16(0x1F * 4 + 2, ROM_FONT_8X8_SEG);
+  emu._dosIntVectors.set(0x1F, (ROM_FONT_8X8_SEG << 16) | FONT_HI_OFF);
+
   // UCDOS stub — fake TSR for UCDOS-dependent programs.
   // Programs do INT 21h AH=35h AL=79h to get INT 79h handler → ES:BX,
   // then check ES:[0104h] == "TP" (absolute offset 0x0104 within the segment).
@@ -1098,6 +1134,11 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.dosAudio.onSBIRQ = () => {
     if (!emu._pendingHwInts.includes(0x0F)) emu._pendingHwInts.push(0x0F);
   };
+  // Wire GUS IRQ (IRQ 5 = INT 0x0D)
+  emu.dosAudio.onGUSIRQ = () => {
+    if (!emu._pendingHwInts.includes(0x0D)) emu._pendingHwInts.push(0x0D);
+  };
+  emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readU8(addr);
 }
 
 /** Rebuild the thunk page set from current thunkToApi entries. */

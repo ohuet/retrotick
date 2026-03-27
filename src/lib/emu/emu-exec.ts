@@ -55,6 +55,16 @@ function raiseAccessViolation(emu: Emulator, faultAddr: number): void {
   emu.dispatchToSehHandler(firstReg);
 }
 
+// Fast zero-delay scheduler using MessageChannel (avoids setTimeout's 4ms clamping
+// after 5 nested calls). Used for DOS fast-path tick scheduling.
+let _immedCb: (() => void) | null = null;
+const _immedChan = typeof MessageChannel !== 'undefined' ? new MessageChannel() : null;
+if (_immedChan) { _immedChan.port1.onmessage = () => { if (_immedCb) { const cb = _immedCb; _immedCb = null; cb(); } }; }
+function scheduleImmediate(fn: () => void): void {
+  if (_immedChan) { _immedCb = fn; _immedChan.port2.postMessage(null); }
+  else setTimeout(fn, 0);
+}
+
 export function emuCompleteThunk(emu: Emulator, retVal: number, stackBytes: number): void {
   emu.cpu.reg[0] = retVal | 0; // EAX
   const retAddr = emu.memory.readU32(emu.cpu.reg[4] >>> 0);
@@ -81,8 +91,30 @@ export function emuCompleteThunk16(emu: Emulator, retVal: number, stackBytes: nu
 export function emuResume(emu: Emulator): void {
   // Legacy: only used for DOS keyboard resume (INT 16h)
   if (!emu.waitingForMessage) return;
-  if (emu._dosWaitingForKey && emu.dosKeyBuffer.length > 0) {
-    emu.deliverDosKey();
+  if (emu._dosWaitingForKey) {
+    // If dosKeyBuffer has keys, deliver directly
+    if (emu.dosKeyBuffer.length > 0) {
+      emu.deliverDosKey();
+      return;
+    }
+    // Also check BDA keyboard buffer — keys injected via INT 09h go there
+    const BDA = 0x400;
+    const head = emu.memory.readU16(BDA + 0x1A);
+    const tail = emu.memory.readU16(BDA + 0x1C);
+    if (head !== tail) {
+      // Copy key from BDA to dosKeyBuffer so deliverDosKey can process it
+      const keyWord = emu.memory.readU16(BDA + head);
+      const ascii = keyWord & 0xFF;
+      const scan = (keyWord >> 8) & 0xFF;
+      emu.dosKeyBuffer.push({ ascii, scan });
+      // Advance BDA head
+      const bufStart = emu.memory.readU16(BDA + 0x80);
+      const bufEnd = emu.memory.readU16(BDA + 0x82);
+      let newHead = head + 2;
+      if (newHead >= bufEnd) newHead = bufStart;
+      emu.memory.writeU16(BDA + 0x1A, newHead);
+      emu.deliverDosKey();
+    }
   }
 }
 
@@ -131,12 +163,13 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
 
   const targetDepth = emu.wndProcDepth - 1;
   let steps = 0;
-  // Tight loop detection: two consecutive-match samplers at different periods.
+  // Tight loop detection: three consecutive-match samplers at different periods.
   // P=256 catches loops of length 1,2,4,8,16... (powers of 2).
   // P=252 catches loops of length 1,2,3,4,6,7,9,12,14... (highly composite).
-  // Together they cover all common loop lengths 1-12.
+  // P=64 catches short-lived loops (100-300 iterations) before the larger periods trigger.
   let csEipA = 0, csHitA = 0;  // period 256
   let csEipB = 0, csHitB = 0, csNextB = 252;  // period 252
+  let csEipC = 0, csHitC = 0;  // period 64
   while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted) {
     const eip = emu.cpu.eip >>> 0;
 
@@ -162,15 +195,18 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
           csEipB = eip; csHitB = 0;
       }
     }
+    if ((steps & 0x3F) === 0 && steps > 0) {
+      if (eip === csEipC) { if (++csHitC >= 2) csTry = true; } else { csEipC = eip; csHitC = 0; }
+    }
     if (csTry) {
       try {
         const iters = tryFastLoop(emu.cpu, emu.memory);
-        if (iters > 0) { steps += iters; csHitA = csHitB = 0; csNextB = steps + 252; continue; }
+        if (iters > 0) { steps += iters; emu._pitInsnCount += iters; csHitA = csHitB = csHitC = 0; csNextB = steps + 252; continue; }
       } catch (e) {
         if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
         throw e;
       }
-      csHitA = csHitB = 0;
+      csHitA = csHitB = csHitC = 0;
     }
 
     const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
@@ -524,9 +560,35 @@ export function emuTick(emu: Emulator): void {
   emu._tickRunning = true;
 
   try {
+  // If waiting for DOS key (INT 21h AH=01/07/08) and key available, deliver it
+  if (emu._dosWaitingForKey && (emu.dosKeyBuffer.length > 0 || emu._dosExtKeyPending !== undefined)) {
+    emu.deliverDosKey();
+    emu._tickRunning = false;
+    return;
+  }
+  if (emu._dosWaitingForKey && emu.dosKeyBuffer.length === 0) {
+    const BDA = 0x400;
+    const head = emu.memory.readU16(BDA + 0x1A);
+    const tail = emu.memory.readU16(BDA + 0x1C);
+    if (head !== tail) {
+      const keyWord = emu.memory.readU16(BDA + head);
+      const ascii = keyWord & 0xFF;
+      const scan = (keyWord >> 8) & 0xFF;
+      emu.dosKeyBuffer.push({ ascii, scan });
+      const bufStart = emu.memory.readU16(BDA + 0x80);
+      const bufEnd = emu.memory.readU16(BDA + 0x82);
+      let newHead = head + 2;
+      if (newHead >= bufEnd) newHead = bufStart;
+      emu.memory.writeU16(BDA + 0x1A, newHead);
+      emu.deliverDosKey();
+      emu._tickRunning = false;
+      return;
+    }
+  }
+
   const tickStart = performance.now();
   let stepCount = 0;
-  const DOS_TICK_MS = 14; // run close to one frame (~16ms) for throughput
+  const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
   const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
   let dosYieldAfterKeyAt = -1;
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
@@ -583,6 +645,8 @@ export function emuTick(emu: Emulator): void {
   }
 
   let tkEipA = 0, tkHitA = 0, tkEipB = 0, tkHitB = 0, tkNextB = 252;
+  let tkEipC = 0, tkHitC = 0; // period 64
+  const hasThunks = emu.thunkPages.size > 0; // DOS programs have no thunks
 
   for (let i = 0; i < BATCH_SIZE; i++) {
     if (emu._int09ReturnCS >= 0) {
@@ -594,10 +658,23 @@ export function emuTick(emu: Emulator): void {
         emu._int09ReturnCS = -1;
       }
     }
-    // Detect IRET from hardware interrupt handler by monitoring SP.
-    // IRET pops IP+CS+FLAGS (6 bytes), restoring SP to the pre-dispatch level.
+    // Detect IRET from hardware interrupt handler by monitoring SP (RM dispatch)
+    // or IF flag restoration (PM IDT dispatch).
     if (emu._hwIntSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP) {
       emu._hwIntSavedSP = -1;
+      // Restore PM state if we switched to RM for the interrupt handler
+      if (emu._hwIntPMState) {
+        emu._cr0 = emu._hwIntPMState.cr0;
+        emu.cpu.realMode = false;
+        emu.cpu.use32 = emu._hwIntPMState.use32;
+        emu.cpu._addrSize16 = !emu._hwIntPMState.use32;
+        emu.cpu.cs = emu._hwIntPMState.cs;
+        emu.cpu.ss = emu._hwIntPMState.ss;
+        emu.cpu.ds = emu._hwIntPMState.ds;
+        emu.cpu.es = emu._hwIntPMState.es;
+        emu.cpu.segBases = emu._hwIntPMState.segBases;
+        emu._hwIntPMState = undefined;
+      }
     }
     if (emu.halted || emu.waitingForMessage || emu._dosHalted) break;
     if (emu.isDOS && dosYieldAfterKeyAt < 0 && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
@@ -608,29 +685,31 @@ export function emuTick(emu: Emulator): void {
     }
     if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
     if ((i & 0xFFF) === 0 && i > 0) {
+      // Periodic time check — amortize performance.now() cost across 4096 instructions
+      const now = performance.now();
       const waitingForPostKeyWindow = dosYieldAfterKeyAt >= 0 && i < dosYieldAfterKeyAt;
-      if (!waitingForPostKeyWindow && performance.now() - tickStart > tickMs) break;
+      if (!waitingForPostKeyWindow && now - tickStart > tickMs) break;
       // Yield after screen draws so browser can render intermediate frames (Win32 only —
       // DOS games do rapid VGA writes and yielding on each one kills throughput)
       if (!emu.isDOS && emu.screenDirty) { emu.screenDirty = false; break; }
-    }
 
-    // DOS timer interrupt (INT 08h) — frequency derived from PIT channel 0
-    if (emu.isDOS) {
-      const now = performance.now();
-      const pitReload = emu._pitCounters[0] || 0x10000;
-      const timerIntervalMs = (pitReload / 1193182) * 1000; // PIT frequency → ms
-      if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-        if (!emu._pendingHwInts.includes(0x08)) {
-          emu._dosLastTimerTick += timerIntervalMs;
-          // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
-          if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-          emu._pendingHwInts.push(0x08);
+      // DOS timer interrupt (INT 08h) — frequency derived from PIT channel 0
+      if (emu.isDOS) {
+        const pitReload = emu._pitCounters[0] || 0x10000;
+        const timerIntervalMs = (pitReload / 1193182) * 1000;
+        if (now - emu._dosLastTimerTick >= timerIntervalMs) {
+          if (!emu._pendingHwInts.includes(0x08)) {
+            emu._dosLastTimerTick += timerIntervalMs;
+            if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
+            emu._pendingHwInts.push(0x08);
+          }
+          emu._dosHalted = false;
         }
-        emu._dosHalted = false; // wake from HLT
       }
+    }
+    if (emu.isDOS) {
       // Advance Sound Blaster DMA transfer (may queue IRQ 7)
-      if ((i & 0xFF) === 0) emu.dosAudio.tickDMA();
+      if ((i & 0x1FF) === 0) emu.dosAudio.tickDMA();
     }
 
     // Deliver queued scancodes one at a time, throttled to ~30 Hz to match
@@ -678,8 +757,18 @@ export function emuTick(emu: Emulator): void {
     } else if (emu._pendingHwInts.length === 0) {
       emu._hwKeyDelay = 0;
     }
-    if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0) {
+    if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
+      // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
+      // Note: IF flag (CLI/STI) is NOT checked. Many DOS demos run rendering
+      // loops with CLI and rely on timer interrupts firing regardless. This is
+      // technically incorrect but matches the practical behavior needed.
       const intNum = emu._pendingHwInts.shift()!;
+      // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
+      if (intNum >= 0x08 && intNum <= 0x0F) {
+        emu._picMasterISR |= (1 << (intNum - 0x08));
+      } else if (intNum >= 0x70 && intNum <= 0x77) {
+        emu._picSlaveISR |= (1 << (intNum - 0x70));
+      }
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
       // Always read IVT memory first — programs chain multiple handlers
       // by writing directly to IVT (e.g. PoP chains timer→animation→sound)
@@ -697,24 +786,54 @@ export function emuTick(emu: Emulator): void {
         const seg = (vec >>> 16) & 0xFFFF;
         const off = vec & 0xFFFF;
         emu._ioPorts.set(0x64, (emu._ioPorts.get(0x64) ?? 0) | 0x01);
-        const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
-        // Save SP BEFORE pushes — IRET is the only thing that restores SP to
-        // this level (handler's internal push/pop stays below it).
-        emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
-        // On real hardware, interrupts only fire when IF=1, so pushed FLAGS
-        // always have IF=1. We deliver regardless of IF, so force IF=1 in
-        // the saved FLAGS so IRET restores an interrupt-enabled context.
-        emu.cpu.push16((emu.cpu.getFlags() | 0x0200) & 0xFFFF);
-        emu.cpu.push16(emu.cpu.cs);
-        emu.cpu.push16(returnIP);
-        // Hardware interrupt entry clears IF+TF until IRET restores FLAGS.
-        emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
-        if (intNum === 0x09) {
-          emu._int09ReturnCS = emu.cpu.cs;
-          emu._int09ReturnIP = returnIP;
+
+        // In protected mode (PMODEW), IVT handlers are real-mode code.
+        // Temporarily switch to real mode so segment arithmetic is correct
+        // and the handler can use DS/ES as real-mode segments.
+        if (!emu.cpu.realMode) {
+          const pmSSBase = emu.cpu.segBase(emu.cpu.ss);
+          emu._hwIntPMState = {
+            cr0: emu._cr0,
+            cs: emu.cpu.cs,
+            ss: emu.cpu.ss,
+            ds: emu.cpu.ds,
+            es: emu.cpu.es,
+            use32: emu.cpu.use32,
+            segBases: new Map(emu.cpu.segBases),
+          };
+          emu._cr0 = 0;
+          emu.cpu.realMode = true;
+          emu.cpu.use32 = false;       // RM handlers are 16-bit code
+          emu.cpu._addrSize16 = true;
+          emu.cpu.segBases.clear();
+          // Convert SS to real-mode paragraph (linear address stays the same)
+          const rmSS = (pmSSBase >>> 4) & 0xFFFF;
+          emu.cpu.ss = rmSS;
+          // Encode PM return address as real-mode seg:off
+          const pmEIP = emu.cpu.eip;
+          const returnSeg = (pmEIP >>> 4) & 0xFFFF;
+          const returnOff = pmEIP & 0xF;
+          emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+          emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
+          emu.cpu.push16(returnSeg);
+          emu.cpu.push16(returnOff);
+          emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
+          emu.cpu.cs = seg;
+          emu.cpu.eip = (seg * 16 + off) >>> 0;
+        } else {
+          const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
+          emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+          emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
+          emu.cpu.push16(emu.cpu.cs);
+          emu.cpu.push16(returnIP);
+          emu.cpu.setFlags(emu.cpu.getFlags() & ~0x0300);
+          if (intNum === 0x09) {
+            emu._int09ReturnCS = emu.cpu.cs;
+            emu._int09ReturnIP = returnIP;
+          }
+          emu.cpu.cs = seg;
+          emu.cpu.eip = emu.cpu.segBase(seg) + off;
         }
-        emu.cpu.cs = seg;
-        emu.cpu.eip = emu.cpu.segBase(seg) + off;
       } else {
         // No custom handler — call built-in BIOS handler directly
         emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
@@ -730,7 +849,7 @@ export function emuTick(emu: Emulator): void {
 
     const eip = emu.cpu.eip >>> 0;
 
-    const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
+    const thunk = hasThunks ? (emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined) : undefined;
     if (thunk) {
       stepCount += 999; // thunks represent significant work (~1000 real instructions)
       emu._lastThunkTick = emu._tickCount;
@@ -799,7 +918,7 @@ export function emuTick(emu: Emulator): void {
       continue;
     }
 
-    // Tight loop fast-forward (dual-period consecutive match, same as callStdcall)
+    // Tight loop fast-forward (triple-period consecutive match, same as callStdcall)
     {
       // Fast path: check loop cache every 64 steps
       if ((stepCount & 0x3F) === 0 && stepCount > 0) {
@@ -819,19 +938,26 @@ export function emuTick(emu: Emulator): void {
         tkNextB = stepCount + 252;
         if (eip === tkEipB) { if (++tkHitB >= 2) tkTry = true; } else { tkEipB = eip; tkHitB = 0; }
       }
+      if ((stepCount & 0x3F) === 0 && stepCount > 0) {
+        if (eip === tkEipC) { if (++tkHitC >= 2) tkTry = true; } else { tkEipC = eip; tkHitC = 0; }
+      }
       if (tkTry) {
         try {
           const it = tryFastLoop(emu.cpu, emu.memory);
-          if (it > 0) { stepCount += it; tkHitA = tkHitB = 0; tkNextB = stepCount + 252; continue; }
+          if (it > 0) { stepCount += it; emu._pitInsnCount += it; tkHitA = tkHitB = tkHitC = 0; tkNextB = stepCount + 252; continue; }
         } catch (e) {
           if (e instanceof AccessViolationError) { raiseAccessViolation(emu, e.addr); continue; }
           throw e;
         }
-        tkHitA = tkHitB = 0;
+        tkHitA = tkHitB = tkHitC = 0;
       }
     }
 
     const prevEip = eip;
+    // EIP history for crash diagnostics (ring buffer)
+    if (!emu._eipHistory) { emu._eipHistory = new Uint32Array(64); emu._eipHistIdx = 0; }
+    emu._eipHistory[emu._eipHistIdx & 63] = eip;
+    emu._eipHistIdx++;
     try {
       emu.cpu.step();
     } catch (e) {
@@ -917,15 +1043,28 @@ export function emuTick(emu: Emulator): void {
             bp16 = prevBP16;
           }
         }
+        // EIP history (last 64 instructions before crash)
+        const hist: string[] = [];
+        if (emu._eipHistory) {
+          const idx = emu._eipHistIdx || 0;
+          const arr = emu._eipHistory;
+          for (let h = Math.max(0, idx - 32); h < idx; h++) {
+            const addr = arr[h & 63];
+            const bytes: string[] = [];
+            for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8((addr + b) >>> 0).toString(16).padStart(2, '0'));
+            hist.push(`    0x${addr.toString(16).padStart(5,'0')}: ${bytes.join(' ')}`);
+          }
+        }
         console.error(
           `[WILD EIP] jumped to 0x${newEip.toString(16)} from 0x${prevEip.toString(16)}\n` +
-          `  CS=0x${emu.cpu.cs.toString(16)} SS=0x${emu.cpu.ss.toString(16)}\n` +
+          `  CS=0x${emu.cpu.cs.toString(16)} SS=0x${emu.cpu.ss.toString(16)} DS=0x${emu.cpu.ds.toString(16)} ES=0x${emu.cpu.es.toString(16)}\n` +
           `  bytes before (at prev EIP): [${before.join(' ')}]\n` +
           `  bytes at (at new EIP):      [${at.join(' ')}]\n` +
           `  EAX=0x${(emu.cpu.reg[0] >>> 0).toString(16)} ECX=0x${(emu.cpu.reg[1] >>> 0).toString(16)} EDX=0x${(emu.cpu.reg[2] >>> 0).toString(16)} EBX=0x${(emu.cpu.reg[3] >>> 0).toString(16)}\n` +
           `  ESP=0x${(emu.cpu.reg[4] >>> 0).toString(16)} EBP=0x${(emu.cpu.reg[5] >>> 0).toString(16)} ESI=0x${(emu.cpu.reg[6] >>> 0).toString(16)} EDI=0x${(emu.cpu.reg[7] >>> 0).toString(16)}\n` +
           `  stack top 16 words:\n` +
           `    ${Array.from({length: 16}, (_, i) => '0x' + emu.memory.readU16(((emu.cpu.reg[4] >>> 0) + i * 2) >>> 0).toString(16).padStart(4, '0')).join(' ')}\n` +
+          `  EIP history (last 32):\n${hist.join('\n')}\n` +
           `  EBP backtrace (32-bit):\n${bt.join('\n')}\n` +
           `  BP backtrace (16-bit):\n${bt16.join('\n')}\n` +
           `  THUNK TRACE (last ${emu._diagThunkSize}):\n${emu.diagThunkDump()}`
@@ -938,6 +1077,7 @@ export function emuTick(emu: Emulator): void {
     }
   }
   emu.cpuSteps += stepCount;
+  emu._pitInsnCount += stepCount;
   } catch (err) {
     console.error(`[EMU] tick() error at EIP=0x${(emu.cpu.eip >>> 0).toString(16)}:`, err);
     emu.haltReason = 'internal emulator error';
@@ -953,9 +1093,9 @@ export function emuTick(emu: Emulator): void {
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
       const now = performance.now();
-      // Sync on VBlank (normal path), or every ~33ms as fallback for games
-      // that don't poll 0x3DA (ensures display still updates).
-      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 33) {
+      // Sync on VBlank (normal path), or every ~15ms as fallback for games
+      // that don't poll 0x3DA (ensures display still updates at ~60Hz).
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 15) {
         emu.vga.pendingSync = false;
         emu.vga.lastSyncTime = now;
         syncGraphics(emu);
@@ -968,16 +1108,21 @@ export function emuTick(emu: Emulator): void {
   if (emu.running && !emu.halted && !emu.waitingForMessage) {
     emu._tickCount++;
     if (emu._dosHalted) {
-      // HLT: sleep until next timer tick instead of busy-spinning
+      // HLT: sleep until next timer tick. Use scheduleImmediate for short
+      // delays (≤4ms) to avoid setTimeout's 4ms clamping after nested calls.
       const pitReload = emu._pitCounters[0] || 0x10000;
       const timerIntervalMs = (pitReload / 1193182) * 1000;
       const elapsed = performance.now() - emu._dosLastTimerTick;
-      const delay = Math.max(1, timerIntervalMs - elapsed);
-      setTimeout(emu.tick, delay);
+      const delay = timerIntervalMs - elapsed;
+      if (delay <= 4) {
+        scheduleImmediate(emu.tick);
+      } else {
+        setTimeout(emu.tick, delay);
+      }
     } else if (emu.isDOS) {
-      // DOS games need maximum throughput — setTimeout(0) yields to browser
-      // for rendering/input but resumes much faster than requestAnimationFrame (~16ms)
-      setTimeout(emu.tick, 0);
+      // DOS games need maximum throughput — MessageChannel avoids setTimeout's
+      // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
+      scheduleImmediate(emu.tick);
     } else {
       requestAnimationFrame(emu.tick);
     }

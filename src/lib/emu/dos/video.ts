@@ -1,8 +1,9 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 import { VGA_MODES } from './vga';
+import { ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_OFF } from './vga-font-data';
 
-const EAX = 0, ECX = 1, EDX = 2, EBX = 3, EDI = 7;
+const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
 
 // Video memory base (B800:0000 in real mode)
 const VIDEO_MEM_BASE = 0xB8000;
@@ -17,6 +18,11 @@ export function syncVideoMemory(emu: Emulator): void {
     const attr = mem.readU8(VIDEO_MEM_BASE + i * 2 + 1);
     emu.consoleBuffer[i] = { char: ch, attr };
   }
+  // Sync cursor position from CRTC registers (programs like QBasic write
+  // directly to CRTC 0x0E/0x0F via ports 0x3D4/0x3D5 instead of INT 10h)
+  const cursorPos = (emu.vga.crtcRegs[0x0E] << 8) | emu.vga.crtcRegs[0x0F];
+  emu.consoleCursorX = cursorPos % cols;
+  emu.consoleCursorY = Math.min(Math.floor(cursorPos / cols), rows - 1);
   emu.onConsoleOutput?.();
 }
 
@@ -214,7 +220,7 @@ function setVideoMode(cpu: CPU, emu: Emulator, modeNum: number): void {
   emu.vga.resetPalette();
 
   // Enable/disable planar memory hook for A0000-AFFFF
-  cpu.mem.vgaPlanar = vgaMode.planar ? emu.vga : null;
+  cpu.mem.setVgaPlanar(vgaMode.planar ? emu.vga : null);
 
   if (vgaMode.isText) {
     if (!noClear) {
@@ -529,6 +535,10 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
       if (page === activePage) {
         emu.consoleCursorY = Math.min(row, rows - 1);
         emu.consoleCursorX = Math.min(col, cols - 1);
+        // Keep CRTC cursor registers in sync (programs may read them back)
+        const cursorPos = emu.consoleCursorY * cols + emu.consoleCursorX;
+        emu.vga.crtcRegs[0x0E] = (cursorPos >> 8) & 0xFF;
+        emu.vga.crtcRegs[0x0F] = cursorPos & 0xFF;
       }
       break;
     }
@@ -813,7 +823,28 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
         syncVideoMemory(emu);
         emu.vga.resetPalette();
       } else if (al === 0x30) {
-        // Get font info: CX=bytes per char, DL=rows-1
+        // Get font info: ES:BP=font pointer, CX=bytes per char, DL=rows-1
+        const bh = (cpu.reg[EBX] >> 8) & 0xFF;
+        let fontSeg = ROM_FONT_8X8_SEG;
+        let fontOff = ROM_FONT_8X8_OFF;
+        if (bh === 0) {
+          // INT 1Fh vector contents (user font, chars 128-255)
+          fontOff = cpu.mem.readU16(0x1F * 4);
+          fontSeg = cpu.mem.readU16(0x1F * 4 + 2);
+        } else if (bh === 1) {
+          // INT 43h vector contents (current font)
+          fontOff = cpu.mem.readU16(0x43 * 4);
+          fontSeg = cpu.mem.readU16(0x43 * 4 + 2);
+        } else if (bh === 3) {
+          // ROM 8x8 font, chars 0-127 — standard IBM address F000:FA6E
+          fontOff = ROM_FONT_CGA_OFF;
+        } else if (bh === 4) {
+          // ROM 8x8 font, chars 128-255
+          fontOff = ROM_FONT_8X8_OFF + 128 * 8;
+        }
+        // BH=2,5 (8x14) and BH=6,7 (8x16): return 8x8 as fallback
+        cpu.es = fontSeg;
+        cpu.setReg16(EBP, fontOff);
         cpu.setReg16(ECX, emu.charHeight);
         const dl = emu.screenRows - 1;
         cpu.setReg16(EDX, (cpu.getReg16(EDX) & 0xFF00) | dl);

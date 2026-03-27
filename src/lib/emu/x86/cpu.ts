@@ -13,6 +13,7 @@ const CF = 0x001;
 const PF = 0x004;
 const ZF = 0x040;
 const SF = 0x080;
+const TF = 0x100;
 const DF = 0x400;
 const OF = 0x800;
 
@@ -57,6 +58,7 @@ export class CPU {
   halted = false;
   haltReason = '';
   thunkHit = false; // set when EIP is in thunk range
+  _tfActive = false; // true only when TF (trap flag) is set in flagsCache
 
   // Segment base for FS register (points to TEB)
   fsBase = 0;
@@ -77,16 +79,42 @@ export class CPU {
   ss = 0; // stack segment selector
   segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
+  _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
+  _inhibitIRQ = false; // true after MOV SS/POP SS (suppresses HW IRQ for 1 instruction)
 
   constructor(mem: Memory) {
     this.mem = mem;
   }
 
+  fs = 0; // FS segment selector
+  gs = 0; // GS segment selector
+
+  /** Load CS and update use32/_addrSize16 from GDT descriptor in protected mode,
+   *  or force 16-bit mode in real mode */
+  loadCS(selector: number): void {
+    this.cs = selector;
+    if (!this.realMode) {
+      const is32 = this.loadGdtDescriptorIs32(selector);
+      this.use32 = is32;
+      this._addrSize16 = !is32;
+    } else {
+      // Real mode is always 16-bit
+      this.use32 = false;
+      this._addrSize16 = true;
+    }
+  }
+
   /** Get linear base address for a segment selector */
   segBase(sel: number): number {
     if (this.realMode) return (sel * 16) >>> 0;
-    const base = this.segBases.get(sel);
-    if (base !== undefined) return base;
+    const cached = this.segBases.get(sel);
+    if (cached !== undefined) return cached;
+    // Look up in GDT if available (PMODEW protected mode)
+    const base = this.loadGdtDescriptorBase(sel);
+    if (base !== undefined) {
+      this.segBases.set(sel, base);
+      return base;
+    }
     // LDT-style selector: strip RPL/TI bits (low 3 bits = __AHSHIFT)
     // to find the canonical selector assigned by the NE loader
     const canonical = sel >>> 3;
@@ -95,6 +123,34 @@ export class CPU {
       if (cbase !== undefined) return cbase;
     }
     return 0;
+  }
+
+  /** Read a GDT descriptor and return the base address */
+  loadGdtDescriptorBase(sel: number): number | undefined {
+    if (!this.emu || !this.emu._gdtBase) return undefined;
+    const index = (sel & 0xFFF8) >>> 3; // selector index (ignore RPL and TI)
+    if (index === 0) return 0; // null selector
+    const descAddr = this.emu._gdtBase + index * 8;
+    if (index * 8 + 7 > this.emu._gdtLimit) return undefined;
+    const lo = this.mem.readU32(descAddr);
+    const hi = this.mem.readU32(descAddr + 4);
+    // Base: bits 31:24 of hi, bits 7:0 of hi, bits 31:16 of lo
+    const baseLo = (lo >>> 16) & 0xFFFF;
+    const baseMid = hi & 0xFF;
+    const baseHi = (hi >>> 24) & 0xFF;
+    return (baseHi << 24) | (baseMid << 16) | baseLo;
+  }
+
+  /** Read a GDT descriptor and return whether it's a 32-bit segment */
+  loadGdtDescriptorIs32(sel: number): boolean {
+    if (!this.emu || !this.emu._gdtBase) return false;
+    const index = (sel & 0xFFF8) >>> 3;
+    if (index === 0) return false;
+    const descAddr = this.emu._gdtBase + index * 8;
+    if (index * 8 + 7 > this.emu._gdtLimit) return false;
+    const hi = this.mem.readU32(descAddr + 4);
+    // D/B bit is bit 22 of hi dword
+    return (hi & (1 << 22)) !== 0;
   }
 
   // Register accessors for 8/16 bit subregisters
@@ -128,7 +184,7 @@ export class CPU {
   }
 
   getFlags(): number {
-    this.materializeFlags();
+    if (!this.flagsValid) materializeFlags(this);
     return this.flagsCache;
   }
 
@@ -136,18 +192,20 @@ export class CPU {
     this.flagsCache = f | 0x0002;
     this.flagsValid = true;
     this.lazyOp = LazyOp.NONE;
+    this._tfActive = !!(f & TF);
   }
 
   getFlag(bit: number): boolean {
     if (bit === DF) return !!(this.flagsCache & DF);
-    this.materializeFlags();
+    if (!this.flagsValid) materializeFlags(this);
     return !!(this.flagsCache & bit);
   }
 
   setFlag(bit: number, val: boolean): void {
-    this.materializeFlags();
+    if (!this.flagsValid) materializeFlags(this);
     if (val) this.flagsCache |= bit;
     else this.flagsCache &= ~bit;
+    if (bit === TF) this._tfActive = val;
   }
 
   setLazy(op: number, result: number, a: number, b: number): void {
@@ -317,31 +375,61 @@ export class CPU {
     }
   }
 
-  // Condition code evaluation
+  // Condition code evaluation — materialize once, then test bits directly
   testCC(cc: number): boolean {
+    if (!this.flagsValid) materializeFlags(this);
+    const f = this.flagsCache;
     switch (cc) {
-      case 0x0: return this.getFlag(OF);
-      case 0x1: return !this.getFlag(OF);
-      case 0x2: return this.getFlag(CF);
-      case 0x3: return !this.getFlag(CF);
-      case 0x4: return this.getFlag(ZF);
-      case 0x5: return !this.getFlag(ZF);
-      case 0x6: return this.getFlag(CF) || this.getFlag(ZF);
-      case 0x7: return !this.getFlag(CF) && !this.getFlag(ZF);
-      case 0x8: return this.getFlag(SF);
-      case 0x9: return !this.getFlag(SF);
-      case 0xA: return this.getFlag(PF);
-      case 0xB: return !this.getFlag(PF);
-      case 0xC: return this.getFlag(SF) !== this.getFlag(OF);
-      case 0xD: return this.getFlag(SF) === this.getFlag(OF);
-      case 0xE: return this.getFlag(ZF) || (this.getFlag(SF) !== this.getFlag(OF));
-      case 0xF: return !this.getFlag(ZF) && (this.getFlag(SF) === this.getFlag(OF));
+      case 0x0: return !!(f & OF);
+      case 0x1: return !(f & OF);
+      case 0x2: return !!(f & CF);
+      case 0x3: return !(f & CF);
+      case 0x4: return !!(f & ZF);
+      case 0x5: return !(f & ZF);
+      case 0x6: return !!((f & CF) | (f & ZF));
+      case 0x7: return !((f & CF) | (f & ZF));
+      case 0x8: return !!(f & SF);
+      case 0x9: return !(f & SF);
+      case 0xA: return !!(f & PF);
+      case 0xB: return !(f & PF);
+      case 0xC: return !!(f & SF) !== !!(f & OF);
+      case 0xD: return !!(f & SF) === !!(f & OF);
+      case 0xE: return !!(f & ZF) || (!!(f & SF) !== !!(f & OF));
+      case 0xF: return !(f & ZF) && (!!(f & SF) === !!(f & OF));
       default: return false;
     }
   }
 
   // Execute one instruction — delegated to cpu-step.ts
   step(): void {
+    this._inhibitIRQ = false; // Clear MOV SS interrupt inhibit from previous instruction
+    // Fast path: TF is almost never set — skip the entire TF machinery
+    if (!this._tfActive) {
+      cpuStep(this);
+      return;
+    }
+    // Slow path: TF is set — check for single-step trap
+    const tfBefore = this.getFlags() & TF;
+    this._inhibitTF = false;
     cpuStep(this);
+    // If TF was set before the instruction, fire INT 1 (single-step exception)
+    // Intel: no trap after INT/IRET/MOV SS/POP SS instructions
+    if (tfBefore && !this._inhibitTF && !this.halted && this.emu) {
+      // Clear TF before firing INT 1 (processor clears it on interrupt entry)
+      const flags = this.getFlags();
+      this.setFlags(flags & ~TF);
+      // Push flags (with TF still set, as saved), CS, IP — then jump to INT 1 handler
+      if (!this.use32) {
+        this.push16(flags);
+        this.push16(this.cs);
+        this.push16((this.eip - this.segBase(this.cs)) & 0xFFFF);
+        // Look up INT 1 vector from IVT
+        const vec = this.mem.readU32(1 * 4);
+        const newIP = vec & 0xFFFF;
+        const newCS = (vec >>> 16) & 0xFFFF;
+        this.cs = newCS;
+        this.eip = this.segBase(newCS) + newIP;
+      }
+    }
   }
 }

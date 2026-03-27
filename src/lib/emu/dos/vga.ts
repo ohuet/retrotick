@@ -2,6 +2,9 @@
 
 import type { Emulator } from '../emulator';
 
+/** VGA refresh rate in Hz (standard CRT = 70). Increase to speed up frame-locked demos. */
+export const VGA_REFRESH_HZ = 70;
+
 export interface VGAMode {
   mode: number;
   width: number;
@@ -98,7 +101,8 @@ export class VGAState {
   palette = buildDefaultPalette(); // 256 entries × 3 components, 6-bit each
   dacWriteIndex = 0;
   dacReadIndex = 0;
-  dacComponent = 0; // 0=R, 1=G, 2=B
+  private dacWriteComponent = 0; // 0=R, 1=G, 2=B (write side)
+  private dacReadComponent = 0;  // 0=R, 1=G, 2=B (read side)
 
   seqIndex = 0;
   gcIndex = 0;
@@ -107,10 +111,10 @@ export class VGAState {
 
   // Planar memory: 4 bit planes × 64KB each (for modes 0D-12)
   planes: Uint8Array[] = [
-    new Uint8Array(65536),
-    new Uint8Array(65536),
-    new Uint8Array(65536),
-    new Uint8Array(65536),
+    new Uint8Array(131072),
+    new Uint8Array(131072),
+    new Uint8Array(131072),
+    new Uint8Array(131072),
   ];
   latchRegs = new Uint8Array(4); // VGA latch registers (one per plane)
 
@@ -130,11 +134,33 @@ export class VGAState {
   framebuffer: ImageData | null = null;
   dirty = false;
 
-  // VGA retrace timing — time-based to avoid tearing
-  private retraceCounter = 0;     // fallback counter for non-time-aware code
+  // VGA retrace timing
   private lastVblankSync = false;  // was previous 0x3DA read in VBlank?
   pendingSync = false;             // set when VBlank starts; tick should sync & present
   lastSyncTime = 0;                // performance.now() of last syncGraphics call
+
+  // Cached retrace timing — reduces performance.now() calls in tight 0x3DA poll loops
+  private _cachedNowUs = 0;        // performance.now() * 1000, refreshed every N polls
+  private _3daPollCount = 0;       // polls since last refresh
+  private _cachedVisibleLines = 200;
+  private _cachedFrameUs = 449 * 31.778;
+  private _retraceConstsDirty = true;
+  private _cached3DA = 0;          // cached 0x3DA result (recomputed every 64 polls)
+
+  /** Refresh retrace constants when CRTC regs change */
+  private _updateRetraceConsts(): void {
+    // Use raw VDE+1 (actual scanlines on CRT) for retrace timing, NOT getVisibleHeight()
+    // which divides by maxScanLine for double-scan. The CRTC line counter counts every
+    // scanline including double-scanned ones.
+    const vdeLow = this.crtcRegs[0x12];
+    const overflow = this.crtcRegs[0x07];
+    const visibleScanlines = (vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0)) + 1;
+    const nativeTotalLines = (visibleScanlines <= 400) ? 449 : 525;
+    const totalLines = Math.round((1000000 / VGA_REFRESH_HZ) / 31.778);
+    this._cachedVisibleLines = Math.round(totalLines * visibleScanlines / nativeTotalLines);
+    this._cachedFrameUs = totalLines * 31.778;
+    this._retraceConstsDirty = false;
+  }
 
   constructor() {
     this.initRegsForMode(0x03);
@@ -143,8 +169,10 @@ export class VGAState {
   /** Initialize VGA register values for a given video mode */
   initRegsForMode(mode: number): void {
     // Attribute Controller defaults (16 palette entries + 5 control regs)
-    // Palette: identity mapping 0-15 for text mode
-    for (let i = 0; i < 16; i++) this.atcRegs[i] = i;
+    // Standard EGA/VGA ATC palette: maps 4-bit attribute to 6-bit DAC index
+    // Colors 0-5,7 = dark, 6 = brown (20h), 8-15 = bright (38h-3Fh)
+    const egaAtcPalette = [0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F];
+    for (let i = 0; i < 16; i++) this.atcRegs[i] = egaAtcPalette[i];
     this.atcRegs[0x10] = 0x0C; // Mode Control: blink enable, line graphics enable
     this.atcRegs[0x11] = 0x00; // Overscan Color
     this.atcRegs[0x12] = 0x0F; // Color Plane Enable (all planes)
@@ -295,7 +323,30 @@ export class VGAState {
 
     this.writeMapMask = this.seqRegs[2] & 0x0F;
     this.readMapSelect = this.gcRegs[4] & 0x03;
+    // Reset unchained state (Chain-4 is always enabled after a BIOS mode set)
+    this.unchained = false;
   }
+
+  // Mode X state: true when mode 13h has Chain-4 disabled (unchained 256-color planar)
+  unchained = false;
+
+  /** Get actual visible pixel height from CRTC registers (accounts for double-scanning) */
+  getVisibleHeight(): number {
+    const vdeLow = this.crtcRegs[0x12];
+    const overflow = this.crtcRegs[0x07];
+    const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
+    const maxScanLine = this.crtcRegs[0x09] & 0x1F;
+    return Math.floor((vde + 1) / (maxScanLine + 1));
+  }
+
+  /** Check if current register state indicates Mode X (unchained mode 13h) */
+  isUnchained(): boolean {
+    // Mode X = mode 13h with Chain-4 disabled (seq reg 4 bit 3 = 0)
+    return this.currentMode.mode === 0x13 && !(this.seqRegs[4] & 0x08);
+  }
+
+  /** Callback set by emulator to update memory hook when unchained state changes */
+  onUnchainedChange?: (unchained: boolean) => void;
 
   portWrite(port: number, value: number): void {
     switch (port) {
@@ -305,6 +356,7 @@ export class VGAState {
         } else {
           if (this.atcIndex < this.atcRegs.length) {
             this.atcRegs[this.atcIndex] = value;
+            this.dirty = true;
           }
         }
         this.atcFlipFlop = !this.atcFlipFlop;
@@ -315,12 +367,21 @@ export class VGAState {
       case 0x3C4: // Sequencer index
         this.seqIndex = value & 0x07;
         break;
-      case 0x3C5: // Sequencer data
+      case 0x3C5: { // Sequencer data
         if (this.seqIndex < this.seqRegs.length) {
           this.seqRegs[this.seqIndex] = value;
         }
         if (this.seqIndex === 0x02) this.writeMapMask = value & 0x0F;
+        // Detect Chain-4 toggle (seq reg 4 bit 3) for Mode X
+        if (this.seqIndex === 0x04) {
+          const wasUnchained = this.unchained;
+          this.unchained = this.isUnchained();
+          if (this.unchained !== wasUnchained) {
+            this.onUnchainedChange?.(this.unchained);
+          }
+        }
         break;
+      }
       case 0x3CE: // Graphics controller index
         this.gcIndex = value & 0x0F;
         break;
@@ -334,18 +395,22 @@ export class VGAState {
         this.dacPixelMask = value;
         break;
       case 0x3C8: // DAC write index
+        if (this.dacWriteComponent !== 0 && !(this as any)._dacDesyncLogged) {
+          (this as any)._dacDesyncLogged = true;
+          console.warn(`[DAC] Component desync: 0x3C8 write while component=${this.dacWriteComponent}, idx was ${this.dacWriteIndex}, new=${value}`);
+        }
         this.dacWriteIndex = value;
-        this.dacComponent = 0;
+        this.dacWriteComponent = 0;
         break;
       case 0x3C7: // DAC read index
         this.dacReadIndex = value;
-        this.dacComponent = 0;
+        this.dacReadComponent = 0;
         break;
       case 0x3C9: // DAC data (write R, G, B sequentially)
-        this.palette[this.dacWriteIndex * 3 + this.dacComponent] = value & 0x3F;
-        this.dacComponent++;
-        if (this.dacComponent >= 3) {
-          this.dacComponent = 0;
+        this.palette[this.dacWriteIndex * 3 + this.dacWriteComponent] = value & 0x3F;
+        this.dacWriteComponent++;
+        if (this.dacWriteComponent >= 3) {
+          this.dacWriteComponent = 0;
           this.dacWriteIndex = (this.dacWriteIndex + 1) & 0xFF;
           this.dirty = true;
         }
@@ -356,6 +421,10 @@ export class VGAState {
       case 0x3D5: // CRTC data
         if (this.crtcIndex < this.crtcRegs.length) {
           this.crtcRegs[this.crtcIndex] = value;
+          // Invalidate cached retrace constants when vertical timing regs change
+          if (this.crtcIndex === 0x07 || this.crtcIndex === 0x09 || this.crtcIndex === 0x12) {
+            this._retraceConstsDirty = true;
+          }
         }
         break;
     }
@@ -383,29 +452,28 @@ export class VGAState {
         return this.crtcIndex;
       case 0x3D5: // CRTC data
         return this.crtcIndex < this.crtcRegs.length ? this.crtcRegs[this.crtcIndex] : 0;
-      case 0x3DA: { // Input status register 1 — time-based retrace simulation
+      case 0x3DA: { // Input status register 1 — cached retrace simulation
         this.atcFlipFlop = false; // reading 0x3DA resets ATC flip-flop
-        // 60 Hz frame = ~16.67ms. VBlank occupies last ~1.4ms (lines 480-524 of 525).
-        // Use real time so games that wait for VBlank get correct timing.
-        const frameMs = 16.667;
-        const vblankStartFrac = 0.915; // ~91.5% of frame is active display
-        const t = performance.now() % frameMs;
-        const frac = t / frameMs;
-        const inVblank = frac >= vblankStartFrac;
-        const inHblank = !inVblank && (this.retraceCounter++ % 3) === 0;
-        // On VBlank entry: VRAM contains a complete frame — schedule sync.
-        // This ensures putImageData sees a fully written framebuffer.
-        if (inVblank && !this.lastVblankSync) {
-          this.pendingSync = true;
+
+        // Recompute retrace state every 64 polls (float math is expensive per-poll)
+        if ((this._3daPollCount++ & 63) === 0) {
+          this._cachedNowUs = performance.now() * 1000;
+          if (this._retraceConstsDirty) this._updateRetraceConsts();
+          const tInFrame = this._cachedNowUs % this._cachedFrameUs;
+          const currentLine = (tInFrame / 31.778) | 0;
+          const inVblank = currentLine >= this._cachedVisibleLines;
+          if (inVblank && !this.lastVblankSync) this.pendingSync = true;
+          this.lastVblankSync = inVblank;
+          const inHblank = !inVblank && (tInFrame - currentLine * 31.778) >= 25.422;
+          this._cached3DA = (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
         }
-        this.lastVblankSync = inVblank;
-        return (inVblank ? 0x08 : 0x00) | ((inVblank || inHblank) ? 0x01 : 0x00);
+        return this._cached3DA;
       }
       case 0x3C9: { // DAC data read
-        const val = this.palette[this.dacReadIndex * 3 + this.dacComponent];
-        this.dacComponent++;
-        if (this.dacComponent >= 3) {
-          this.dacComponent = 0;
+        const val = this.palette[this.dacReadIndex * 3 + this.dacReadComponent];
+        this.dacReadComponent++;
+        if (this.dacReadComponent >= 3) {
+          this.dacReadComponent = 0;
           this.dacReadIndex = (this.dacReadIndex + 1) & 0xFF;
         }
         return val;
@@ -426,6 +494,14 @@ export class VGAState {
     const mapMask = this.writeMapMask;
 
     if (writeMode === 0) {
+      // Fast path: Write Mode 0, no rotation/set-reset/logicOp, full mask (most Mode X writes)
+      if (this.gcRegs[3] === 0 && this.gcRegs[1] === 0 && mask === 0xFF) {
+        if (mapMask & 1) this.planes[0][offset] = val;
+        if (mapMask & 2) this.planes[1][offset] = val;
+        if (mapMask & 4) this.planes[2][offset] = val;
+        if (mapMask & 8) this.planes[3][offset] = val;
+        return;
+      }
       // Write Mode 0: each plane gets val (optionally rotated/set-reset), masked by Bit Mask
       const enableSR = this.gcRegs[1]; // Enable Set/Reset
       const setReset = this.gcRegs[0]; // Set/Reset value
@@ -569,8 +645,76 @@ export function syncMode13h(emu: Emulator): void {
   const lut = buildRGBLookup(vga.palette);
   const buf32 = new Uint32Array(vga.framebuffer.data.buffer, vga.framebuffer.data.byteOffset, vga.framebuffer.data.byteLength >> 2);
 
+  // CRTC Start Address: display starts at this byte offset in VRAM
+  // Used for hardware scrolling and double-buffering
+  // In mode 13h chain-4, CRTC word mode: register * 2 gives byte offset
+  // (CRTC 0x17 bit 6 = 0 means word addressing)
+  const startReg = (vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D];
+  const wordMode = !(vga.crtcRegs[0x17] & 0x40); // bit 6 clear = word mode
+  const displayStart = wordMode ? startReg * 2 : startReg;
+
   for (let i = 0; i < 64000; i++) {
-    buf32[i] = lut[mem.readU8(0xA0000 + i) & vga.dacPixelMask];
+    buf32[i] = lut[mem.readU8(0xA0000 + ((displayStart + i) & 0xFFFF)) & vga.dacPixelMask];
+  }
+
+  vga.dirty = false;
+  emu.onVideoFrame?.();
+}
+
+/** Sync Mode X (unchained 256-color planar) framebuffer from VGA planes.
+ *  Supports page flipping via CRTC display start address (regs 0x0C-0x0D).
+ *  Resolution is derived from CRTC registers (typically 320x200 or 320x240). */
+export function syncModeX(emu: Emulator): void {
+  const vga = emu.vga;
+
+  // Derive resolution from CRTC registers
+  // Vertical Display End (CRTC 0x12) = visible scanlines - 1 (low 8 bits)
+  // Overflow register (CRTC 0x07) bit 1 = bit 8, bit 6 = bit 9
+  const vdeLow = vga.crtcRegs[0x12];
+  const overflow = vga.crtcRegs[0x07];
+  const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
+  const totalScanlines = vde + 1;
+  // Max Scan Line register (CRTC 0x09) bits 0-4: each pixel row occupies (maxScanLine+1) scanlines
+  // Mode 13h/X uses max scan line = 1 (double-scanning): 400 scanlines → 200 rows, 480 → 240
+  const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
+  const height = Math.floor(totalScanlines / (maxScanLine + 1));
+  // Display width is always 320 pixels in Mode X (the CRTC offset register
+  // controls memory pitch, not display width — wider pitch is for virtual scrolling)
+  const width = 320;
+
+  // Reinit framebuffer if resolution changed
+  if (!vga.framebuffer || vga.framebuffer.width !== width || vga.framebuffer.height !== height) {
+    vga.initFramebuffer(width, height);
+    if (!vga.framebuffer) return;
+  }
+
+  const lut = buildRGBLookup(vga.palette);
+  const buf32 = new Uint32Array(vga.framebuffer.data.buffer, vga.framebuffer.data.byteOffset, vga.framebuffer.data.byteLength >> 2);
+  const p0 = vga.planes[0], p1 = vga.planes[1], p2 = vga.planes[2], p3 = vga.planes[3];
+  const pixelMask = vga.dacPixelMask;
+
+  // Display start address from CRTC regs 0x0C (high) and 0x0D (low)
+  // This is the byte offset into planar memory where display begins
+  const displayStart = (vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D];
+
+  // CRTC offset register (0x13) = bytes per scanline / 2 in each plane
+  // For Mode X 320 wide: 320/4 pixels per plane per line = 80 bytes, offset = 80/2 = 40
+  const pitch = (vga.crtcRegs[0x13] || 40) * 2;
+
+  // Width is always a multiple of 4 in Mode X — process 4 pixels per byte offset
+  // (one pixel from each plane), avoiding per-pixel switch and shift
+  const bytesPerRow = width >> 2;
+  for (let y = 0; y < height; y++) {
+    const rowStart = displayStart + y * pitch;
+    let px = y * width;
+    for (let b = 0; b < bytesPerRow; b++) {
+      const offset = (rowStart + b) & 0x1FFFF;
+      buf32[px]     = lut[p0[offset] & pixelMask];
+      buf32[px + 1] = lut[p1[offset] & pixelMask];
+      buf32[px + 2] = lut[p2[offset] & pixelMask];
+      buf32[px + 3] = lut[p3[offset] & pixelMask];
+      px += 4;
+    }
   }
 
   vga.dirty = false;
@@ -698,6 +842,12 @@ export function syncPlanarMono(emu: Emulator): void {
 /** Sync any graphics mode framebuffer */
 export function syncGraphics(emu: Emulator): void {
   const mode = emu.videoMode;
+  // Mode X: mode 13h with Chain-4 disabled
+  if (mode === 0x13 && emu.vga.unchained) {
+    if (!(emu.vga as any)._mxLog) { (emu.vga as any)._mxLog = true; console.warn(`[VGA] Using Mode X renderer: ${emu.vga.getVisibleHeight()}h pitch=${(emu.vga.crtcRegs[0x13]||40)*2} start=${(emu.vga.crtcRegs[0x0C]<<8)|emu.vga.crtcRegs[0x0D]}`); }
+    syncModeX(emu);
+    return;
+  }
   switch (mode) {
     case 0x13: syncMode13h(emu); break;
     case 0x04: case 0x05: syncCGA4(emu); break;

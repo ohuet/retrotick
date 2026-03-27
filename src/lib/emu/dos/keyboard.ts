@@ -144,18 +144,31 @@ export function handleInt09(cpu: CPU, emu: Emulator, scancodeOverride?: number):
   const isCtrl = !!(shiftFlags & 0x04);
 
   if (hasE0Prefix) {
-    // Enhanced keyboard E0-prefixed make code:
-    // AH=10/11 callers should observe AL=E0, while AH=00/01 will fold to AL=00.
-    ascii = 0xE0;
-  } else if (isAlt || EXTENDED_SCANCODES.has(scancode)) {
-    ascii = 0; // Extended key
+    // Enhanced keyboard E0-prefixed make code.
+    // Most E0 keys produce ascii=0xE0 (navigation: Home, Up, etc.).
+    // NumpadEnter (E0 1C) and NumpadDivide (E0 35) are exceptions —
+    // they produce the same ASCII as their main-keyboard equivalents.
+    if (scancode === 0x1C) {
+      ascii = 0x0D; // NumpadEnter → carriage return
+    } else if (emu._currentHwKeyChar !== undefined) {
+      ascii = emu._currentHwKeyChar; // NumpadDivide → '/'
+    } else {
+      ascii = 0xE0;
+    }
+  } else if (isAlt) {
+    ascii = 0; // Alt+key always produces ascii=0
   } else if (isCtrl && scancode >= 0x1E && scancode <= 0x32) {
     // Ctrl+letter: ASCII 1-26
     const ctrlBase = SCAN_TO_ASCII[scancode];
     ascii = ctrlBase ? (ctrlBase - 0x60) & 0x1F : 0;
   } else if (emu._currentHwKeyChar !== undefined) {
-    // Use browser-provided ASCII (layout-aware, handles shifted chars like ':')
+    // Use browser-provided ASCII (layout-aware). This must be checked BEFORE
+    // EXTENDED_SCANCODES because numpad digits share scancodes with navigation
+    // keys (e.g. Numpad7 = 0x47 = Home). When NumLock is on, the browser
+    // provides the digit as browserChar and we must use it.
     ascii = emu._currentHwKeyChar;
+  } else if (EXTENDED_SCANCODES.has(scancode)) {
+    ascii = 0; // Extended key without browserChar (NumLock off → navigation)
   } else {
     ascii = (scancode < SCAN_TO_ASCII.length ? SCAN_TO_ASCII[scancode] : undefined) ?? 0;
   }
@@ -210,15 +223,16 @@ export function handleInt16(cpu: CPU, emu: Emulator, fromBiosStub = false): bool
         if (emu.dosKeyBuffer.length > 0) emu.dosKeyBuffer.shift();
         const ascii = (ah === 0x00 && key.ascii === 0xE0) ? 0 : key.ascii;
         cpu.setReg16(EAX, (key.scan << 8) | ascii);
-      } else if (fromBiosStub) {
-        // BDA empty from BIOS stub: real BIOS would block (STI; HLT loop).
-        // Rewind EIP to re-execute the INT 16h instruction on next tick,
-        // simulating the blocking loop. Halt until timer or key wakes us.
+      } else if (emu.isDOS) {
+        // No key available: rewind to INT 16h instruction and halt.
+        // _dosHalted allows timer interrupts to keep firing (music, animation)
+        // while waiting for keyboard input, unlike waitingForMessage which
+        // stops everything.
         cpu.eip -= 2;
         emu._dosHalted = true;
         return true; // handled, but will re-execute
       } else {
-        // Direct INT 16h from program — block until key available
+        // Win16/Win32: block until key available
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;
       }
