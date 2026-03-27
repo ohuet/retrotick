@@ -1,7 +1,7 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 import type { DirEntry, FileInfo, FileManager, OpenFile } from '../file-manager';
-import { dosResolvePath } from './path';
+import { dosResolvePath, isDosValidDrive } from './path';
 import { teletypeOutput } from './video';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
@@ -318,12 +318,26 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
     cpu.setFlag(CF, false);
   } else if (subFunc === 0x08) {
     // Check if block device is removable: AX=0 removable, AX=1 fixed
-    cpu.setReg16(EAX, 1); // fixed (hard drive)
-    cpu.setFlag(CF, false);
+    const drv08 = cpu.reg[EBX] & 0xFF; // BL = drive number (0=default, 1=A, 2=B, 3=C...)
+    const drvIdx08 = drv08 === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (drv08 - 1);
+    if (!isDosValidDrive(drvIdx08)) {
+      cpu.setReg16(EAX, 0x0F); // invalid drive
+      cpu.setFlag(CF, true);
+    } else {
+      cpu.setReg16(EAX, 1); // fixed (hard drive)
+      cpu.setFlag(CF, false);
+    }
   } else if (subFunc === 0x09) {
     // Check if block device is remote: DX bit 12=1 remote, 0=local
-    cpu.setReg16(EDX, 0); // local
-    cpu.setFlag(CF, false);
+    const drv09 = cpu.reg[EBX] & 0xFF;
+    const drvIdx09 = drv09 === 0 ? (emu.currentDrive.charCodeAt(0) - 0x41) : (drv09 - 1);
+    if (!isDosValidDrive(drvIdx09)) {
+      cpu.setReg16(EAX, 0x0F); // invalid drive
+      cpu.setFlag(CF, true);
+    } else {
+      cpu.setReg16(EDX, 0); // local
+      cpu.setFlag(CF, false);
+    }
   } else if (subFunc === 0x0D) {
     // Generic IOCTL (block device): CH=category, CL=function
     const cl = cpu.reg[ECX] & 0xFF;
@@ -405,6 +419,16 @@ export function dosForceDupHandle(cpu: CPU, emu: Emulator): void {
 /** 0x4E: FindFirst (CX=attributes, DS:DX=filespec) */
 export function dosFindFirst(cpu: CPU, emu: Emulator): void {
   const spec = readDsDxString(cpu);
+  // Reject paths with wildcards in directory components (matches real DOS behavior).
+  // e.g. "D:\DIR\*.BAS\..\*.BAS" is invalid because "*.BAS" is not a directory.
+  const rawNorm = spec.replace(/\//g, '\\');
+  const rawLastSlash = rawNorm.lastIndexOf('\\');
+  const rawDirPart = rawLastSlash >= 0 ? rawNorm.substring(0, rawLastSlash) : '';
+  if (rawDirPart.includes('*') || rawDirPart.includes('?')) {
+    cpu.setFlag(CF, true);
+    cpu.setReg16(EAX, 3); // path not found
+    return;
+  }
   const resolvedSpec = dosResolvePath(emu, spec);
   const attrMask = cpu.getReg16(ECX);
   const allEntries = emu.fs.getVirtualDirListing(resolvedSpec, emu.additionalFiles);

@@ -22,6 +22,7 @@ interface TaskbarProps {
   onMinimizeAll?: () => void;
   onShowWelcome?: () => void;
   onShowRegionalSettings?: () => void;
+  onShowDosSettings?: () => void;
   onResetToDefault?: () => void;
   onShutDown?: () => void;
 }
@@ -46,7 +47,7 @@ interface ContextMenu {
   y: number;
 }
 
-export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeApp, onCloseApp, onMinimizeAll, onShowWelcome, onShowRegionalSettings, onResetToDefault, onShutDown }: TaskbarProps) {
+export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeApp, onCloseApp, onMinimizeAll, onShowWelcome, onShowRegionalSettings, onShowDosSettings, onResetToDefault, onShutDown }: TaskbarProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [startOpen, setStartOpen] = useState(false);
@@ -117,6 +118,7 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
               items={[
                 { id: 1, text: t().welcome, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 5, text: t().regionalSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
+                { id: 6, text: t().dosSettings, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 4, text: t().githubProject, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 0, text: '', isSeparator: true, isChecked: false, isGrayed: false, isDefault: false, children: null },
                 { id: 3, text: t().resetToDefault, isSeparator: false, isChecked: false, isGrayed: false, isDefault: false, children: null },
@@ -128,6 +130,7 @@ export function Taskbar({ runningApps, focusedAppId, onActivateApp, onMinimizeAp
                 setStartOpen(false);
                 if (id === 1) onShowWelcome?.();
                 else if (id === 5) onShowRegionalSettings?.();
+                else if (id === 6) onShowDosSettings?.();
                 else if (id === 4) window.open('https://github.com/lqs/retrotick', '_blank');
                 else if (id === 2) onShutDown?.();
                 else if (id === 3) onResetToDefault?.();
