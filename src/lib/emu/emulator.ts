@@ -338,6 +338,14 @@ export class Emulator {
   isDOS = false;
   dosKeyBuffer: { ascii: number; scan: number }[] = [];
   _dosWaitingForKey: false | 'read' | 'peek' = false;
+  _dosExtKeyPending?: number; // scan code pending for second getch() call on extended keys
+  _injectE0Pending = false;  // E0 prefix pending in injectHwKey fast path
+  // EMS state
+  _emsHandles?: Map<number, { pages: number; baseAddr: number }>;
+  _emsNextHandle = 1;
+  _emsNextAddr = 0x200000; // 2MB start
+  _emsMapping?: number[];  // 4 physical page mappings
+  _emsSavedMaps?: Map<number, number[]>;  // saved page map states (AH=47/48)
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;
@@ -348,6 +356,13 @@ export class Emulator {
   _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;
+  _cr0 = 0;           // Control Register 0 (PE bit etc.)
+  _gdtBase = 0;       // GDT linear base address
+  _gdtLimit = 0;      // GDT limit
+  _idtBase = 0;       // IDT linear base address
+  _idtLimit = 0;      // IDT limit
+  _ldtr = 0;          // Local Descriptor Table Register (selector)
+  _tr = 0;            // Task Register (selector)
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosFreedHandles: number[] = []; // recycled handle pool
@@ -366,7 +381,13 @@ export class Emulator {
   _dosExecStack: {
     regs: Int32Array; cs: number; ds: number; es: number; ss: number;
     eip: number; flags: number; psp: number; dta: number;
+    currentDrive: string; currentDirs: Map<string, string>;
   }[] = [];
+  /** Saved drive/dir state for custom PSP child processes (AH=55h + AH=4Ch/INT 20h) */
+  _dosPspDriveState = new Map<number, { drive: string; dirs: Map<string, string> }>();
+  /** Saved IVT + _dosIntVectors for custom PSP children — PMODEW modifies IVT hooks that
+   *  must be restored when the child exits, since we bypass _pm_cleanup. */
+  _dosPspSavedIVT = new Map<number, { ivt: Uint8Array; intVectors: Map<number, number> }>();
   _dosExitCode = 0;
   /** Segment of fake UCDOS TSR stub (0 = not set up) */
   _dosUcdosStubSeg = 0;
@@ -380,6 +401,14 @@ export class Emulator {
   _picSlaveMask = 0x00;
   _picMasterICW = 0;      // ICW sequence counter (0 = ready for OCW)
   _picSlaveICW = 0;
+  _picMasterBase = 0x08;  // IRQ0-7 interrupt vector base (ICW2, default=0x08)
+  _picSlaveBase = 0x70;   // IRQ8-15 interrupt vector base (ICW2, default=0x70)
+  _picMasterISR = 0x00;   // In-Service Register (bits set for IRQs being handled)
+  _picSlaveISR = 0x00;
+  _picMasterIRR = 0x00;   // Interrupt Request Register
+  _picSlaveIRR = 0x00;
+  _picMasterReadISR = false; // true = read ISR on port 0x20, false = read IRR
+  _picSlaveReadISR = false;
 
   // PIT (Programmable Interval Timer) state
   _pitCounters = [0xFFFF, 0x0012, 0xFFFF]; // Counter 0/1/2 reload values
@@ -389,6 +418,7 @@ export class Emulator {
   _pitModes = [3, 2, 3];                   // Counter modes (default: mode 3 for 0/2, mode 2 for 1)
   _pitAccessModes = [3, 3, 3];             // 1=LSB, 2=MSB, 3=LSB then MSB
   _pitWriteHigh = [false, false, false];    // Byte toggle for 16-bit writes
+  _pitStartTime = [0, 0, 0];               // performance.now() when each counter was last programmed
   _pitInsnCount = 0;                        // instruction counter for PIT timing in DOS mode
 
   // VGA state
@@ -399,6 +429,20 @@ export class Emulator {
   charHeight = 16;
   isGraphicsMode = false;
   onVideoFrame?: () => void;
+
+  /** Initialize VGA Mode X detection callback (call once after memory is ready) */
+  initVgaModeXHook(): void {
+    this.vga.onUnchainedChange = (unchained: boolean) => {
+      if (unchained) {
+        // Mode X: activate planar memory hook and clear planes
+        this.cpu.mem.setVgaPlanar(this.vga);
+        this.vga.clearPlanes();
+      } else {
+        // Back to Chain-4 linear mode 13h
+        this.cpu.mem.setVgaPlanar(null);
+      }
+    };
+  }
 
   // API dispatch
   apiDefs = new Map<string, ApiDef>();
@@ -512,6 +556,8 @@ export class Emulator {
   _xmsNextAddr = 0x110000;
   _xmsTotalKB = 16384;     // 16MB total XMS
   _xmsFreeBlocks: { base: number; size: number }[] = [];
+  /** Maps PSP segment → set of XMS handles allocated while that PSP was active */
+  _xmsPspHandles = new Map<number, Set<number>>();
 
   // Threading
   threads: Thread[] = [];
@@ -718,6 +764,7 @@ export class Emulator {
   onExit?: () => void;
   /** DLL modules requested by the executable but not found during loading */
   missingDlls: string[] = [];
+  onReboot?: () => void;
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
 
@@ -1354,12 +1401,12 @@ export class Emulator {
     const audioVal = this.dosAudio.portIn(port);
     if (audioVal >= 0) return audioVal;
     switch (port) {
-      case 0x20: // PIC master — ISR/IRR (simplified: return 0)
-        return 0;
+      case 0x20: // PIC master — ISR/IRR
+        return this._picMasterReadISR ? this._picMasterISR : this._picMasterIRR;
       case 0x21: // PIC master IMR
         return this._picMasterMask;
       case 0xA0: // PIC slave — ISR/IRR
-        return 0;
+        return this._picSlaveReadISR ? this._picSlaveISR : this._picSlaveIRR;
       case 0xA1: // PIC slave IMR
         return this._picSlaveMask;
       case 0x40: case 0x41: case 0x42: { // PIT counter read
@@ -1385,16 +1432,12 @@ export class Emulator {
             return (val >> 8) & 0xFF;
           }
         }
-        // Not latched: return running counter estimate.
-        // In DOS mode, derive from instruction count to simulate ~33MHz CPU
-        // (prevents Turbo Pascal CRT unit fast-CPU calibration overflow).
-        // In Win32 mode, use wall-clock time.
-        const freq = 1193182; // PIT base frequency
+        // Not latched: return running counter estimate based on wall-clock time.
+        // Uses _pitStartTime to track when the counter was last programmed.
         const reload = this._pitCounters[ch] || 0x10000;
-        const INSNS_PER_PIT_TICK = 28; // ~33MHz / 1.19MHz ≈ 28
-        const count = this.isDOS
-          ? (reload - Math.floor(this._pitInsnCount / INSNS_PER_PIT_TICK) % reload) & 0xFFFF
-          : (() => { const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq); return (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF; })();
+        const elapsedMs = performance.now() - this._pitStartTime[ch];
+        const ticks = Math.floor(elapsedMs * 1193.182) % reload;
+        const count = ((reload - ticks) & 0xFFFF) || reload;
         const accessMode = this._pitAccessModes[ch];
         if (accessMode === 1) return count & 0xFF;
         if (accessMode === 2) return (count >> 8) & 0xFF;
@@ -1451,11 +1494,30 @@ export class Emulator {
     if (this.dosAudio.portOut(port, value)) return;
     switch (port) {
       case 0x20: // PIC master command
-        if (value === 0x20) break; // EOI — acknowledged
-        if (value & 0x10) this._picMasterICW = 1; // ICW1 starts init sequence
+        if (value === 0x20) { // Non-specific EOI: clear highest-priority ISR bit
+          if (this._picMasterISR) {
+            this._picMasterISR &= this._picMasterISR - 1; // clear lowest set bit
+          }
+          break;
+        }
+        if (value & 0x10) { // ICW1 starts init sequence
+          this._picMasterICW = 1;
+          this._picMasterISR = 0;
+          this._picMasterIRR = 0;
+          this._picMasterReadISR = false;
+          break;
+        }
+        if ((value & 0x18) === 0x08) { // OCW3: bit 3 set, bit 4 clear
+          if (value & 0x02) {
+            this._picMasterReadISR = !!(value & 0x01); // bit 0: 1=ISR, 0=IRR
+          }
+        }
         break;
       case 0x21: // PIC master data (IMR or ICW2-4)
         if (this._picMasterICW > 0) {
+          if (this._picMasterICW === 1) {
+            this._picMasterBase = value & 0xF8; // ICW2: interrupt vector base (aligned to 8)
+          }
           this._picMasterICW++; // Consume ICW2, ICW3, ICW4
           if (this._picMasterICW > 4) this._picMasterICW = 0;
         } else {
@@ -1463,11 +1525,30 @@ export class Emulator {
         }
         break;
       case 0xA0: // PIC slave command
-        if (value === 0x20) break; // EOI
-        if (value & 0x10) this._picSlaveICW = 1;
+        if (value === 0x20) {
+          if (this._picSlaveISR) {
+            this._picSlaveISR &= this._picSlaveISR - 1;
+          }
+          break;
+        }
+        if (value & 0x10) {
+          this._picSlaveICW = 1;
+          this._picSlaveISR = 0;
+          this._picSlaveIRR = 0;
+          this._picSlaveReadISR = false;
+          break;
+        }
+        if ((value & 0x18) === 0x08) {
+          if (value & 0x02) {
+            this._picSlaveReadISR = !!(value & 0x01);
+          }
+        }
         break;
       case 0xA1: // PIC slave data (IMR or ICW2-4)
         if (this._picSlaveICW > 0) {
+          if (this._picSlaveICW === 1) {
+            this._picSlaveBase = value & 0xF8; // ICW2: interrupt vector base (aligned to 8)
+          }
           this._picSlaveICW++;
           if (this._picSlaveICW > 4) this._picSlaveICW = 0;
         } else {
@@ -1477,10 +1558,15 @@ export class Emulator {
       case 0x40: case 0x41: case 0x42: { // PIT counter write
         const ch = port - 0x40;
         const accessMode = this._pitAccessModes[ch];
+        let pitWriteComplete = false;
         if (accessMode === 1) { // LSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
+          this._pitStartTime[ch] = performance.now();
+          pitWriteComplete = true;
         } else if (accessMode === 2) { // MSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
+          this._pitStartTime[ch] = performance.now();
+          pitWriteComplete = true;
         } else { // LSB then MSB
           if (!this._pitWriteHigh[ch]) {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
@@ -1488,7 +1574,15 @@ export class Emulator {
           } else {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
             this._pitWriteHigh[ch] = false;
+            this._pitStartTime[ch] = performance.now(); // reset on MSB write (complete)
+            pitWriteComplete = true;
           }
+        }
+        // When PIT channel 0 is fully reprogrammed, resync the timer delivery baseline.
+        // Without this, the copper system's scanline-based PIT reprogramming causes
+        // INT 08h to fire at wrong times (palette glitches, timing drift).
+        if (pitWriteComplete && ch === 0 && this.isDOS) {
+          this._dosLastTimerTick = performance.now();
         }
         // Update PC speaker when PIT channel 2 changes
         if (ch === 2 && this.isDOS) {
@@ -1505,9 +1599,9 @@ export class Emulator {
             if (!(value & 0x20)) { // Latch count
               this._pitLatched[i] = true;
               const reload = this._pitCounters[i] || 0x10000;
-              const freq = 1193182;
-              const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
-              this._pitLatchValues[i] = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+              const elapsedMs = performance.now() - this._pitStartTime[i];
+              const ticks = Math.floor(elapsedMs * 1193.182) % reload;
+              this._pitLatchValues[i] = ((reload - ticks) & 0xFFFF) || reload;
             }
           }
           break;
@@ -1517,9 +1611,9 @@ export class Emulator {
           // Latch command
           this._pitLatched[ch] = true;
           const reload = this._pitCounters[ch] || 0x10000;
-          const freq = 1193182;
-          const elapsed = (performance.now() * 1000) % (reload * 1000000 / freq);
-          this._pitLatchValues[ch] = (reload - Math.floor(elapsed * freq / 1000000)) & 0xFFFF;
+          const elapsedMs = performance.now() - this._pitStartTime[ch];
+          const ticks = Math.floor(elapsedMs * 1193.182) % reload;
+          this._pitLatchValues[ch] = ((reload - ticks) & 0xFFFF) || reload;
         } else {
           this._pitAccessModes[ch] = accessMode;
           this._pitModes[ch] = (value >> 1) & 7;
@@ -1577,6 +1671,25 @@ export class Emulator {
     if (browserChar !== undefined) this._pendingHwKeyChars.set(scancode, browserChar);
     // Wake promptly on keyboard input from INT 16h waits or DOS HLT idle.
     if ((this.waitingForMessage || this._dosHalted) && this.running && !this.halted) {
+      // If DOS is waiting for a key via INT 21h AH=01/07/08 and this is a make code
+      // (not E0 prefix, not break code), push directly to dosKeyBuffer for immediate delivery
+      if (this._dosWaitingForKey && !(scancode & 0x80)) {
+        if (scancode === 0xE0) {
+          // E0 prefix: mark for next scancode, don't push to buffer yet
+          this._injectE0Pending = true;
+        } else {
+          const SCAN_TO_ASCII: (number|undefined)[] = [
+            undefined,0x1B,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x30,0x2D,0x3D,0x08,0x09,
+            0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70,0x5B,0x5D,0x0D,undefined,0x61,0x73,
+            0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C,0x3B,0x27,0x60,undefined,0x5C,0x7A,0x78,0x63,0x76,
+            0x62,0x6E,0x6D,0x2C,0x2E,0x2F,undefined,0x2A,undefined,0x20,
+          ];
+          const isExtended = this._injectE0Pending || scancode >= 0x3B;
+          const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
+          this.dosKeyBuffer.push({ ascii, scan: scancode });
+          this._injectE0Pending = false;
+        }
+      }
       this.waitingForMessage = false;
       this._dosHalted = false;
       requestAnimationFrame(this.tick);
@@ -1590,6 +1703,9 @@ export class Emulator {
   _lastHwKeyDeliverTime = 0; // performance.now() of last non-E0 scancode delivery
   _tickRunning = false; // reentrancy guard for tick()
   _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
+  _hwIntPMActive = false; // true while a PM IDT-dispatched handler is running
+  /** Saved PM state when HW INT handler runs in RM (restored after IRET) */
+  _hwIntPMState: { cr0: number; cs: number; ss: number; ds: number; es: number; use32: boolean; segBases: Map<number, number> } | undefined;
   _kbdDataReadsLeft = 0;
   _kbdReplayPending = false;
   _kbdReplayValue = 0xFF;
@@ -1647,6 +1763,17 @@ export class Emulator {
   }
 
   deliverDosKey(): void {
+    // Handle pending extended key scan code (second getch() call)
+    if (this._dosWaitingForKey && this._dosExtKeyPending !== undefined) {
+      this._dosWaitingForKey = false;
+      this.cpu.setReg8(0, this._dosExtKeyPending);
+      this._dosExtKeyPending = undefined;
+      this.waitingForMessage = false;
+      if (this.running && !this.halted) {
+        requestAnimationFrame(this.tick);
+      }
+      return;
+    }
     if (this._dosWaitingForKey && this.dosKeyBuffer.length > 0) {
       const mode = this._dosWaitingForKey;
       this._dosWaitingForKey = false;
@@ -1658,7 +1785,17 @@ export class Emulator {
       } else {
         // AH=00/10: read — consume key, put in AX
         const key = this.dosKeyBuffer.shift()!;
-        this.cpu.setReg16(0, (key.scan << 8) | key.ascii);
+        // For INT 21h AH=07/08 path: only set AL (not full AX)
+        // and handle extended keys (ascii=0) by queueing scan for next call
+        if (this._dosWaitingForKey === false) {
+          // Already cleared above — this is the INT 21h path
+        }
+        let ascii = key.ascii === 0xE0 ? 0 : key.ascii;
+        this.cpu.setReg8(0, ascii); // Set AL only
+        if (ascii === 0) {
+          // Extended key: save scan code for the next INT 21h AH=07/08 call
+          this._dosExtKeyPending = key.scan;
+        }
       }
       this.waitingForMessage = false;
       while (this._dosPendingSoftwareIret > 0) {

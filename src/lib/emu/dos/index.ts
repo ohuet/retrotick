@@ -5,6 +5,7 @@ import { handleInt10 } from './video';
 import { handleInt21 } from './int21';
 import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt33, handleInt79, handleInt7F, handleUcdosInt3 } from './misc';
 import { handleXms, XMS_INT } from './xms';
+import { handleInt67 } from './ems';
 
 export { handleInt21 } from './int21';
 export { syncVideoMemory } from './video';
@@ -98,6 +99,14 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     case 0x12: // Get conventional memory size → AX = KB (640)
       cpu.setReg16(EAX, 640);
       return true;
+    case 0x18: // ROM BASIC — used by 256-byte intros as a cheap exit
+    case 0x19: // Bootstrap loader (reboot) — also used by intros as a 2-byte exit
+      emu.halted = true;
+      cpu.halted = true;
+      if (emu.onReboot) {
+        emu.onReboot();
+      }
+      return true;
     case 0x10: return handleInt10(cpu, emu);
     case 0x16: return handleInt16(cpu, emu, cpu.cs === 0xF000);
     case 0x20: return handleInt20(cpu, emu);
@@ -120,6 +129,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       cpu.setReg16(EAX, 0x0002);
       return true;
     }
+    case 0x67: return handleInt67(cpu, emu);
     case 0x79: return handleInt79(cpu, emu);
     case 0x7F: return handleInt7F(cpu, emu);
     case XMS_INT: return handleXms(cpu, emu);

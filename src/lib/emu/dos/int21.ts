@@ -3,6 +3,7 @@ import type { Emulator } from '../emulator';
 import { dosResolvePath } from './path';
 import { dumpInstrTrace } from '../x86/dispatch';
 import { teletypeOutput } from './video';
+import { xmsFreeAllForPsp } from './xms';
 import {
   dosSetDTA, dosGetDTA,
   dosCreateFile, dosOpenFile, dosCloseFile, dosReadFile, dosWriteFile,
@@ -13,6 +14,7 @@ import {
   dosMkdir, dosRmdir,
   dosCreateTempFile, dosCreateNewFile,
   dosLockFile, dosSetHandleCount, dosFlushBuffer, dosExtendedOpen,
+  getSyncFileData,
 } from './file';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
@@ -20,21 +22,36 @@ const CF = 0x001;
 const ZF = 0x040;
 
 
+/** Free all conventional memory MCBs owned by the given PSP. */
+function dosFreeAllMcbsForPsp(cpu: CPU, emu: Emulator, psp: number): void {
+  let mcbSeg = emu._dosMcbFirstSeg || 0x0060;
+  for (let iter = 0; iter < 1000; iter++) {
+    const mcbLin = mcbSeg * 16;
+    const type = cpu.mem.readU8(mcbLin);
+    if (type !== 0x4D && type !== 0x5A) break;
+    if (cpu.mem.readU16(mcbLin + 1) === psp) {
+      cpu.mem.writeU16(mcbLin + 1, 0x0000); // mark free
+    }
+    if (type === 0x5A) break;
+    mcbSeg += cpu.mem.readU16(mcbLin + 3) + 1;
+  }
+}
+
 /** Return from child to parent after EXEC. Returns true if handled (child was running). */
 function dosExecReturn(cpu: CPU, emu: Emulator, exitCode: number): boolean {
   if (emu._dosExecStack.length === 0) return false;
 
-  // Free child's MCB
-  const childPsp = emu._dosPSP;
-  const childMcbLin = (childPsp - 1) * 16;
-  const mcbType = cpu.mem.readU8(childMcbLin);
-  if (mcbType === 0x4D || mcbType === 0x5A) {
-    cpu.mem.writeU16(childMcbLin + 1, 0x0000); // mark free
-  }
+  // Free child's XMS handles (PMODEW cleanup2 doesn't free in pure XMS mode)
+  xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
+
+  // Free all MCBs owned by the child PSP (not just the main block)
+  dosFreeAllMcbsForPsp(cpu, emu, emu._dosPSP ?? 0x100);
 
   const parent = emu._dosExecStack.pop()!;
   emu._dosPSP = parent.psp;
   emu._dosDTA = parent.dta;
+  emu.currentDrive = parent.currentDrive;
+  emu.currentDirs = parent.currentDirs;
   emu._dosExitCode = exitCode;
   cpu.reg.set(parent.regs);
   cpu.cs = parent.cs;
@@ -61,10 +78,18 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x01: { // Read character with echo (blocking)
-      if (emu.dosKeyBuffer.length > 0) {
+      if (emu._dosExtKeyPending !== undefined) {
+        cpu.setReg8(EAX, emu._dosExtKeyPending);
+        emu._dosExtKeyPending = undefined;
+      } else if (emu.dosKeyBuffer.length > 0) {
         const key = emu.dosKeyBuffer.shift()!;
-        cpu.setReg8(EAX, key.ascii);
-        teletypeOutput(cpu, emu, key.ascii);
+        const ascii = key.ascii === 0xE0 ? 0 : key.ascii;
+        cpu.setReg8(EAX, ascii);
+        if (ascii === 0) {
+          emu._dosExtKeyPending = key.scan;
+        } else {
+          teletypeOutput(cpu, emu, ascii);
+        }
       } else {
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;
@@ -80,10 +105,40 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x07: // Direct char input without echo (blocking, no Ctrl-C check)
     case 0x08: { // Char input without echo (blocking, Ctrl-C check)
-      if (emu.dosKeyBuffer.length > 0) {
+      if (emu._dosExtKeyPending !== undefined) {
+        // Second call after extended key: return the scan code
+        cpu.setReg8(EAX, emu._dosExtKeyPending);
+        emu._dosExtKeyPending = undefined;
+      } else if (emu.dosKeyBuffer.length > 0) {
         const key = emu.dosKeyBuffer.shift()!;
-        cpu.setReg8(EAX, key.ascii);
+        const ascii = key.ascii === 0xE0 ? 0 : key.ascii;
+        cpu.setReg8(EAX, ascii);
+        if (ascii === 0) {
+          emu._dosExtKeyPending = key.scan;
+        }
       } else {
+        // Also check BDA keyboard buffer (keys from INT 09h / injectHwKey)
+        const BDA = 0x400;
+        const head = cpu.mem.readU16(BDA + 0x1A);
+        const tail = cpu.mem.readU16(BDA + 0x1C);
+        if (head !== tail) {
+          const keyWord = cpu.mem.readU16(BDA + head);
+          let ascii2 = keyWord & 0xFF;
+          const scan2 = (keyWord >> 8) & 0xFF;
+          // Advance BDA head
+          const bufStart = cpu.mem.readU16(BDA + 0x80);
+          const bufEnd = cpu.mem.readU16(BDA + 0x82);
+          let newHead = head + 2;
+          if (newHead >= bufEnd) newHead = bufStart;
+          cpu.mem.writeU16(BDA + 0x1A, newHead);
+          // Convert E0 prefix to 0 for legacy callers
+          if (ascii2 === 0xE0) ascii2 = 0;
+          cpu.setReg8(EAX, ascii2);
+          if (ascii2 === 0) {
+            emu._dosExtKeyPending = scan2;
+          }
+          break;
+        }
         emu._dosWaitingForKey = 'read';
         emu.waitingForMessage = true;
       }
@@ -167,6 +222,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       // (e.g. CALL FAR through IVT) get the correct vector
       emu.memory.writeU16(intNo * 4, cpu.getReg16(EDX));     // offset
       emu.memory.writeU16(intNo * 4 + 2, cpu.ds);            // segment
+      cpu.setFlag(CF, false);
       break;
     }
 
@@ -196,6 +252,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       cpu.setReg16(EAX, (DOS_MINOR << 8) | DOS_MAJOR); // AL=major, AH=minor
       cpu.setReg16(EBX, 0x0000); // BH=version flag, BL=OEM serial
       cpu.setReg16(ECX, 0x0000);
+      cpu.setFlag(CF, false);
       break;
     }
 
@@ -216,6 +273,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       }
       cpu.setReg16(EBX, vec & 0xFFFF);
       cpu.es = (vec >>> 16) & 0xFFFF;
+      cpu.setFlag(CF, false);
       break;
     }
 
@@ -316,8 +374,29 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x48: { // Allocate memory (BX=paragraphs)
       const paras = cpu.getReg16(EBX);
-      // Walk MCB chain to find a free block large enough
+      // Walk MCB chain: first merge adjacent free blocks
       const firstMcb = emu._dosMcbFirstSeg || 0x0060;
+      for (let ms = firstMcb, it2 = 0; it2 < 1000; it2++) {
+        const ml = ms * 16;
+        const mt = cpu.mem.readU8(ml);
+        const mo = cpu.mem.readU16(ml + 1);
+        const msz = cpu.mem.readU16(ml + 3);
+        if (mt === 0x5A) break;
+        if (mo === 0) { // free block — try to merge with next
+          const nextSeg = ms + msz + 1;
+          const nextLin = nextSeg * 16;
+          const nextType = cpu.mem.readU8(nextLin);
+          const nextOwner = cpu.mem.readU16(nextLin + 1);
+          const nextSize = cpu.mem.readU16(nextLin + 3);
+          if (nextOwner === 0) { // next is also free — merge
+            cpu.mem.writeU16(ml + 3, msz + nextSize + 1); // absorb next MCB
+            cpu.mem.writeU8(ml, nextType); // inherit 'M' or 'Z'
+            continue; // retry from same position (may merge more)
+          }
+        }
+        ms += msz + 1;
+      }
+      // Now walk to find a free block large enough
       let mcbSeg = firstMcb;
       let allocated = false;
       let largestFree = 0;
@@ -415,7 +494,67 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x4C: { // Terminate with return code
       const retCode = al;
+      if (retCode !== 0) console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)}`);
+      xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
+      dosFreeAllMcbsForPsp(cpu, emu, emu._dosPSP ?? 0x100);
       if (dosExecReturn(cpu, emu, retCode)) break;
+      // Check PSP terminate address (offset 0x0A) — used by custom loaders
+      // that set up a child PSP with a return address (like Second Reality's runexe)
+      {
+        const pspLin = (emu._dosPSP || 0x100) * 16;
+        const termIP = cpu.mem.readU16(pspLin + 0x0A);
+        const termCS = cpu.mem.readU16(pspLin + 0x0C);
+        const parentPSP = cpu.mem.readU16(pspLin + 0x16);
+        console.warn(`[INT 21h] AH=4C: PSP=0x${(emu._dosPSP||0x100).toString(16)} termAddr=${termCS.toString(16)}:${termIP.toString(16)} parent=0x${parentPSP.toString(16)}`);
+        // If terminate address points to real code (not BIOS stub) and parent PSP differs
+        if (termCS !== 0xF000 && termCS !== 0 && parentPSP !== (emu._dosPSP || 0x100)) {
+          const childPsp = emu._dosPSP || 0x100;
+          const savedDrive = emu._dosPspDriveState.get(childPsp);
+          if (savedDrive) {
+            emu.currentDrive = savedDrive.drive;
+            emu.currentDirs = savedDrive.dirs;
+            emu._dosPspDriveState.delete(childPsp);
+          }
+          // Clean stale IVT entries: PMODEW hooks INT vectors before entering PM.
+          // Only reset entries pointing into the child's freed memory range —
+          // preserve handlers installed intentionally for the parent (e.g. STMIK on INT 08h).
+          const childMcbLin = (childPsp - 1) * 16;
+          const childMcbSize = cpu.mem.readU16(childMcbLin + 3);
+          const childEndSeg = childPsp + childMcbSize;
+          for (let vi = 0; vi < 256; vi++) {
+            const vecSeg = cpu.mem.readU16(vi * 4 + 2);
+            if (vecSeg >= childPsp && vecSeg < childEndSeg) {
+              const bios = emu._dosBiosDefaultVectors.get(vi) ?? ((0xF000 << 16) | (vi * 5));
+              cpu.mem.writeU16(vi * 4, bios & 0xFFFF);
+              cpu.mem.writeU16(vi * 4 + 2, (bios >>> 16) & 0xFFFF);
+            }
+          }
+          emu._dosPspSavedIVT.delete(childPsp);
+          emu._dosExitCode = retCode;
+          // Restore parent PSP
+          emu._dosPSP = parentPSP;
+          // PSP termination vector is always a real-mode seg:off.
+          // If a DOS extender (PMODEW) entered protected mode, reset to real mode now.
+          if (!cpu.realMode && cpu.emu) {
+            cpu.emu._cr0 = 0;
+            cpu.realMode = true;
+            cpu.segBases.clear();
+          }
+          // Reset PM descriptor tables and PIC state left by the exiting sub-EXE
+          if (cpu.emu) {
+            cpu.emu._idtBase = 0;
+            cpu.emu._idtLimit = 0;
+            cpu.emu._gdtBase = 0;
+            cpu.emu._gdtLimit = 0;
+            cpu.emu._hwIntPMActive = false;
+            cpu.emu._picMasterBase = 0x08;
+            cpu.emu._picSlaveBase = 0x70;
+          }
+          cpu.cs = termCS;
+          cpu.eip = cpu.segBase(termCS) + termIP;
+          break;
+        }
+      }
       emu.exitedNormally = true;
       emu.halted = true;
       cpu.halted = true;
@@ -762,6 +901,74 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         cmdTail += String.fromCharCode(ch);
       }
 
+      if (al === 3) {
+        // AL=3: Load Overlay — load MZ/COM into memory at caller-specified segment
+        // Parameter block (ES:BX): word loadSeg, word relocFactor
+        const loadSeg = cpu.mem.readU16(paramBlock);
+        const relocFactor = cpu.mem.readU16(paramBlock + 2);
+        const ovlResolved = dosResolvePath(emu, progName);
+        const ovlInfo = emu.fs.findFile(ovlResolved, emu.additionalFiles);
+        let ovlData: Uint8Array | null = null;
+        if (ovlInfo) ovlData = getSyncFileData(emu.fs, ovlInfo, emu, ovlResolved);
+        if (!ovlData) {
+          const bn = ovlResolved.replace(/^.*[\\\/]/, '').toUpperCase();
+          for (const [key, buf] of emu.additionalFiles) {
+            if (key.toUpperCase() === bn || key.toUpperCase().endsWith('\\' + bn) || key.toUpperCase().endsWith('/' + bn)) {
+              ovlData = new Uint8Array(buf);
+              break;
+            }
+          }
+        }
+        if (!ovlData) {
+          // Async fallback
+          if (ovlInfo) {
+            emu.fs.fetchFileData(ovlInfo, emu.additionalFiles, ovlResolved).then(() => {
+              if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) requestAnimationFrame(emu.tick); }
+            });
+            cpu.eip -= 2; emu._dosFileOpenPending = true; emu.waitingForMessage = true;
+            break;
+          }
+          console.warn(`[INT 21h] EXEC overlay not found: "${progName}"`);
+          cpu.setFlag(CF, true);
+          cpu.setReg16(EAX, 2);
+          break;
+        }
+        // Load the overlay
+        const isMzOvl = ovlData[0] === 0x4D && ovlData[1] === 0x5A;
+        if (isMzOvl) {
+          const ovlDv = new DataView(ovlData.buffer, ovlData.byteOffset, ovlData.byteLength);
+          const hdrParas = ovlDv.getUint16(0x08, true);
+          const hdrSize = hdrParas * 16;
+          const ecp = ovlDv.getUint16(0x04, true);
+          const ecblp = ovlDv.getUint16(0x02, true);
+          let imgSize = ecp === 0 ? ovlData.length - hdrSize : (ecp - 1) * 512 + (ecblp || 512) - hdrSize;
+          imgSize = Math.min(imgSize, ovlData.length - hdrSize);
+          // Copy image to loadSeg
+          const loadLin = loadSeg * 16;
+          for (let i = 0; i < imgSize; i++) cpu.mem.writeU8(loadLin + i, ovlData[hdrSize + i]);
+          // Apply relocations
+          const relocCount = ovlDv.getUint16(0x06, true);
+          const relocTableOff = ovlDv.getUint16(0x18, true);
+          for (let i = 0; i < relocCount; i++) {
+            const rOff = relocTableOff + i * 4;
+            if (rOff + 4 > ovlData.length) break;
+            const off = ovlDv.getUint16(rOff, true);
+            const seg = ovlDv.getUint16(rOff + 2, true);
+            const addr = loadLin + seg * 16 + off;
+            const oldVal = cpu.mem.readU16(addr);
+            cpu.mem.writeU16(addr, (oldVal + relocFactor) & 0xFFFF);
+          }
+          console.log(`[INT 21h] EXEC overlay "${progName}" loaded at seg ${loadSeg.toString(16)} reloc=${relocFactor.toString(16)} imgSize=${imgSize} relocs=${relocCount}`);
+        } else {
+          // COM overlay: just copy raw data
+          const loadLin = loadSeg * 16;
+          for (let i = 0; i < ovlData.length; i++) cpu.mem.writeU8(loadLin + i, ovlData[i]);
+          console.log(`[INT 21h] EXEC overlay "${progName}" (COM) loaded at seg ${loadSeg.toString(16)} size=${ovlData.length}`);
+        }
+        cpu.setFlag(CF, false);
+        break;
+      }
+
       if (al !== 0) {
         console.warn(`[INT 21h] EXEC AL=${al} not supported: "${progName}" params="${cmdTail}"`);
         cpu.setFlag(CF, true);
@@ -769,18 +976,38 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         break;
       }
 
-      // Resolve path and find file data
+      // Resolve path and find file data (same logic as dosOpenFile)
       const execResolved = dosResolvePath(emu, progName);
       const fileInfo = emu.fs.findFile(execResolved, emu.additionalFiles);
       let execData: Uint8Array | null = null;
       if (fileInfo) {
-        if (fileInfo.source === 'additional') {
-          const ab = emu.additionalFiles.get(fileInfo.name);
-          if (ab) execData = new Uint8Array(ab);
-        } else if (fileInfo.source === 'external') {
-          const ext = emu.fs.externalFiles.get(execResolved.toUpperCase());
-          if (ext) execData = ext.data;
+        execData = getSyncFileData(emu.fs, fileInfo, emu, execResolved);
+      }
+      // baseName fallback in additionalFiles (same as openFileByPath)
+      if (!execData) {
+        const baseName2 = execResolved.replace(/^.*[\\\/]/, '').toUpperCase();
+        for (const [key, buf] of emu.additionalFiles) {
+          if (key.toUpperCase() === baseName2 || key.toUpperCase().endsWith('\\' + baseName2) || key.toUpperCase().endsWith('/' + baseName2)) {
+            execData = new Uint8Array(buf);
+            break;
+          }
         }
+      }
+      // Async fallback: fetch from IndexedDB/virtual FS, then replay the INT 21h
+      if (!execData && fileInfo) {
+        emu.fs.fetchFileData(fileInfo, emu.additionalFiles, execResolved).then(() => {
+          if (emu._dosFileOpenPending) {
+            emu._dosFileOpenPending = false;
+            emu.waitingForMessage = false;
+            if (emu.running && !emu.halted) {
+              requestAnimationFrame(emu.tick);
+            }
+          }
+        });
+        cpu.eip -= 2; // rewind to INT 21h
+        emu._dosFileOpenPending = true;
+        emu.waitingForMessage = true;
+        break;
       }
       if (!execData) {
         console.warn(`[INT 21h] EXEC file not found: "${progName}" resolved="${execResolved}"`);
@@ -857,6 +1084,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         cs: cpu.cs, ds: cpu.ds, es: cpu.es, ss: cpu.ss,
         eip: cpu.eip, flags: cpu.getFlags(),
         psp: emu._dosPSP, dta: emu._dosDTA,
+        currentDrive: emu.currentDrive, currentDirs: new Map(emu.currentDirs),
       });
 
       // Allocate MCB for child
@@ -971,6 +1199,30 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x54: // Get verify setting → AL
       cpu.setReg8(EAX, emu._dosVerifyFlag ? 1 : 0);
       break;
+
+    case 0x55: { // Create child PSP (DX=segment for new PSP)
+      const newPspSeg = cpu.getReg16(EDX);
+      const newPspLin = newPspSeg * 16;
+      const srcPspLin = (emu._dosPSP || 0x100) * 16;
+      // Copy 256 bytes from current PSP to new PSP
+      for (let i = 0; i < 256; i++) {
+        cpu.mem.writeU8(newPspLin + i, cpu.mem.readU8(srcPspLin + i));
+      }
+      // Update parent PSP pointer (offset 0x16) to point to current PSP
+      cpu.mem.writeU16(newPspLin + 0x16, emu._dosPSP || 0x100);
+      // Also store SI as the top-of-memory in the new PSP (offset 0x02)
+      // runexe passes SI = exeldr_pspsi (top segment for the child)
+      const pspSi = cpu.getReg16(ESI);
+      if (pspSi > newPspSeg) {
+        cpu.mem.writeU16(newPspLin + 0x02, pspSi);
+      }
+      // Save current drive/dir state so AH=4Ch can restore it after child exits
+      emu._dosPspDriveState.set(newPspSeg, { drive: emu.currentDrive, dirs: new Map(emu.currentDirs) });
+      // Mark PSP for IVT cleanup on exit (stale vectors in freed memory get reset to BIOS default)
+      emu._dosPspSavedIVT.set(newPspSeg, { ivt: new Uint8Array(0), intVectors: new Map() });
+      console.warn(`[AH=55] Create PSP at seg ${newPspSeg.toString(16)} (parent=${(emu._dosPSP||0x100).toString(16)})`);
+      break;
+    }
 
     case 0x56: // Rename file (DS:DX=old, ES:DI=new)
       dosRenameFile(cpu, emu);

@@ -165,12 +165,13 @@ export class SoundBlasterDSP {
   private executeCommand(): void {
     const p = this.pendingParams;
     switch (this.lastCommand) {
-      case 0x10: // Direct DAC — write single sample
+      case 0x10: { // Direct DAC — write single sample
         if (this.speakerOn) {
           this.pcmRing[this.pcmWritePos & 0xFFFF] = (p[0] - 128) / 128;
           this.pcmWritePos++;
         }
         break;
+      }
       case 0x14: // DMA DAC 8-bit single cycle
       case 0x24: {
         const length = (p[0] | (p[1] << 8)) + 1;
@@ -205,13 +206,19 @@ export class SoundBlasterDSP {
     }
   }
 
-  private dmaTicks = 0; // Number of tickDMA calls since DMA started
+  private dmaStartTime = 0; // performance.now() when DMA started
+
+  dma?: import('./dma').DMAController;
+  readMemFn?: (addr: number) => number;
 
   private startDMA(length: number): void {
     this.dmaLength = length;
     this.dmaTransferred = 0;
     this.dmaActive = true;
-    this.dmaTicks = 0;
+    this.dmaStartTime = performance.now();
+    if (this.dma) {
+      console.log(`[SB-DMA] Start: length=${length} rate=${this.getSampleRate()}Hz autoInit=${this.dmaAutoInit}`);
+    }
   }
 
   /** Get the sample rate derived from time constant. */
@@ -227,16 +234,13 @@ export class SoundBlasterDSP {
   tickDMA(dma: DMAController, readMem: (addr: number) => number): boolean {
     if (!this.dmaActive || !dma.isActive(1)) return false;
 
-    // Rate-limit transfer to match the programmed sample rate relative to
-    // emulated CPU speed. Each tickDMA call corresponds to 256 CPU instructions.
-    // At ~4.77 MHz and typical sample rates (8-22 kHz) this gives ~0.5-1.2
-    // samples per tick, preventing DMA from completing before IRQ handlers run.
-    this.dmaTicks++;
+    // Rate-limit transfer to match the programmed sample rate using wall-clock time.
+    // Must use performance.now() (not instruction count) to stay synchronized with
+    // the timer interrupt and zpollme, which also use wall-clock time.
     const sampleRate = this.getSampleRate();
-    const INSTRUCTIONS_PER_TICK = 256;
-    const CPU_FREQ = 4770000; // ~4.77 MHz (original IBM PC)
+    const elapsedMs = performance.now() - this.dmaStartTime;
     const expectedSamples = Math.min(
-      Math.floor(this.dmaTicks * INSTRUCTIONS_PER_TICK * sampleRate / CPU_FREQ),
+      Math.floor(elapsedMs * sampleRate / 1000),
       this.dmaLength
     );
     const batch = Math.min(512, expectedSamples - this.dmaTransferred);
@@ -249,10 +253,27 @@ export class SoundBlasterDSP {
         this.pcmWritePos++;
       }
 
-      // Advance DMA address (respecting mode direction, but usually increment)
+      // Advance DMA address and decrement count
       dma.currentAddr[1] = (dma.currentAddr[1] + 1) & 0xFFFF;
-      dma.currentCount[1] = (dma.currentCount[1] - 1) & 0xFFFF;
+      const countBefore = dma.currentCount[1];
+      dma.currentCount[1] = (countBefore - 1) & 0xFFFF;
       this.dmaTransferred++;
+
+      // Check for DMA terminal count (count wrapped from 0 to 0xFFFF)
+      if (countBefore === 0) {
+        dma.status |= 0x02; // TC bit for channel 1
+        if (dma.mode[1] & 0x10) {
+          // Auto-init: reload address and count from base registers
+          dma.currentAddr[1] = dma.baseAddr[1];
+          dma.currentCount[1] = dma.baseCount[1];
+        } else {
+          // Single-cycle: mask channel, stop transfer
+          dma.mask |= (1 << 1);
+          this.dmaActive = false;
+          this.irqPending = true;
+          return true;
+        }
+      }
     }
 
     if (this.dmaTransferred >= this.dmaLength) {

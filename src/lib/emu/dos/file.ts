@@ -71,11 +71,10 @@ export function dosCreateFile(cpu: CPU, emu: Emulator): void {
   }
   cpu.setReg16(EAX, handle);
   cpu.setFlag(CF, false);
-  console.log(`[DOS] Create "${name}" -> h=${handle}`);
 }
 
 /** Try to get file data synchronously (additionalFiles / externalFiles / cached virtual). */
-function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulator, resolved: string): Uint8Array | null {
+export function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulator, resolved: string): Uint8Array | null {
   if (fileInfo.source === 'additional') {
     const ab = emu.additionalFiles.get(fileInfo.name);
     return ab ? new Uint8Array(ab) : null;
@@ -99,7 +98,6 @@ function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulator, res
 function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string): void {
   const fs = emu.fs;
   const fileInfo = fs.findFile(resolved, emu.additionalFiles);
-  console.log(`[DOS] findFile("${resolved}") -> ${fileInfo ? `"${fileInfo.name}" src=${fileInfo.source} size=${fileInfo.size}` : 'null'}`);
   if (fileInfo) {
     // Try synchronous path first (additionalFiles / externalFiles are in memory)
     const syncData = getSyncFileData(fs, fileInfo, emu, resolved);
@@ -112,6 +110,21 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
       cpu.setFlag(CF, false);
       return;
     }
+    // Before going async, check if additionalFiles has a sync copy under a different key
+    // (e.g., "SECOND.EXE" in additionalFiles vs "2nd_real/SECOND.EXE" in virtual FS)
+    const baseName2 = resolved.replace(/^.*[\\\/]/, '').toUpperCase();
+    for (const [key, buf] of emu.additionalFiles) {
+      if (key.toUpperCase() === baseName2 || key.toUpperCase().endsWith('\\' + baseName2) || key.toUpperCase().endsWith('/' + baseName2)) {
+        const handle = allocDosHandle(emu);
+        const data = new Uint8Array(buf);
+        emu._dosFiles.set(handle, { data, pos: 0, name });
+        emu.handles.set(handle, 'file', { path: resolved, access: 0x80000000, pos: 0, data, size: data.length, modified: false });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+        return;
+      }
+    }
+
     // Async path: fetch data into cache, then rewind EIP to replay the INT 21h
     const fileNameForCache = fileInfo.name;
     fs.fetchFileData(fileInfo, emu.additionalFiles, resolved).then(() => {
@@ -139,22 +152,25 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
 /** 0x3D: Open file (AL=mode, DS:DX=filename) */
 export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
+  // DOS device driver detection: EMMXXXX0 (EMS), NUL, CON, etc.
+  const baseName = name.replace(/^[*\\\/]*/, '').toUpperCase();
+  if (baseName === 'EMMXXXX0') {
+    // EMS driver present — return a dummy handle
+    const handle = allocDosHandle(emu);
+    emu._dosFiles.set(handle, { data: new Uint8Array(0), pos: 0, name: 'EMMXXXX0' });
+    cpu.setReg16(EAX, handle);
+    cpu.setFlag(CF, false);
+    console.log(`[DOS] Open "${name}" -> CF=0 AX=0x${handle.toString(16)} (EMS device)`);
+    return;
+  }
   const resolved = dosResolvePath(emu, name);
   openFileByPath(cpu, emu, name, resolved);
-  // Don't log on async path (waitingForMessage) — AX hasn't been set yet;
-  // the INT 21h will re-execute after cache is populated and log then.
-  if (!emu.waitingForMessage) {
-    console.log(`[DOS] Open "${name}" -> CF=${cpu.getFlags()&1} AX=0x${cpu.getReg16(0).toString(16)}`);
-  }
 }
 
 /** 0x3E: Close file */
 export function dosCloseFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const f = emu._dosFiles.get(h);
-  const csBase = (cpu.cs << 4) >>> 0;
-  const ip = ((cpu.eip - 2) >>> 0) - csBase; // -2 for CD 21
-  console.log(`[DOS] Close h=${h} "${f?.name}" at ${cpu.cs.toString(16)}:${ip.toString(16)} (linear 0x${((cpu.eip-2)>>>0).toString(16)})`);
   emu._dosFiles.delete(h);
   const of = emu.handles.get<OpenFile>(h);
   if (of) emu.fs.persistOnClose(of);
@@ -182,12 +198,9 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
       f.pos += avail;
       cpu.setReg16(EAX, avail);
       cpu.setFlag(CF, false);
-      const preview = Array.from(f.data.slice(f.pos - avail, f.pos - avail + Math.min(avail, 16))).map(b => b.toString(16).padStart(2,'0')).join(' ');
-      console.log(`[DOS] Read h=${h} "${f.name}" req=${count} got=${avail} pos=${f.pos}/${f.data.length} [${preview}]`);
     } else {
       cpu.setFlag(CF, true);
       cpu.setReg16(EAX, 6); // invalid handle
-      console.log(`[DOS] Read h=${h} INVALID HANDLE req=${count}`);
     }
   }
 }
@@ -227,12 +240,9 @@ export function dosWriteFile(cpu: CPU, emu: Emulator): void {
       }
       cpu.setReg16(EAX, count);
       cpu.setFlag(CF, false);
-      const wPreview = Array.from(f.data.slice(f.pos - count, f.pos - count + Math.min(count, 16))).map(b => b.toString(16).padStart(2,'0')).join(' ');
-      console.log(`[DOS] Write h=${handle} "${f.name}" count=${count} pos=${f.pos}/${f.data.length} [${wPreview}]`);
     } else {
       cpu.setFlag(CF, true);
       cpu.setReg16(EAX, 6); // invalid handle
-      console.log(`[DOS] Write h=${handle} INVALID HANDLE count=${count}`);
     }
   }
 }
@@ -256,7 +266,6 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
     else if (origin === 1) f.pos += offset;      // SEEK_CUR
     else if (origin === 2) f.pos = f.data.length + offset; // SEEK_END
     f.pos = Math.max(0, Math.min(f.pos, f.data.length));
-    console.log(`[DOS] Seek h=${h} "${f.name}" origin=${origin} offset=${offset} -> pos=${f.pos}/${f.data.length}`);
     const of = emu.handles.get<OpenFile>(h);
     if (of) of.pos = f.pos;
     cpu.setReg16(EDX, (f.pos >>> 16) & 0xFFFF);
@@ -265,7 +274,6 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
   } else {
     cpu.setFlag(CF, true);
     cpu.setReg16(EAX, 6);
-    console.warn(`[DOS] Seek h=${h} INVALID HANDLE origin=${origin} offset=${offset} at EIP=0x${((cpu.eip-2)>>>0).toString(16)}`);
   }
 }
 
