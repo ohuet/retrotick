@@ -515,6 +515,9 @@ export class Emulator {
   ]);
   // Loaded DLL modules: dllName → module info
   loadedModules = new Map<string, { base: number; resourceRva: number; imageBase: number; sizeOfImage?: number }>();
+  // Loaded DLL exports: dllName (lowercase) → { base, exports[] }
+  // Shared between startup pre-loading (emu-load.ts) and runtime LoadLibrary (kernel32/module.ts)
+  loadedDllExports = new Map<string, { base: number; exports: { ordinal: number; name: string | null; rva: number; forwardedTo: string | null }[] }>();
   // Dynamic thunk allocator (for GetProcAddress on loaded DLLs)
   dynamicThunkPtr = 0;
 
@@ -764,6 +767,8 @@ export class Emulator {
   onExit?: () => void;
   /** DLL modules requested by the executable but not found during loading */
   missingDlls: string[] = [];
+  /** Callback when a DLL is discovered missing at runtime (LoadLibrary) */
+  onMissingDll?: (dllName: string) => void;
   onReboot?: () => void;
   onCreateProcess?: (exeName: string, commandLine: string) => void;
   onCreateChildConsole?: (exeName: string, commandLine: string, hProcess: number) => void;
