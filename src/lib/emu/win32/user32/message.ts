@@ -516,11 +516,13 @@ export function registerMessage(emu: Emulator): void {
     }
 
     if (message === WM_GETTEXTLENGTH) {
+      const text = wnd.title || '';
+      // For EDIT controls, return length with \r\n line endings (matching EM_GETHANDLE buffer)
       const cls = (wnd.classInfo?.baseClassName || wnd.classInfo?.className || '').toUpperCase();
       if (cls === 'EDIT') {
-        console.log(`[EDIT] WM_GETTEXTLENGTH hwnd=0x${hwnd.toString(16)} len=${(wnd.title || '').length}`);
+        return text.replace(/\r?\n/g, '\r\n').length;
       }
-      return (wnd.title || '').length;
+      return text.length;
     }
 
     // BM_SETCHECK (0x00F1)
@@ -749,6 +751,43 @@ export function registerMessage(emu: Emulator): void {
           emu.memory.writeU32(lParam + 12, wnd.height);
         }
         return 0;
+      }
+      // EM_SETHANDLE: set the edit control's text buffer (used by Notepad)
+      const EM_SETHANDLE = 0x00BC;
+      const EM_GETHANDLE = 0x00BD;
+      if (message === EM_SETHANDLE) {
+        const handle = wParam;
+        if (handle) {
+          // wParam is a local memory handle — in our emulator it's a direct pointer
+          // Read UTF-16 string from the buffer
+          const newText = emu.memory.readUTF16String(handle);
+          wnd.title = newText;
+          if (wnd.domInput) wnd.domInput.value = newText;
+          wnd.editBufferHandle = handle;
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
+      if (message === EM_GETHANDLE) {
+        // Sync current text (possibly edited via DOM) back to x86 memory buffer
+        let handle = wnd.editBufferHandle;
+        if (handle && wnd.title !== undefined) {
+          // DOM textarea uses \n, but Win32 Edit buffer expects \r\n
+          const text = wnd.title.replace(/\r?\n/g, '\r\n');
+          const neededBytes = (text.length + 1) * 2; // UTF-16 + null
+          // Reallocate if buffer is too small
+          const currentSize = emu.heapSize(handle);
+          if (currentSize < neededBytes) {
+            handle = emu.reallocHeap(handle, neededBytes);
+            wnd.editBufferHandle = handle;
+          }
+          // Write UTF-16 text to buffer
+          for (let i = 0; i < text.length; i++) {
+            emu.memory.writeU16(handle + i * 2, text.charCodeAt(i));
+          }
+          emu.memory.writeU16(handle + text.length * 2, 0);
+        }
+        return handle || 0;
       }
       if (message === EM_EMPTYUNDOBUFFER) return 0;
       if (message === EM_CANUNDO) return 0; // no undo support
@@ -1860,7 +1899,13 @@ export function registerMessage(emu: Emulator): void {
     }
 
     if (message === WM_GETTEXTLENGTH) {
-      return (wnd.title || '').length;
+      const text = wnd.title || '';
+      // For EDIT controls, return length with \r\n line endings (matching EM_GETHANDLE buffer)
+      const cls = (wnd.classInfo?.baseClassName || wnd.classInfo?.className || '').toUpperCase();
+      if (cls === 'EDIT') {
+        return text.replace(/\r?\n/g, '\r\n').length;
+      }
+      return text.length;
     }
 
     if (!wnd.wndProc) {
