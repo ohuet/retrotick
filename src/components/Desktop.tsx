@@ -63,7 +63,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
     const result = isExeFile(f.data, name);
     if (result.ok && result.peInfo) {
       const additional = new Map<string, ArrayBuffer>();
-      for (const s of stored) if (s.name !== name) additional.set(s.name, s.data);
+      for (const s of stored) if (s.name !== name && !s.name.includes('/')) additional.set(s.name, s.data);
       onRunExe(f.data, result.peInfo, additional, name, commandLine);
     } else {
       const opened = await openWithDefaultApp(name, stored, onRunExe);
