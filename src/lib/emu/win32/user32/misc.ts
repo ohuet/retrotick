@@ -689,4 +689,10 @@ export function registerMisc(emu: Emulator): void {
   user32.register('DdeAccessData', 2, () => 0);
   user32.register('DdeUnaccessData', 1, () => 1);
   user32.register('DdeQueryStringA', 5, () => 0);
+
+  // SetWinEventHook(eventMin, eventMax, hmodWinEventProc, pfnWinEventProc, idProcess, idThread, dwFlags) → HWINEVENTHOOK
+  user32.register('SetWinEventHook', 7, () => emu.handles.alloc('wineventhook', {}));
+
+  // UnhookWinEvent(hWinEventHook) → BOOL
+  user32.register('UnhookWinEvent', 1, () => 1);
 }
