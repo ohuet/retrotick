@@ -295,6 +295,9 @@ export class Emulator {
   registryStore?: RegistryStore;
   profileStore?: ProfileStore;
 
+  /** Internal clipboard text for WM_COPY/WM_PASTE between EDIT controls */
+  _clipboardText: string | null = null;
+
   pe!: LoadedPE;
   peInfo!: PEInfo;
   arrayBuffer!: ArrayBuffer;

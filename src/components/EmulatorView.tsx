@@ -4,7 +4,7 @@ import { parsePE, parseCOM, extractMenus, extractIcons } from '../lib/pe';
 import { Emulator } from '../lib/emu/emulator';
 import type { DialogInfo, ControlOverlay, ProcessRegistry, CommonDialogRequest } from '../lib/emu/emulator';
 import type { WindowInfo } from '../lib/emu/win32/user32/index';
-import { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEMOVE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_COMMAND, WM_SYSCOMMAND, WM_SIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_CHAR, MK_LBUTTON, MK_RBUTTON, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE } from '../lib/emu/win32/types';
+import { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEMOVE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_COMMAND, WM_SYSCOMMAND, WM_SIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_CHAR, WM_INITMENU, WM_INITMENUPOPUP, MK_LBUTTON, MK_RBUTTON, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE } from '../lib/emu/win32/types';
 import { MessageBox, MsgBoxIcon, MB_ICONERROR } from './win2k/MessageBox';
 import { MenuBar } from './win2k/MenuBar';
 import { Window, WS_DLGFRAME, WS_CAPTION, WS_SYSMENU, WS_THICKFRAME, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, getBorderWidth } from './win2k/Window';
@@ -1152,6 +1152,28 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     emu.postMessage(emu.mainWindow, WM_COMMAND, id, 0);
   }, []);
 
+  const handleMenuOpen = useCallback((index: number) => {
+    const emu = emuRef.current;
+    if (!emu || !emu.mainWindow) return;
+    const wnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+    if (!wnd?.wndProc) return;
+    const hMenu = wnd.hMenu || 0;
+    console.log(`[MENU] handleMenuOpen index=${index} hMenu=0x${hMenu.toString(16)} wndProc=0x${wnd.wndProc.toString(16)}`);
+    // Send WM_INITMENU (some apps use this) then WM_INITMENUPOPUP
+    const savedESP = emu.cpu.reg[4];
+    const savedEIP = emu.cpu.eip;
+    const savedWaiting = emu.waitingForMessage;
+    emu.waitingForMessage = false;
+    emu.callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENU, hMenu, 0);
+    // Get submenu handle for INITMENUPOPUP
+    const menuData = hMenu ? emu.handles.get<{ items: { hSubMenu: number }[] }>(hMenu) : null;
+    const hSubMenu = menuData?.items?.[index]?.hSubMenu || 0;
+    emu.callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENUPOPUP, hSubMenu, index);
+    emu.cpu.reg[4] = savedESP;
+    emu.cpu.eip = savedEIP;
+    emu.waitingForMessage = savedWaiting;
+  }, []);
+
   const onTitleBarMouseDown = useCallback((e: PointerEvent) => {
     // Don't start drag on caption buttons
     if ((e.target as HTMLElement).closest('span[style*="border"]')) return;
@@ -1336,7 +1358,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         minimized={false}
         blocked={hasModalDialog}
         onBlockedClick={flashModal}
-        menus={<MenuBar menus={menus} onCommand={handleMenuCommand} onFocus={onFocus} />}
+        menus={<MenuBar menus={menus} onCommand={handleMenuCommand} onFocus={onFocus} onMenuOpen={handleMenuOpen} />}
         onClose={() => {
           const emu = emuRef.current;
           if (emu?.mainWindow) {
