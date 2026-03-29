@@ -287,6 +287,12 @@ export function registerMessage(emu: Emulator): void {
     const trackPaint = message === WM_PAINT && hwnd === emu.mainWindow;
     if (trackPaint) { emu._dispatchPaintUsedBeginPaint = false; }
 
+    // For built-in controls (wndProc=0), handle the message internally
+    if (!wnd.wndProc) {
+      const builtin = handleBuiltinMessage(hwnd, message, wParam, lParam);
+      return builtin ?? 0;
+    }
+
     // Call WndProc via stack frame replacement
     const ret = emu.callWndProc(wnd.wndProc, hwnd, message, wParam, lParam);
     if (ret === undefined) return undefined; // deferred — post-processing skipped
@@ -789,6 +795,56 @@ export function registerMessage(emu: Emulator): void {
         }
         return handle || 0;
       }
+      // Clipboard messages for EDIT controls
+      const WM_CUT = 0x0300, WM_COPY = 0x0301, WM_PASTE = 0x0302, WM_CLEAR = 0x0303;
+      if (message === WM_COPY || message === WM_CUT) {
+        const start = wnd.editSelStart ?? 0;
+        const end = wnd.editSelEnd ?? 0;
+        const s = Math.min(start, end), e = Math.max(start, end);
+        if (s !== e) {
+          emu._clipboardText = text.substring(s, e);
+          if (message === WM_CUT) {
+            wnd.title = text.substring(0, s) + text.substring(e);
+            wnd.editSelStart = s;
+            wnd.editSelEnd = s;
+            wnd.editModified = true;
+            if (wnd.domInput) { wnd.domInput.value = wnd.title; wnd.domInput.selectionStart = wnd.domInput.selectionEnd = s; }
+            emu.notifyControlOverlays();
+          }
+        }
+        return 0;
+      }
+      if (message === WM_PASTE) {
+        if (emu._clipboardText) {
+          const start = wnd.editSelStart ?? text.length;
+          const end = wnd.editSelEnd ?? text.length;
+          const s = Math.min(start, end), e = Math.max(start, end);
+          const newText = text.substring(0, s) + emu._clipboardText + text.substring(e);
+          wnd.title = newText;
+          const newPos = s + emu._clipboardText.length;
+          wnd.editSelStart = newPos;
+          wnd.editSelEnd = newPos;
+          wnd.editModified = true;
+          if (wnd.domInput) { wnd.domInput.value = wnd.title; wnd.domInput.selectionStart = wnd.domInput.selectionEnd = newPos; }
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
+      if (message === WM_CLEAR) {
+        const start = wnd.editSelStart ?? 0;
+        const end = wnd.editSelEnd ?? 0;
+        const s = Math.min(start, end), e = Math.max(start, end);
+        if (s !== e) {
+          wnd.title = text.substring(0, s) + text.substring(e);
+          wnd.editSelStart = s;
+          wnd.editSelEnd = s;
+          wnd.editModified = true;
+          if (wnd.domInput) { wnd.domInput.value = wnd.title; wnd.domInput.selectionStart = wnd.domInput.selectionEnd = s; }
+          emu.notifyControlOverlays();
+        }
+        return 0;
+      }
+
       if (message === EM_EMPTYUNDOBUFFER) return 0;
       if (message === EM_CANUNDO) return 0; // no undo support
       if (message === EM_UNDO) return 0;
@@ -1835,6 +1891,7 @@ export function registerMessage(emu: Emulator): void {
         || (message >= 0x00B0 && message <= 0x00D5) // EM_* Edit control messages
         || (message >= 0x0180 && message <= 0x01B3) // LB_* ListBox messages
         || (message >= 0x0140 && message <= 0x0163) // CB_* ComboBox messages
+        || (message >= 0x0300 && message <= 0x0303) // WM_CUT/WM_COPY/WM_PASTE/WM_CLEAR
         || message >= 0x1000)) { // Common control messages
       return builtin;
     }
@@ -1922,6 +1979,7 @@ export function registerMessage(emu: Emulator): void {
         || (message >= 0x00B0 && message <= 0x00D5) // EM_* Edit control messages
         || (message >= 0x0180 && message <= 0x01B3) // LB_* ListBox messages
         || (message >= 0x0140 && message <= 0x0163) // CB_* ComboBox messages
+        || (message >= 0x0300 && message <= 0x0303) // WM_CUT/WM_COPY/WM_PASTE/WM_CLEAR
         || message >= 0x1000)) { // Common control messages (ListView, TabControl, TreeView, etc.)
       return builtin;
     }
