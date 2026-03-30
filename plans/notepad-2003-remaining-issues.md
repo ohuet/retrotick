@@ -13,42 +13,13 @@
 8. **DispatchMessage for built-in controls** - Now calls `handleBuiltinMessage` for controls with wndProc=0 (was calling `callWndProc(0)` which returned 0 immediately).
 9. **GetFocus** - Now returns first visible child when focus is on parent window (Notepad checks `GetFocus() == hwndEdit`).
 
-### Issue 1: Cut/Copy/Delete menus don't enable in browser (REGRESSION)
+### ~~Issue 1: Cut/Copy/Delete menus don't enable in browser~~ FIXED
 
-**Symptom**: In the browser, selecting text and opening the Edit menu shows Cut/Copy/Delete still grayed. In headless tests, WM_INITMENU correctly enables them.
+**Fix**: Sync DOM textarea selection (`selectionStart`/`selectionEnd`) to `editSelStart`/`editSelEnd` on all EDIT controls before sending WM_INITMENU in `handleMenuOpen` (EmulatorView.tsx). The WM_INITMENU handler calls EM_GETSEL which now returns the correct selection range.
 
-**What works**: `handleMenuOpen` IS called (console shows `[MENU] handleMenuOpen`). The callWndProc for WM_INITMENU executes.
+### ~~Issue 2: Paste stays grayed after Copy~~ FIXED
 
-**Probable cause**: The WM_INITMENU handler in the Notepad WndProc calls `SendMessage(hwndEdit, EM_GETSEL, ...)` to check selection. But `editSelStart`/`editSelEnd` might not be synced from the DOM textarea to the WindowInfo object. The user selects text in the browser's `<textarea>`, but the emulator's `wnd.editSelStart`/`wnd.editSelEnd` remain at 0/0 because the DOM selection isn't synced back.
-
-**How to verify**: Add a log in the EM_GETSEL handler (message.ts ~line 628) to see what values are returned when WM_INITMENU triggers EM_GETSEL:
-```ts
-if (message === EM_GETSEL) {
-    const start = wnd.editSelStart ?? text.length;
-    const end = wnd.editSelEnd ?? text.length;
-    console.log(`[DEBUG] EM_GETSEL: start=${start} end=${end} domInput=${!!wnd.domInput}`);
-```
-
-**Likely fix**: Before sending WM_INITMENU in `handleMenuOpen`, sync the DOM textarea's selection to `wnd.editSelStart`/`wnd.editSelEnd`:
-```ts
-// In handleMenuOpen, before callWndProc:
-for (const [h, data] of emu.handles.findByType('window')) {
-    if (data.classInfo?.className?.toUpperCase() === 'EDIT' && data.domInput) {
-        data.editSelStart = data.domInput.selectionStart ?? 0;
-        data.editSelEnd = data.domInput.selectionEnd ?? 0;
-    }
-}
-```
-
-### Issue 2: Paste stays grayed after Copy (partial fix)
-
-**Symptom**: After copying text via Edit > Copy, the Paste menu item stays grayed.
-
-**Root cause found**: Notepad's WM_COMMAND handler for Copy (ID=769) uses `PostMessage(hwndEdit, WM_COPY, 0, 0)` instead of SendMessage. The WM_COPY message is queued and processed on the next tick. The clipboard text IS set correctly (`emu._clipboardText = "Hello"` in headless test). But the NEXT time the user opens the Edit menu, WM_INITMENU should check `IsClipboardFormatAvailable(CF_TEXT)` and enable Paste.
-
-**Why it fails**: Same as Issue 1 — if WM_INITMENU's EM_GETSEL returns 0/0 (no selection), the menu items stay grayed. The Paste enable/disable is a separate check using `IsClipboardFormatAvailable`, which should work if `_clipboardText` is set. But it may not be called if the WM_INITMENU handler exits early.
-
-**Also related**: `GetFocus` was returning 0 originally. Fixed to return first visible child of mainWindow. The Notepad code checks `GetFocus() == hwndEdit` before doing clipboard operations.
+**Fix**: Same as Issue 1 — once WM_INITMENU executes fully (with correct EM_GETSEL values), it reaches the `IsClipboardFormatAvailable(CF_TEXT)` check and enables Paste correctly.
 
 ### Issue 3: Go To dialog OK button does nothing
 
@@ -87,7 +58,7 @@ for (const [h, data] of emu.handles.findByType('window')) {
 
 ## Next steps
 
-1. Fix Issue 1 by syncing DOM selection to editSelStart/editSelEnd before WM_INITMENU
-2. Verify Issue 2 is resolved by Issue 1 fix (Paste should enable after Copy if IsClipboardFormatAvailable works)
+1. ~~Fix Issue 1 by syncing DOM selection to editSelStart/editSelEnd before WM_INITMENU~~ DONE
+2. ~~Verify Issue 2 is resolved by Issue 1 fix~~ DONE
 3. Investigate Issue 3 (Go To dialog) via browser console logs
 4. Investigate Issue 4 (file load race condition)

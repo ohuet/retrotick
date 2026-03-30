@@ -1164,6 +1164,14 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     if (!wnd?.wndProc) return;
     const hMenu = wnd.hMenu || 0;
     console.log(`[MENU] handleMenuOpen index=${index} hMenu=0x${hMenu.toString(16)} wndProc=0x${wnd.wndProc.toString(16)}`);
+    // Sync DOM textarea selection to emulator state before WM_INITMENU
+    // (apps like Notepad call EM_GETSEL during WM_INITMENU to enable/disable Cut/Copy/Delete)
+    for (const [, child] of emu.handles.findByType<WindowInfo>('window')) {
+      if (child.classInfo?.className?.toUpperCase() === 'EDIT' && child.domInput) {
+        child.editSelStart = child.domInput.selectionStart ?? 0;
+        child.editSelEnd = child.domInput.selectionEnd ?? 0;
+      }
+    }
     // Send WM_INITMENU (some apps use this) then WM_INITMENUPOPUP
     const savedESP = emu.cpu.reg[4];
     const savedEIP = emu.cpu.eip;
