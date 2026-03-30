@@ -31,11 +31,11 @@
 - The dialog dismiss flow should work: dismissDialog → callWndProc(WM_COMMAND/IDOK) → dialog proc calls GetDlgItemInt + EndDialog → _endDialog resolves promise → emuCompleteThunk
 - Need to check browser console for `[DLG] EndDialog` and `[EDIT] GetDlgItemInt` logs when OK is clicked
 
-### Issue 4: File sometimes doesn't load on double-click
+### ~~Issue 4: File sometimes doesn't load on double-click~~ FIXED
 
-**Symptom**: Double-clicking a text file sometimes shows empty Notepad. Closing and re-opening works.
+**Root cause**: `getFileAttributes()` did not check `additionalFiles` for D:\ paths — only `virtualFiles` (populated async from IndexedDB). Files passed via command line were in `additionalFiles` but `GetFileAttributesW` returned INVALID_FILE_ATTRIBUTES, causing Notepad to treat the file as nonexistent in some code paths.
 
-**Not investigated yet**. Could be a race condition with the file loading or the `onShowCommonDialog` callback timing.
+**Fix**: `file-manager.ts`: `getFileAttributes()` now checks `additionalFiles` first for D:\ paths (same lookup order as `findFile()`). Also added `notifyControlOverlays()` to WM_SETTEXT and SetWindowTextA handlers for correctness.
 
 ## Key files modified
 
@@ -61,4 +61,4 @@
 1. ~~Fix Issue 1 by syncing DOM selection to editSelStart/editSelEnd before WM_INITMENU~~ DONE
 2. ~~Verify Issue 2 is resolved by Issue 1 fix~~ DONE
 3. Investigate Issue 3 (Go To dialog) via browser console logs
-4. Investigate Issue 4 (file load race condition)
+4. ~~Investigate Issue 4 (file load race condition)~~ DONE

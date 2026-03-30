@@ -489,10 +489,12 @@ export function registerMessage(emu: Emulator): void {
       }
       if (newTitle !== wnd.title) {
         wnd.title = newTitle;
+        if (wnd.domInput) wnd.domInput.value = newTitle;
         if (wnd.parent && wnd.parent === emu.mainWindow) {
           const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd) { parentWnd.needsPaint = true; }
         }
+        emu.notifyControlOverlays();
       }
       return 1;
     }
@@ -1932,10 +1934,12 @@ export function registerMessage(emu: Emulator): void {
       const newTitle = emu.memory.readUTF16String(lParam);
       if (newTitle !== wnd.title) {
         wnd.title = newTitle;
+        if (wnd.domInput) wnd.domInput.value = newTitle;
         if (wnd.parent && wnd.parent === emu.mainWindow) {
           const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd) { parentWnd.needsPaint = true; }
         }
+        emu.notifyControlOverlays();
       }
       // Forward WM_SETTEXT to custom controls so they update their internal state
       if (wnd.wndProc) {

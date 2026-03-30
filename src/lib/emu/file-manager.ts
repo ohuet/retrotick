@@ -312,6 +312,16 @@ export class DefaultFileManager implements FileManager {
     if (resolved.startsWith('D:\\')) {
       const relPath = resolved.substring(3);
       if (relPath) {
+        // Check additionalFiles first (same as findFile)
+        let sub = relPath;
+        while (sub) {
+          for (const [name] of additionalFiles) {
+            if (name.toUpperCase().replace(/\//g, '\\') === sub) return FILE_ATTRIBUTE_ARCHIVE;
+          }
+          const idx = sub.indexOf('\\');
+          if (idx < 0) break;
+          sub = sub.substring(idx + 1);
+        }
         const folderStore = relPath.replace(/\\/g, '/') + '/';
         if (this.virtualFiles.some(f => f.name.toUpperCase() === folderStore)) {
           return FILE_ATTRIBUTE_DIRECTORY;

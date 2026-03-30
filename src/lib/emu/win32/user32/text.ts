@@ -115,12 +115,13 @@ export function registerText(emu: Emulator): void {
           const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
           if (parentWnd) { parentWnd.needsPaint = true; }
         }
+        emu.notifyControlOverlays();
       }
     }
     return 1;
   });
 
-  // SetWindowTextW — must update Edit controls via notifyControlOverlays
+  // SetWindowTextW
   user32.register('SetWindowTextW', 2, () => {
     const hwnd = emu.readArg(0);
     const textPtr = emu.readArg(1);
