@@ -852,7 +852,15 @@ export function registerMessage(emu: Emulator): void {
       if (message === EM_UNDO) return 0;
       if (message === EM_GETFIRSTVISIBLELINE) return 0;
       if (message === EM_SCROLL) return 0;
-      if (message === EM_SCROLLCARET) return 0;
+      if (message === EM_SCROLLCARET) {
+        if (wnd.domInput) {
+          // Focus + setSelectionRange scrolls the textarea to show the caret
+          wnd.domInput.focus();
+          const pos = wnd.editSelStart ?? 0;
+          wnd.domInput.setSelectionRange(pos, wnd.editSelEnd ?? pos);
+        }
+        return 0;
+      }
       if (message === EM_SETMARGINS) return 0;
       if (message === EM_GETMARGINS) return 0;
     }

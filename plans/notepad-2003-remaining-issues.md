@@ -21,15 +21,15 @@
 
 **Fix**: Same as Issue 1 — once WM_INITMENU executes fully (with correct EM_GETSEL values), it reaches the `IsClipboardFormatAvailable(CF_TEXT)` check and enables Paste correctly.
 
-### Issue 3: Go To dialog OK button does nothing
+### ~~Issue 3: Go To dialog OK button does nothing~~ FIXED
 
-**Symptom**: The "Aller à la ligne" dialog appears, user enters a line number, clicks OK, nothing happens.
+**Root cause (two bugs)**:
+1. EmulatorDialog's OK/Cancel wrapper used `onClick` which bubbled AFTER ControlOverlay's `postCommand` — causing double WM_COMMAND dispatch. The first dispatch (postCommand) went through DefDlgProc → nested callStdcall which corrupted the dialog proc's execution.
+2. `dismissDialog` used `dlgWnd.wndProc` (DefDlgProc) instead of `ds.dlgProc` (the app's dialog proc), adding unnecessary nesting.
 
-**Investigation state**:
-- Dialog template ID=14, Edit control ID=258 for line number
-- `GetDlgItemInt` and `EndDialog` have diagnostic logging added
-- The dialog dismiss flow should work: dismissDialog → callWndProc(WM_COMMAND/IDOK) → dialog proc calls GetDlgItemInt + EndDialog → _endDialog resolves promise → emuCompleteThunk
-- Need to check browser console for `[DLG] EndDialog` and `[EDIT] GetDlgItemInt` logs when OK is clicked
+**Fix**:
+- `EmulatorDialog.tsx`: use `onClickCapture` with `stopPropagation` to prevent postCommand from firing
+- `emulator.ts`: prefer `ds.dlgProc` over `dlgWnd.wndProc` in dismissDialog
 
 ### ~~Issue 4: File sometimes doesn't load on double-click~~ FIXED
 
@@ -60,5 +60,5 @@
 
 1. ~~Fix Issue 1 by syncing DOM selection to editSelStart/editSelEnd before WM_INITMENU~~ DONE
 2. ~~Verify Issue 2 is resolved by Issue 1 fix~~ DONE
-3. Investigate Issue 3 (Go To dialog) via browser console logs
+3. ~~Investigate Issue 3 (Go To dialog) via browser console logs~~ DONE
 4. ~~Investigate Issue 4 (file load race condition)~~ DONE

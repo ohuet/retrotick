@@ -72,6 +72,9 @@ export function EmulatorDialog({ info, emuRef, onDismiss, focused = true, flashT
           <div style={{ width: '100%', height: '100%', background: '#D4D0C8' }}>
             {overlays.map((ctrl) => {
               const rendered = renderControlOverlay(ctrl, dialogEmuRef.current, setPressedControl, pressedControl);
+              // Wrap OK (id=1) and Cancel (id=2) buttons to also dismiss the dialog.
+              // Use onClickCapture to intercept BEFORE ControlOverlay's postCommand fires,
+              // so dismissDialog syncs controlValues before sending WM_COMMAND.
               // Wrap OK (id=1) and Cancel (id=2) buttons to also dismiss the dialog
               if (effectiveClass(ctrl) === 'BUTTON' && (ctrl.controlId === 1 || ctrl.controlId === 2)) {
                 const action = ctrl.controlId;
