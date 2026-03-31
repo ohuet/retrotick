@@ -49,6 +49,9 @@ export function Edit({ text, fontCSS, fontColor, multiline, password, readonly, 
     if (editable && ref.current) {
       ref.current.focus();
       ref.current.select();
+      // Reset: programmatic focus should not block subsequent text syncs
+      // (onFocus sets userEditing=true, but this was not a user interaction)
+      userEditing.current = false;
     }
   }, []);
 
