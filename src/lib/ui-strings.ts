@@ -116,6 +116,14 @@ export interface UiStrings {
   // Missing DLL warning
   missingDlls: string;
   missingDllsHint: string;
+  // Find/Replace dialog
+  findTitle: string;
+  replaceTitle: string;
+  findWhat: string;
+  replaceWith: string;
+  findNext: string;
+  replaceBtn: string;
+  replaceAll: string;
 }
 
 const en: UiStrings = {
@@ -222,6 +230,8 @@ const en: UiStrings = {
   paste: 'Paste',
   confirmDeleteMultiple: "Are you sure you want to delete these {0} items?",
   confirmMultipleDelete: 'Confirm Multiple File Delete',
+  findTitle: 'Find', replaceTitle: 'Replace', findWhat: 'Find what:', replaceWith: 'Replace with:',
+  findNext: 'Find Next', replaceBtn: 'Replace', replaceAll: 'Replace All',
 };
 
 const fr: UiStrings = {
@@ -328,6 +338,8 @@ const fr: UiStrings = {
   paste: 'Coller',
   confirmDeleteMultiple: '\u00cates-vous s\u00fbr de vouloir supprimer ces {0} \u00e9l\u00e9ments\u00a0?',
   confirmMultipleDelete: 'Confirmer la suppression',
+  findTitle: 'Rechercher', replaceTitle: 'Remplacer', findWhat: 'Rechercher :', replaceWith: 'Remplacer par :',
+  findNext: 'Suivant', replaceBtn: 'Remplacer', replaceAll: 'Remplacer tout',
 };
 
 const de: UiStrings = {
@@ -434,6 +446,8 @@ const de: UiStrings = {
   paste: 'Einf\u00fcgen',
   confirmDeleteMultiple: 'M\u00f6chten Sie diese {0} Elemente wirklich l\u00f6schen?',
   confirmMultipleDelete: 'L\u00f6schen mehrerer Dateien best\u00e4tigen',
+  findTitle: 'Suchen', replaceTitle: 'Ersetzen', findWhat: 'Suchen nach:', replaceWith: 'Ersetzen durch:',
+  findNext: 'Weitersuchen', replaceBtn: 'Ersetzen', replaceAll: 'Alle ersetzen',
 };
 
 const es: UiStrings = {
@@ -540,6 +554,8 @@ const es: UiStrings = {
   paste: 'Pegar',
   confirmDeleteMultiple: '\u00bfEst\u00e1 seguro de que desea eliminar estos {0} elementos?',
   confirmMultipleDelete: 'Confirmar eliminaci\u00f3n m\u00faltiple',
+  findTitle: 'Buscar', replaceTitle: 'Reemplazar', findWhat: 'Buscar:', replaceWith: 'Reemplazar por:',
+  findNext: 'Buscar siguiente', replaceBtn: 'Reemplazar', replaceAll: 'Reemplazar todo',
 };
 
 const ja: UiStrings = {
@@ -646,6 +662,8 @@ const ja: UiStrings = {
   paste: '\u8cbc\u308a\u4ed8\u3051',
   confirmDeleteMultiple: '\u3053\u308c\u3089\u306e {0} \u500b\u306e\u9805\u76ee\u3092\u524a\u9664\u3057\u3066\u3082\u3088\u308d\u3057\u3044\u3067\u3059\u304b\uff1f',
   confirmMultipleDelete: '\u8907\u6570\u30d5\u30a1\u30a4\u30eb\u306e\u524a\u9664\u306e\u78ba\u8a8d',
+  findTitle: '\u691c\u7d22', replaceTitle: '\u7f6e\u63db', findWhat: '\u691c\u7d22\u3059\u308b\u6587\u5b57\u5217:', replaceWith: '\u7f6e\u63db\u5f8c\u306e\u6587\u5b57\u5217:',
+  findNext: '\u6b21\u3092\u691c\u7d22', replaceBtn: '\u7f6e\u63db', replaceAll: '\u3059\u3079\u3066\u7f6e\u63db',
 };
 
 const zhCN: UiStrings = {
@@ -752,6 +770,8 @@ const zhCN: UiStrings = {
   paste: '\u7c98\u8d34',
   confirmDeleteMultiple: '\u786e\u5b9a\u8981\u5220\u9664\u8fd9 {0} \u4e2a\u9879\u76ee\u5417\uff1f',
   confirmMultipleDelete: '\u786e\u8ba4\u5220\u9664\u591a\u4e2a\u6587\u4ef6',
+  findTitle: '\u67e5\u627e', replaceTitle: '\u66ff\u6362', findWhat: '\u67e5\u627e\u5185\u5bb9:', replaceWith: '\u66ff\u6362\u4e3a:',
+  findNext: '\u67e5\u627e\u4e0b\u4e00\u4e2a', replaceBtn: '\u66ff\u6362', replaceAll: '\u5168\u90e8\u66ff\u6362',
 };
 
 const ptBR: UiStrings = {
@@ -858,6 +878,8 @@ const ptBR: UiStrings = {
   paste: 'Colar',
   confirmDeleteMultiple: 'Tem certeza de que deseja excluir estes {0} itens?',
   confirmMultipleDelete: 'Confirmar exclus\u00e3o m\u00faltipla',
+  findTitle: 'Localizar', replaceTitle: 'Substituir', findWhat: 'Localizar:', replaceWith: 'Substituir por:',
+  findNext: 'Localizar pr\u00f3xima', replaceBtn: 'Substituir', replaceAll: 'Substituir tudo',
 };
 
 const it: UiStrings = {
@@ -964,6 +986,8 @@ const it: UiStrings = {
   paste: 'Incolla',
   confirmDeleteMultiple: 'Eliminare questi {0} elementi?',
   confirmMultipleDelete: 'Conferma eliminazione multipla',
+  findTitle: 'Trova', replaceTitle: 'Sostituisci', findWhat: 'Trova:', replaceWith: 'Sostituisci con:',
+  findNext: 'Trova successivo', replaceBtn: 'Sostituisci', replaceAll: 'Sostituisci tutto',
 };
 
 const pl: UiStrings = {
@@ -1070,6 +1094,8 @@ const pl: UiStrings = {
   paste: 'Wklej',
   confirmDeleteMultiple: 'Czy na pewno chcesz usun\u0105\u0107 te {0} elementy?',
   confirmMultipleDelete: 'Potwierd\u017a usuni\u0119cie wielu plik\u00f3w',
+  findTitle: 'Znajd\u017a', replaceTitle: 'Zamie\u0144', findWhat: 'Znajd\u017a:', replaceWith: 'Zamie\u0144 na:',
+  findNext: 'Znajd\u017a nast\u0119pny', replaceBtn: 'Zamie\u0144', replaceAll: 'Zamie\u0144 wszystko',
 };
 
 const ko: UiStrings = {
@@ -1176,6 +1202,8 @@ const ko: UiStrings = {
   paste: '\ubd99\uc5ec\ub123\uae30',
   confirmDeleteMultiple: '\uc774 {0}\uac1c \ud56d\ubaa9\uc744 \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?',
   confirmMultipleDelete: '\uc5ec\ub7ec \ud30c\uc77c \uc0ad\uc81c \ud655\uc778',
+  findTitle: '\ucc3e\uae30', replaceTitle: '\ubc14\uafb8\uae30', findWhat: '\ucc3e\uc744 \ub0b4\uc6a9:', replaceWith: '\ubc14\uafb8 \ub0b4\uc6a9:',
+  findNext: '\ub2e4\uc74c \ucc3e\uae30', replaceBtn: '\ubc14\uafb8\uae30', replaceAll: '\ubaa8\ub450 \ubc14\uafb8\uae30',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.
