@@ -16,6 +16,7 @@ import type { ProfileStore } from '../profile-store';
 import { DefaultFileManager } from './file-manager';
 import { VGAState, isVGAPort, syncGraphics } from './dos/vga';
 import { DosAudio } from './dos/audio';
+import { createDosMouseState } from './dos/mouse';
 import type { FileManager } from './file-manager';
 import { renderChildControls as _renderChildControls, notifyControlOverlays as _notifyControlOverlays } from './emu-render';
 import { getDC as _getDC, getWindowDC as _getWindowDC, promoteToMainWindow as _promoteToMainWindow, setupCanvasSize as _setupCanvasSize, beginPaint as _beginPaint, endPaint as _endPaint, syncDCToCanvas as _syncDCToCanvas, releaseChildDC as _releaseChildDC, dispatchToSehHandler as _dispatchToSehHandler, getBrush as _getBrush, getPen as _getPen, loadBitmapResource as _loadBitmapResource, loadBitmapResourceFromModule as _loadBitmapResourceFromModule, loadBitmapResourceByName as _loadBitmapResourceByName, loadCursorResourceByName as _loadCursorResourceByName, loadStringResource as _loadStringResource, loadIconResource as _loadIconResource } from './emu-window';
@@ -342,6 +343,11 @@ export class Emulator {
 
   // DOS (MZ) mode
   isDOS = false;
+  dosMouse = createDosMouseState();
+  _mouseCallbackSavedSP = -1;
+  _mouseCallbackSavedRegs?: {
+    regs: Int32Array; ds: number; es: number; flags: number;
+  };
   dosKeyBuffer: { ascii: number; scan: number }[] = [];
   _dosWaitingForKey: false | 'read' | 'peek' = false;
   _dosExtKeyPending?: number; // scan code pending for second getch() call on extended keys

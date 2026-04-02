@@ -2,6 +2,7 @@ import type { Emulator } from './emulator';
 import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
+import { dispatchMouseCallback } from './dos/mouse';
 import { tryFastLoop, tryCachedLoop } from './fast-loops';
 import { FlatMemory, OFF_ENTRY, OFF_EIP, OFF_EXIT } from './x86/flat-memory';
 import { compileWasmRegion, type WasmImports } from './x86/wasm-module';
@@ -667,6 +668,18 @@ export function emuTick(emu: Emulator): void {
         emu._int09ReturnCS = -1;
       }
     }
+    // Detect RETF from mouse callback by monitoring SP — restore all saved state
+    if (emu._mouseCallbackSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._mouseCallbackSavedSP) {
+      emu._mouseCallbackSavedSP = -1;
+      const saved = emu._mouseCallbackSavedRegs;
+      if (saved) {
+        emu.cpu.reg.set(saved.regs);
+        emu.cpu.ds = saved.ds;
+        emu.cpu.es = saved.es;
+        emu.cpu.setFlags(saved.flags);
+        emu._mouseCallbackSavedRegs = undefined;
+      }
+    }
     // Detect IRET from hardware interrupt handler by monitoring SP (RM dispatch)
     // or IF flag restoration (PM IDT dispatch).
     if (emu._hwIntSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP) {
@@ -765,6 +778,10 @@ export function emuTick(emu: Emulator): void {
       }
     } else if (emu._pendingHwInts.length === 0) {
       emu._hwKeyDelay = 0;
+    }
+    // Dispatch pending mouse callback (far call, returns via RETF)
+    if (emu.dosMouse.pendingCallbackMask && emu._mouseCallbackSavedSP < 0 && emu._hwIntSavedSP < 0) {
+      dispatchMouseCallback(emu);
     }
     if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).

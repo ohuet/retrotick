@@ -372,13 +372,3 @@ export function handleInt7F(cpu: CPU, emu: Emulator): boolean {
   }
   return true;
 }
-
-// --- INT 33h: Mouse ---
-export function handleInt33(cpu: CPU, _emu: Emulator): boolean {
-  const ax = cpu.getReg16(EAX);
-  if (ax === 0x0000) {
-    cpu.setReg16(EAX, 0);
-    cpu.setReg16(EBX, 0);
-  }
-  return true;
-}

@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'preac
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
+import { injectDosMouseEvent } from '../lib/emu/dos/mouse';
 
 // Default Windows console 16-color palette (fallback for Win32 programs)
 const DEFAULT_CONSOLE_COLORS = [
@@ -668,6 +669,14 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     inputRef.current?.focus();
   }, []);
 
+  const handleMouseEvent = useCallback((e: PointerEvent, type: 'move' | 'down' | 'up') => {
+    const target = e.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const px = Math.round((e.clientX - rect.left) * 640 / rect.width);
+    const py = Math.round((e.clientY - rect.top) * 480 / rect.height);
+    injectDosMouseEvent(emu, px, py, 640, 480, e.buttons, type);
+  }, [emu]);
+
   // Measure actual ch width and compute scaleX to fit 80 columns into 640px
   const [scaleX, setScaleX] = useState(1);
   useEffect(() => {
@@ -698,13 +707,20 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const gfxHeight = fb ? fb.height : emu.vga.currentMode.height;
 
   return (
-    <div style={{ position: 'relative', width: '640px', height: '480px', background: '#000' }} onPointerUp={handleClick}>
+    <div
+      style={{ position: 'relative', width: '640px', height: '480px', background: '#000' }}
+      onPointerUp={(e) => { handleMouseEvent(e, 'up'); handleClick(); }}
+      onPointerDown={(e) => handleMouseEvent(e, 'down')}
+      onPointerMove={(e) => handleMouseEvent(e, 'move')}
+      onContextMenu={(e) => e.preventDefault()}
+    >
       {isGfx ? (
         <canvas
           ref={canvasRef}
           width={gfxWidth}
           height={gfxHeight}
           style={{
+            display: 'block',
             width: '640px',
             height: '480px',
             imageRendering: 'pixelated',

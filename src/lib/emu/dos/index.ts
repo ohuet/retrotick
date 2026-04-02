@@ -3,7 +3,8 @@ import type { Emulator } from '../emulator';
 import { handleInt09, handleInt16 } from './keyboard';
 import { handleInt10 } from './video';
 import { handleInt21 } from './int21';
-import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt33, handleInt79, handleInt7F, handleUcdosInt3 } from './misc';
+import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt79, handleInt7F, handleUcdosInt3 } from './misc';
+import { handleInt33 } from './mouse';
 import { handleXms, XMS_INT } from './xms';
 import { handleInt67 } from './ems';
 
