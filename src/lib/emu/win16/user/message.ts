@@ -1134,7 +1134,13 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         const mdiTitle = titleAddr ? emu.memory.readCString(titleAddr) : '';
 
         const classInfo = emu.windowClasses.get(mdiClassName.toUpperCase());
-        console.log(`[WIN16] WM_MDICREATE class="${mdiClassName}" title="${mdiTitle}" ${mdiCX}x${mdiCY} style=0x${mdiStyle.toString(16)} wndProc=0x${(classInfo?.wndProc||0).toString(16)} cbExtra=${classInfo?.cbWndExtra||0} lParam=0x${mdiLParam.toString(16)}`);
+        // Sign-extend 16-bit coordinates (same as MoveWindow/SetWindowPos)
+        const CW_USEDEFAULT = -32768; // 0x8000 sign-extended
+        const mdiXs = (mdiX << 16) >> 16;
+        const mdiYs = (mdiY << 16) >> 16;
+        const mdiCXs = (mdiCX << 16) >> 16;
+        const mdiCYs = (mdiCY << 16) >> 16;
+        console.log(`[WIN16] WM_MDICREATE class="${mdiClassName}" title="${mdiTitle}" ${mdiCXs}x${mdiCYs} style=0x${mdiStyle.toString(16)} wndProc=0x${(classInfo?.wndProc||0).toString(16)} cbExtra=${classInfo?.cbWndExtra||0} lParam=0x${mdiLParam.toString(16)}`);
 
         const WS_CHILD = 0x40000000;
         const WS_VISIBLE = 0x10000000;
@@ -1152,15 +1158,24 @@ export function registerWin16UserMessage(emu: Emulator, user: Win16Module, h: Wi
         const { cw: mdiCW, ch: mdiCH } = getClientSize(wnd.style, false, wnd.width, wnd.height, true);
         const clientW = mdiCW || (emu.canvas?.width ?? 320);
         const clientH = mdiCH || (emu.canvas?.height ?? 200);
+        // Resolve position and size: CW_USEDEFAULT or negative → fill MDICLIENT area;
+        // if requested size exceeds client area, fill it entirely (Windows 3.1 behavior)
+        let childX = (mdiXs === CW_USEDEFAULT || mdiXs < 0) ? 0 : mdiXs;
+        let childY = (mdiYs === CW_USEDEFAULT || mdiYs < 0) ? 0 : mdiYs;
+        let childW = (mdiCXs === CW_USEDEFAULT || mdiCXs <= 0) ? clientW : mdiCXs;
+        let childH = (mdiCYs === CW_USEDEFAULT || mdiCYs <= 0) ? clientH : mdiCYs;
+        if (childW > clientW || childH > clientH) {
+          childX = 0; childY = 0; childW = clientW; childH = clientH;
+        }
         const childHwnd = emu.handles.alloc('window', {
           classInfo: classInfo || { className: mdiClassName, wndProc: 0, rawWndProc: 0, style: 0, hbrBackground: 0, hIcon: 0, hCursor: 0, cbWndExtra: 0 },
           title: mdiTitle,
           style: childStyle,
           exStyle: 0,
-          x: mdiX === 0x8000 ? 0 : mdiX,
-          y: mdiY === 0x8000 ? 0 : mdiY,
-          width: (mdiCX === 0x8000 || mdiCX === 0) ? clientW : mdiCX,
-          height: (mdiCY === 0x8000 || mdiCY === 0) ? clientH : mdiCY,
+          x: childX,
+          y: childY,
+          width: childW,
+          height: childH,
           hMenu: 0,
           parent: hWnd,
           wndProc: classInfo?.wndProc || 0,

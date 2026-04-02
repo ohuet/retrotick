@@ -1187,11 +1187,14 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const savedEIP = emu.cpu.eip;
     const savedWaiting = emu.waitingForMessage;
     emu.waitingForMessage = false;
-    emu.callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENU, hMenu, 0);
+    const callWndProc = emu.isNE
+      ? (wp: number, hw: number, m: number, w: number, l: number) => emu.callWndProc16(wp, hw, m, w, l)
+      : (wp: number, hw: number, m: number, w: number, l: number) => emu.callWndProc(wp, hw, m, w, l);
+    callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENU, hMenu, 0);
     // Get submenu handle for INITMENUPOPUP
     const menuData = hMenu ? emu.handles.get<{ items: { hSubMenu: number }[] }>(hMenu) : null;
     const hSubMenu = menuData?.items?.[index]?.hSubMenu || 0;
-    emu.callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENUPOPUP, hSubMenu, index);
+    callWndProc(wnd.wndProc, emu.mainWindow, WM_INITMENUPOPUP, hSubMenu, index);
     emu.cpu.reg[4] = savedESP;
     emu.cpu.eip = savedEIP;
     emu.waitingForMessage = savedWaiting;
