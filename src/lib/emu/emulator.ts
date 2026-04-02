@@ -426,6 +426,7 @@ export class Emulator {
   _pitWriteHigh = [false, false, false];    // Byte toggle for 16-bit writes
   _pitStartTime = [0, 0, 0];               // performance.now() when each counter was last programmed
   _pitInsnCount = 0;                        // instruction counter for PIT timing in DOS mode
+  _pitLastTotalTicks = [0, 0, 0];          // last total PIT ticks seen (ensures monotonic advance)
 
   // WASM JIT (DOS programs only)
   wasmJitEnabled = false; // set to true to enable WASM JIT for DOS programs
@@ -1404,6 +1405,33 @@ export class Emulator {
     }
   }
 
+  /** Compute current PIT counter value based on wall-clock time.
+   *  The real PIT decrements at exactly 1.193182 MHz from a hardware crystal,
+   *  independent of CPU speed. Programs poll the counter in tight loops and
+   *  detect cycle completion when count stops decreasing (wraps to reload).
+   *  With limited performance.now() resolution (~5μs browser, ~1μs Node),
+   *  consecutive reads may return the same value, causing premature wrap
+   *  detection. Fix: busy-wait until at least 1 PIT tick elapses, ensuring
+   *  the counter always shows real-time progress. Average rate matches the
+   *  real 1.193MHz regardless of timer resolution. */
+  _pitRunningCount(ch: number): number {
+    const reload = this._pitCounters[ch] || 0x10000;
+    const startTime = this._pitStartTime[ch];
+    // Busy-wait until wall clock advances enough for at least 1 new PIT tick.
+    // Typically resolves in < 1μs (Node) or < 5μs (browser). Safety cap at 2ms.
+    let totalTicks: number;
+    const deadline = startTime + (this._pitLastTotalTicks[ch] + reload) / 1193.182;
+    for (;;) {
+      const now = performance.now();
+      totalTicks = Math.floor((now - startTime) * 1193.182);
+      if (totalTicks > this._pitLastTotalTicks[ch]) break;
+      if (now > deadline) { totalTicks = this._pitLastTotalTicks[ch] + 1; break; }
+    }
+    this._pitLastTotalTicks[ch] = totalTicks;
+    const phase = totalTicks % reload;
+    return ((reload - phase) & 0xFFFF) || reload;
+  }
+
   /** Read an I/O port value */
   portIn(port: number): number {
     if (isVGAPort(port)) {
@@ -1452,12 +1480,8 @@ export class Emulator {
             return (val >> 8) & 0xFF;
           }
         }
-        // Not latched: return running counter estimate based on wall-clock time.
-        // Uses _pitStartTime to track when the counter was last programmed.
-        const reload = this._pitCounters[ch] || 0x10000;
-        const elapsedMs = performance.now() - this._pitStartTime[ch];
-        const ticks = Math.floor(elapsedMs * 1193.182) % reload;
-        const count = ((reload - ticks) & 0xFFFF) || reload;
+        // Not latched: return running counter estimate
+        const count = this._pitRunningCount(ch);
         const accessMode = this._pitAccessModes[ch];
         if (accessMode === 1) return count & 0xFF;
         if (accessMode === 2) return (count >> 8) & 0xFF;
@@ -1493,9 +1517,13 @@ export class Emulator {
       }
       case 0x61: { // System control port B
         const val = this._ioPorts.get(0x61) ?? 0;
-        // Bit 4: toggles with refresh cycles (programs use for timing)
-        // Bit 5: timer 2 output (speaker gate)
-        return val ^ 0x10; // Toggle refresh bit on each read
+        // Bit 4: toggles at ~66.287 kHz (every 15.085μs) — RAM refresh timer.
+        // Programs read this in tight loops for microsecond-level delays
+        // (e.g. PC speaker music note durations). Must use wall-clock time.
+        const usec = performance.now() * 1000; // microseconds
+        const refreshBit = (Math.floor(usec / 15.085) & 1) ? 0x10 : 0;
+        // Bit 5: timer 2 output — reflects PIT channel 2 square wave
+        return (val & ~0x30) | refreshBit;
       }
       case 0x64: // Keyboard controller status
         return this._ioPorts.get(0x64) ?? 0;
@@ -1582,10 +1610,12 @@ export class Emulator {
         if (accessMode === 1) { // LSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0xFF00) | value;
           this._pitStartTime[ch] = performance.now();
+          this._pitLastTotalTicks[ch] = 0;
           pitWriteComplete = true;
         } else if (accessMode === 2) { // MSB only
           this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
           this._pitStartTime[ch] = performance.now();
+          this._pitLastTotalTicks[ch] = 0;
           pitWriteComplete = true;
         } else { // LSB then MSB
           if (!this._pitWriteHigh[ch]) {
@@ -1595,6 +1625,7 @@ export class Emulator {
             this._pitCounters[ch] = (this._pitCounters[ch] & 0x00FF) | (value << 8);
             this._pitWriteHigh[ch] = false;
             this._pitStartTime[ch] = performance.now(); // reset on MSB write (complete)
+            this._pitLastTotalTicks[ch] = 0;
             pitWriteComplete = true;
           }
         }
@@ -1618,10 +1649,7 @@ export class Emulator {
             if (!(value & (2 << i))) continue; // Counter not selected
             if (!(value & 0x20)) { // Latch count
               this._pitLatched[i] = true;
-              const reload = this._pitCounters[i] || 0x10000;
-              const elapsedMs = performance.now() - this._pitStartTime[i];
-              const ticks = Math.floor(elapsedMs * 1193.182) % reload;
-              this._pitLatchValues[i] = ((reload - ticks) & 0xFFFF) || reload;
+              this._pitLatchValues[i] = this._pitRunningCount(i);
             }
           }
           break;
@@ -1630,10 +1658,7 @@ export class Emulator {
         if (accessMode === 0) {
           // Latch command
           this._pitLatched[ch] = true;
-          const reload = this._pitCounters[ch] || 0x10000;
-          const elapsedMs = performance.now() - this._pitStartTime[ch];
-          const ticks = Math.floor(elapsedMs * 1193.182) % reload;
-          this._pitLatchValues[ch] = ((reload - ticks) & 0xFFFF) || reload;
+          this._pitLatchValues[ch] = this._pitRunningCount(ch);
         } else {
           this._pitAccessModes[ch] = accessMode;
           this._pitModes[ch] = (value >> 1) & 7;

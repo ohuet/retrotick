@@ -1059,6 +1059,23 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   const defaultVec = new Map<number, number>();
   for (let i = 0; i < 256; i++) defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
 
+  // DOS-originated interrupts get stubs in a "DOS kernel" segment (0x0050)
+  // instead of F000 BIOS ROM. Programs with anti-tamper code (e.g. KeyMaker)
+  // check IVT segments to verify a real DOS environment.
+  const DOS_KERNEL_SEG = 0x0050;
+  const DOS_KERNEL_BASE = DOS_KERNEL_SEG * 16; // linear 0x500 (right after BDA)
+  const dosInts = [0x20, 0x21, 0x25, 0x26, 0x27, 0x2F];
+  for (let idx = 0; idx < dosInts.length; idx++) {
+    const intNum = dosInts[idx];
+    const off = idx * 5;
+    emu.memory.writeU8(DOS_KERNEL_BASE + off, 0xCD);
+    emu.memory.writeU8(DOS_KERNEL_BASE + off + 1, intNum);
+    emu.memory.writeU8(DOS_KERNEL_BASE + off + 2, 0xCA);
+    emu.memory.writeU8(DOS_KERNEL_BASE + off + 3, 0x02);
+    emu.memory.writeU8(DOS_KERNEL_BASE + off + 4, 0x00);
+    defaultVec.set(intNum, (DOS_KERNEL_SEG << 16) | off);
+  }
+
   for (let i = 0; i < 256; i++) {
     const vec = defaultVec.get(i)!;
     emu.memory.writeU16(i * 4, vec & 0xFFFF);

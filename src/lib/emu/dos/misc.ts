@@ -24,6 +24,12 @@ export function handleInt15(cpu: CPU, _emu: Emulator): boolean {
       cpu.setFlag(CF, false);
       break;
     }
+    case 0x88: { // Get extended memory size (in KB above 1MB)
+      // Return AX = KB of extended memory (report 15MB = 15360 KB)
+      cpu.setReg16(EAX, 15360);
+      cpu.setFlag(CF, false);
+      break;
+    }
     case 0xC2: { // PS/2 Pointing device
       // Not installed
       cpu.setFlag(CF, true);

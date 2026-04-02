@@ -631,10 +631,12 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
       const ch = al;
       const count = cpu.getReg16(ECX);
       if (emu.isGraphicsMode) {
+        // In graphics mode, BL is the foreground color (same as AH=09)
+        const color = cpu.reg[EBX] & 0xFF;
         let cx = emu.consoleCursorX;
         let cy = emu.consoleCursorY;
         for (let i = 0; i < count; i++) {
-          drawCharGraphics(cpu, emu, ch, 0x0F, cx * 8, cy * (emu.charHeight || 8)); // default white on black
+          drawCharGraphics(cpu, emu, ch, color, cx * 8, cy * (emu.charHeight || 8));
           cx++;
           if (cx >= cols) { cx = 0; cy++; }
           if (cy >= rows) break;

@@ -23,6 +23,9 @@ function isFromSyntheticBiosStub(cpu: CPU, biosDefault: number): boolean {
 
 /** Handle DOS/BIOS interrupts. Returns true if handled, false if not. */
 export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
+  if (emu.traceApi && intNum !== 0x08) {
+    console.log(`[DOS] INT ${intNum.toString(16).padStart(2, '0')}h AH=${((cpu.getReg16(EAX) >>> 8) & 0xFF).toString(16).padStart(2, '0')}`);
+  }
   // When UCDOS is active and no custom INT 3 handler installed,
   // handle INT 3 in JS as UCDOS runtime API.
   if (intNum === 3 && emu._dosUcdosStubSeg) {
@@ -118,13 +121,46 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       return true;
     case 0x1A: return handleInt1A(cpu, emu);
     case 0x2F: return handleInt2F(cpu, emu);
-    case 0x25: // Absolute Disk Read — return error (drive not ready)
-    case 0x26: { // Absolute Disk Write — return error
-      // INT 25h/26h leave the original flags on the stack.
-      // The CPU already pushed flags+CS+IP for the INT instruction.
-      // These interrupts push an extra copy of flags that the caller must POPF.
+    case 0x25: { // Absolute Disk Read (fake — returns synthetic boot sector)
+      // Some programs (KeyMaker 3.0) read the boot sector just to sniff drive
+      // geometry or stash copy-protection keys. We don't have a real disk, so
+      // hand them a plausible-looking FAT16 BPB and hope they're satisfied.
+      // INT 25h/26h leave an extra copy of flags on the stack
       cpu.push16(cpu.getFlags() & 0xFFFF);
-      // Return CF=1 with error code 0x02 (drive not ready) in AX
+      const sectorCount = cpu.getReg16(1); // CX
+      const startSector = cpu.getReg16(2); // DX
+      const bufOff = cpu.getReg16(3); // BX
+      const bufAddr = cpu.ds * 16 + bufOff;
+      if (startSector === 0 && sectorCount >= 1) {
+        // Return a minimal FAT16 boot sector (BPB)
+        const bpb = new Uint8Array(512);
+        bpb[0] = 0xEB; bpb[1] = 0x3C; bpb[2] = 0x90; // JMP short + NOP
+        // OEM name
+        const oem = 'MSDOS5.0';
+        for (let i = 0; i < 8; i++) bpb[3 + i] = oem.charCodeAt(i);
+        // BPB fields
+        bpb[11] = 0x00; bpb[12] = 0x02; // bytes per sector = 512
+        bpb[13] = 0x08;                  // sectors per cluster = 8
+        bpb[14] = 0x01; bpb[15] = 0x00; // reserved sectors = 1
+        bpb[16] = 0x02;                  // number of FATs = 2
+        bpb[17] = 0x00; bpb[18] = 0x02; // root dir entries = 512
+        // total sectors (small) = 0 (use large)
+        bpb[19] = 0x00; bpb[20] = 0x00;
+        bpb[21] = 0xF8;                  // media descriptor = hard disk
+        bpb[22] = 0x00; bpb[23] = 0x01; // sectors per FAT = 256
+        bpb[24] = 0x3F; bpb[25] = 0x00; // sectors per track = 63
+        bpb[26] = 0xFF; bpb[27] = 0x00; // number of heads = 255
+        // hidden sectors = 0
+        // total sectors (large) = 1048576 (~512MB)
+        bpb[32] = 0x00; bpb[33] = 0x00; bpb[34] = 0x10; bpb[35] = 0x00;
+        bpb[510] = 0x55; bpb[511] = 0xAA; // boot signature
+        for (let i = 0; i < 512; i++) cpu.mem.writeU8(bufAddr + i, bpb[i]);
+      }
+      cpu.setFlag(0x001, false); // CF=0 success
+      return true;
+    }
+    case 0x26: { // Absolute Disk Write — return error
+      cpu.push16(cpu.getFlags() & 0xFFFF);
       cpu.setFlag(0x001, true); // CF
       cpu.setReg16(EAX, 0x0002);
       return true;

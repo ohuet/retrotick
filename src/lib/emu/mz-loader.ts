@@ -80,6 +80,7 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   memory.writeU8(pspLinear + 0x00, 0xCD); // INT 20h
   memory.writeU8(pspLinear + 0x01, 0x20);
   memory.writeU16(pspLinear + 0x02, topSeg);
+  memory.writeU16(pspLinear + 0x16, LOAD_SEG); // parent PSP = self (top-level process)
 
   // Write environment
   const envLinear = ENV_SEG * 16;
@@ -191,6 +192,7 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
   memory.writeU8(pspLinear + 0x00, 0xCD); // INT 20h
   memory.writeU8(pspLinear + 0x01, 0x20);
   memory.writeU16(pspLinear + 0x02, topSeg);
+  memory.writeU16(pspLinear + 0x16, LOAD_SEG); // parent PSP = self (top-level process)
 
   // Write environment
   const envLinear = ENV_SEG * 16;
