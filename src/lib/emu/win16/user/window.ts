@@ -624,7 +624,6 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const [hWnd, _hInsertAfter, x, y, cx, cy, uFlags] = emu.readPascalArgs16([2, 2, 2, 2, 2, 2, 2]);
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (!wnd) return 0;
-
     const SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2;
     const SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
     let sizeChanged = false;
