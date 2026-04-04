@@ -554,6 +554,7 @@ export function emuCallNative(emu: Emulator, addr: number): number | undefined {
 }
 
 const BATCH_SIZE = 500000;
+const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
 const DOS_POST_KEY_STEPS = 0x80;
 
 // WASM JIT diagnostics — logs every ~1s
@@ -598,7 +599,6 @@ export function emuTick(emu: Emulator): void {
 
   const tickStart = performance.now();
   let stepCount = 0;
-  const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
   const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
   let dosYieldAfterKeyAt = -1;
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
@@ -1237,7 +1237,14 @@ export function emuTick(emu: Emulator): void {
     } else if (emu.isDOS) {
       // DOS games need maximum throughput — MessageChannel avoids setTimeout's
       // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
-      scheduleImmediate(emu.tick);
+      if (emu.dosSpeedFactor < 1) {
+        // Throttle: run 16ms of instructions, then idle proportionally.
+        // delay = 16 * (1/speed - 1)  →  0.5x = 16ms, 0.25x = 48ms
+        const delay = DOS_TICK_MS * (1 / emu.dosSpeedFactor - 1);
+        setTimeout(emu.tick, delay);
+      } else {
+        scheduleImmediate(emu.tick);
+      }
     } else {
       requestAnimationFrame(emu.tick);
     }

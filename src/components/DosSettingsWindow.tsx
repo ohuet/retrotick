@@ -11,6 +11,13 @@ const radioStyle: Record<string, string | number> = {
   marginBottom: '4px',
 };
 
+const SPEED_OPTIONS = [
+  { value: 1, label: '1x' },
+  { value: 0.75, label: '0.75x' },
+  { value: 0.5, label: '0.5x' },
+  { value: 0.25, label: '0.25x' },
+];
+
 interface DosSettingsWindowProps {
   onClose: () => void;
   onFocus: () => void;
@@ -63,6 +70,20 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
                 />
                 {t().textRendererCanvas}
               </label>
+            </div>
+
+            {/* Speed */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelSpeed}</div>
+              <select
+                style={{ font: FONT, width: '100px', background: '#FFF' }}
+                value={settings.speed}
+                onChange={(e) => setSettings(s => ({ ...s, speed: Number((e.target as HTMLSelectElement).value) }))}
+              >
+                {SPEED_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
             </div>
 
             {/* JIT compiler */}

@@ -436,6 +436,7 @@ export class Emulator {
 
   // WASM JIT (DOS programs only)
   wasmJitEnabled = false; // set to true to enable WASM JIT for DOS programs
+  dosSpeedFactor = 1; // 1 = full speed, 0.5 = half, 0.25 = quarter
   flatMemory: FlatMemory | null = null;  // created lazily for DOS programs
   wasmRegions = new Map<number, WasmCompiledRegion>();  // EIP-base → compiled region
   _wasmPending = new Set<number>();  // addresses with pending compilations

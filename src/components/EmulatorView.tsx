@@ -691,7 +691,11 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
         // Load child (this creates its own consoleBuffer via initConsoleBuffer)
         await childEmu.load(childData, childPeInfo, canvas);
-        if (childEmu.isDOS) childEmu.wasmJitEnabled = loadDosSettings().jitEnabled;
+        if (childEmu.isDOS) {
+          const ds = loadDosSettings();
+          childEmu.wasmJitEnabled = ds.jitEnabled;
+          childEmu.dosSpeedFactor = ds.speed;
+        }
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
         childEmu.consoleBuffer = emu.consoleBuffer;
@@ -750,8 +754,12 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Load registry from IndexedDB then start
       initAndRun().then(() => {
-        // Enable WASM JIT if configured in DOS Settings
-        if (emu.isDOS) emu.wasmJitEnabled = loadDosSettings().jitEnabled;
+        // Apply DOS Settings
+        if (emu.isDOS) {
+          const ds = loadDosSettings();
+          emu.wasmJitEnabled = ds.jitEnabled;
+          emu.dosSpeedFactor = ds.speed;
+        }
 
         // Assign shared AudioContext — created in App during user gesture
         if (sharedAudioContext) {
@@ -801,6 +809,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       if (iconUrl) URL.revokeObjectURL(iconUrl);
     };
   }, [arrayBuffer, peInfo, resetCount]);
+
+  // Live-update DOS settings (speed, JIT) without restarting
+  useEffect(() => {
+    const onSettingsChanged = () => {
+      const emu = emuRef.current;
+      if (!emu || !emu.isDOS) return;
+      const ds = loadDosSettings();
+      emu.wasmJitEnabled = ds.jitEnabled;
+      emu.dosSpeedFactor = ds.speed;
+    };
+    window.addEventListener('retrotick-settings-changed', onSettingsChanged);
+    return () => window.removeEventListener('retrotick-settings-changed', onSettingsChanged);
+  }, []);
 
   // File open/save dialogs are now rendered as FileDialog components (see JSX below)
 

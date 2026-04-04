@@ -81,6 +81,7 @@ export interface UiStrings {
   labelTextRenderer: string;
   textRendererDom: string;
   textRendererCanvas: string;
+  labelSpeed: string;
   labelJit: string;
   jitExperimental: string;
   // Properties dialog
@@ -200,6 +201,7 @@ const en: UiStrings = {
   labelTextRenderer: 'Text rendering',
   textRendererDom: 'DOM (text selectable)',
   textRendererCanvas: 'Canvas (precise, no text selection)',
+  labelSpeed: 'Speed',
   labelJit: 'WASM JIT Compiler',
   jitExperimental: 'Enable (experimental)',
   properties: 'Properties',
@@ -308,6 +310,7 @@ const fr: UiStrings = {
   labelTextRenderer: 'Rendu texte',
   textRendererDom: 'DOM (texte s\u00e9lectionnable)',
   textRendererCanvas: 'Canvas (pr\u00e9cis, pas de s\u00e9lection de texte)',
+  labelSpeed: 'Vitesse',
   labelJit: 'Compilateur WASM JIT',
   jitExperimental: 'Activer (exp\u00e9rimental)',
   properties: 'Propri\u00e9t\u00e9s',
@@ -416,6 +419,7 @@ const de: UiStrings = {
   labelTextRenderer: 'Textdarstellung',
   textRendererDom: 'DOM (Text ausw\u00e4hlbar)',
   textRendererCanvas: 'Canvas (pr\u00e4zise, kein Text ausw\u00e4hlbar)',
+  labelSpeed: 'Geschwindigkeit',
   labelJit: 'WASM-JIT-Compiler',
   jitExperimental: 'Aktivieren (experimentell)',
   properties: 'Eigenschaften',
@@ -524,6 +528,7 @@ const es: UiStrings = {
   labelTextRenderer: 'Renderizado de texto',
   textRendererDom: 'DOM (texto seleccionable)',
   textRendererCanvas: 'Canvas (preciso, sin selecci\u00f3n de texto)',
+  labelSpeed: 'Velocidad',
   labelJit: 'Compilador WASM JIT',
   jitExperimental: 'Activar (experimental)',
   properties: 'Propiedades',
@@ -632,6 +637,7 @@ const ja: UiStrings = {
   labelTextRenderer: '\u30c6\u30ad\u30b9\u30c8\u63cf\u753b',
   textRendererDom: 'DOM (\u30c6\u30ad\u30b9\u30c8\u9078\u629e\u53ef)',
   textRendererCanvas: 'Canvas (\u6b63\u78ba\u3001\u30c6\u30ad\u30b9\u30c8\u9078\u629e\u4e0d\u53ef)',
+  labelSpeed: '\u901f\u5ea6',
   labelJit: 'WASM JIT \u30b3\u30f3\u30d1\u30a4\u30e9',
   jitExperimental: '\u6709\u52b9\u306b\u3059\u308b\uff08\u5b9f\u9a13\u7684\uff09',
   properties: '\u30d7\u30ed\u30d1\u30c6\u30a3',
@@ -740,6 +746,7 @@ const zhCN: UiStrings = {
   labelTextRenderer: '\u6587\u672c\u6e32\u67d3',
   textRendererDom: 'DOM (\u53ef\u9009\u62e9\u6587\u672c)',
   textRendererCanvas: 'Canvas (\u7cbe\u786e\uff0c\u4e0d\u53ef\u9009\u62e9\u6587\u672c)',
+  labelSpeed: '\u901f\u5ea6',
   labelJit: 'WASM JIT \u7f16\u8bd1\u5668',
   jitExperimental: '\u542f\u7528\uff08\u5b9e\u9a8c\u6027\uff09',
   properties: '\u5c5e\u6027',
@@ -848,6 +855,7 @@ const ptBR: UiStrings = {
   labelTextRenderer: 'Renderiza\u00e7\u00e3o de texto',
   textRendererDom: 'DOM (texto selecion\u00e1vel)',
   textRendererCanvas: 'Canvas (preciso, sem sele\u00e7\u00e3o de texto)',
+  labelSpeed: 'Velocidade',
   labelJit: 'Compilador WASM JIT',
   jitExperimental: 'Ativar (experimental)',
   properties: 'Propriedades',
@@ -956,6 +964,7 @@ const it: UiStrings = {
   labelTextRenderer: 'Rendering testo',
   textRendererDom: 'DOM (testo selezionabile)',
   textRendererCanvas: 'Canvas (preciso, senza selezione testo)',
+  labelSpeed: 'Velocit\u00e0',
   labelJit: 'Compilatore WASM JIT',
   jitExperimental: 'Attivare (sperimentale)',
   properties: 'Propriet\u00e0',
@@ -1064,6 +1073,7 @@ const pl: UiStrings = {
   labelTextRenderer: 'Renderowanie tekstu',
   textRendererDom: 'DOM (tekst do zaznaczenia)',
   textRendererCanvas: 'Canvas (dok\u0142adny, bez zaznaczania tekstu)',
+  labelSpeed: 'Pr\u0119dko\u015b\u0107',
   labelJit: 'Kompilator WASM JIT',
   jitExperimental: 'W\u0142\u0105cz (eksperymentalny)',
   properties: 'W\u0142a\u015bciwo\u015bci',
@@ -1172,6 +1182,7 @@ const ko: UiStrings = {
   labelTextRenderer: '\ud14d\uc2a4\ud2b8 \ub80c\ub354\ub9c1',
   textRendererDom: 'DOM (\ud14d\uc2a4\ud2b8 \uc120\ud0dd \uac00\ub2a5)',
   textRendererCanvas: 'Canvas (\uc815\ubc00, \ud14d\uc2a4\ud2b8 \uc120\ud0dd \ubd88\uac00)',
+  labelSpeed: '\uc18d\ub3c4',
   labelJit: 'WASM JIT \ucef4\ud30c\uc77c\ub7ec',
   jitExperimental: '\ud65c\uc131\ud654 (\uc2e4\ud5d8\uc801)',
   properties: '\uc18d\uc131',

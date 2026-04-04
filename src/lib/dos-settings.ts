@@ -6,6 +6,8 @@ export interface DosSettings {
   textRenderer: 'dom' | 'canvas';
   /** Enable experimental WASM JIT compiler for DOS programs. */
   jitEnabled: boolean;
+  /** CPU speed factor: 1 = full speed, 0.5 = half speed, etc. */
+  speed: number;
 }
 
 const STORAGE_KEY = 'retrotick-dos';
@@ -13,6 +15,7 @@ const STORAGE_KEY = 'retrotick-dos';
 const DEFAULTS: DosSettings = {
   textRenderer: 'dom',
   jitEnabled: false,
+  speed: 1,
 };
 
 export function loadDosSettings(): DosSettings {
