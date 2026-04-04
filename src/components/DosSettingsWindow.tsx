@@ -14,8 +14,12 @@ const radioStyle: Record<string, string | number> = {
 const SPEED_OPTIONS = [
   { value: 1, label: '1x' },
   { value: 0.75, label: '0.75x' },
+  { value: 0.65, label: '0.65x' },
   { value: 0.5, label: '0.5x' },
+  { value: 0.35, label: '0.35x' },
   { value: 0.25, label: '0.25x' },
+  { value: 0.15, label: '0.15x' },
+  { value: 0.1, label: '0.1x' },
 ];
 
 interface DosSettingsWindowProps {

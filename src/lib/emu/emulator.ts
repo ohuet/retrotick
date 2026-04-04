@@ -1738,7 +1738,9 @@ export class Emulator {
           ];
           const isExtended = this._injectE0Pending || scancode >= 0x3B;
           const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
-          this.dosKeyBuffer.push({ ascii, scan: scancode });
+          if (this.dosKeyBuffer.length < 16) {
+            this.dosKeyBuffer.push({ ascii, scan: scancode });
+          }
           this._injectE0Pending = false;
         }
       }
