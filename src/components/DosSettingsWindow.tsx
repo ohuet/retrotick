@@ -11,6 +11,8 @@ const radioStyle: Record<string, string | number> = {
   marginBottom: '4px',
 };
 
+const REFRESH_OPTIONS = [30, 45, 60, 70, 100];
+
 const SPEED_OPTIONS = [
   { value: 1, label: '1x' },
   { value: 0.75, label: '0.75x' },
@@ -86,6 +88,20 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
               >
                 {SPEED_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Refresh rate */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelRefreshRate}</div>
+              <select
+                style={{ font: FONT, width: '100px', background: '#FFF' }}
+                value={settings.refreshRate}
+                onChange={(e) => setSettings(s => ({ ...s, refreshRate: Number((e.target as HTMLSelectElement).value) }))}
+              >
+                {REFRESH_OPTIONS.map(hz => (
+                  <option key={hz} value={hz}>{hz} Hz</option>
                 ))}
               </select>
             </div>

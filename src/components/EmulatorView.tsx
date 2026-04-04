@@ -695,6 +695,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           const ds = loadDosSettings();
           childEmu.wasmJitEnabled = ds.jitEnabled;
           childEmu.dosSpeedFactor = ds.speed;
+          childEmu.vga.refreshHz = ds.refreshRate;
         }
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
@@ -759,6 +760,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           const ds = loadDosSettings();
           emu.wasmJitEnabled = ds.jitEnabled;
           emu.dosSpeedFactor = ds.speed;
+          emu.vga.refreshHz = ds.refreshRate;
         }
 
         // Assign shared AudioContext — created in App during user gesture
@@ -818,6 +820,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       const ds = loadDosSettings();
       emu.wasmJitEnabled = ds.jitEnabled;
       emu.dosSpeedFactor = ds.speed;
+      emu.vga.refreshHz = ds.refreshRate;
+      emu.vga.invalidateRetraceCache();
     };
     window.addEventListener('retrotick-settings-changed', onSettingsChanged);
     return () => window.removeEventListener('retrotick-settings-changed', onSettingsChanged);

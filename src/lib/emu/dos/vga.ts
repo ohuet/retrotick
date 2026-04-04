@@ -2,8 +2,8 @@
 
 import type { Emulator } from '../emulator';
 
-/** VGA refresh rate in Hz (standard CRT = 70). Increase to speed up frame-locked demos. */
-export const VGA_REFRESH_HZ = 70;
+/** Default VGA refresh rate in Hz (standard CRT = 70). */
+export const VGA_REFRESH_HZ_DEFAULT = 70;
 
 export interface VGAMode {
   mode: number;
@@ -135,6 +135,7 @@ export class VGAState {
   dirty = false;
 
   // VGA retrace timing
+  refreshHz = VGA_REFRESH_HZ_DEFAULT; // configurable refresh rate
   private lastVblankSync = false;  // was previous 0x3DA read in VBlank?
   pendingSync = false;             // set when VBlank starts; tick should sync & present
   lastSyncTime = 0;                // performance.now() of last syncGraphics call
@@ -149,6 +150,9 @@ export class VGAState {
   private _retraceConstsDirty = true;
   private _cached3DA = 0;          // cached 0x3DA result (recomputed every 64 polls)
 
+  /** Invalidate retrace cache so next 0x3DA read picks up new refreshHz */
+  invalidateRetraceCache(): void { this._retraceConstsDirty = true; }
+
   /** Refresh retrace constants when CRTC regs change */
   private _updateRetraceConsts(): void {
     // Use raw VDE+1 (actual scanlines on CRT) for retrace timing, NOT getVisibleHeight()
@@ -158,7 +162,7 @@ export class VGAState {
     const overflow = this.crtcRegs[0x07];
     const visibleScanlines = (vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0)) + 1;
     const nativeTotalLines = (visibleScanlines <= 400) ? 449 : 525;
-    const totalLines = Math.round((1000000 / VGA_REFRESH_HZ) / 31.778);
+    const totalLines = Math.round((1000000 / this.refreshHz) / 31.778);
     this._cachedVisibleLines = Math.round(totalLines * visibleScanlines / nativeTotalLines);
     this._cachedFrameUs = totalLines * 31.778;
     this._retraceConstsDirty = false;

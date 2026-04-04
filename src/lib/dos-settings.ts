@@ -8,6 +8,8 @@ export interface DosSettings {
   jitEnabled: boolean;
   /** CPU speed factor: 1 = full speed, 0.5 = half speed, etc. */
   speed: number;
+  /** VGA refresh rate in Hz (standard CRT = 70). */
+  refreshRate: number;
 }
 
 const STORAGE_KEY = 'retrotick-dos';
@@ -16,6 +18,7 @@ const DEFAULTS: DosSettings = {
   textRenderer: 'dom',
   jitEnabled: false,
   speed: 1,
+  refreshRate: 70,
 };
 
 export function loadDosSettings(): DosSettings {
