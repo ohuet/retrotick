@@ -11,4 +11,11 @@ export default defineConfig({
 		...(process.env.VITE_ENABLE_ANALYZER === '1' ? [analyzer()] : []),
 		viteSingleFile(),
 	],
+	server: {
+		headers: {
+			// Required for SharedArrayBuffer (used by the AudioWorklet ring buffer).
+			'Cross-Origin-Opener-Policy': 'same-origin',
+			'Cross-Origin-Embedder-Policy': 'require-corp',
+		},
+	},
 });

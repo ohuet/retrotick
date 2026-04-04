@@ -618,7 +618,9 @@ export function emuTick(emu: Emulator): void {
       emu._dosLastTimerTick += timerIntervalMs;
       // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
       if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-      emu._pendingHwInts.push(0x08);
+      const timerInt = emu._picMasterBase; // IRQ 0
+      if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt))
+        emu._pendingHwInts.push(timerInt);
       emu._dosHalted = false;
     }
     // Also wake on pending keyboard interrupt
@@ -715,15 +717,16 @@ export function emuTick(emu: Emulator): void {
       // DOS games do rapid VGA writes and yielding on each one kills throughput)
       if (!emu.isDOS && emu.screenDirty) { emu.screenDirty = false; break; }
 
-      // DOS timer interrupt (INT 08h) — frequency derived from PIT channel 0
+      // DOS timer interrupt — frequency derived from PIT channel 0
       if (emu.isDOS) {
         const pitReload = emu._pitCounters[0] || 0x10000;
         const timerIntervalMs = (pitReload / 1193182) * 1000;
         if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-          if (!emu._pendingHwInts.includes(0x08)) {
+          const timerInt = emu._picMasterBase; // IRQ 0
+          if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt)) {
             emu._dosLastTimerTick += timerIntervalMs;
             if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-            emu._pendingHwInts.push(0x08);
+            emu._pendingHwInts.push(timerInt);
           }
           emu._dosHalted = false;
         }
@@ -790,10 +793,12 @@ export function emuTick(emu: Emulator): void {
       // technically incorrect but matches the practical behavior needed.
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
-      if (intNum >= 0x08 && intNum <= 0x0F) {
-        emu._picMasterISR |= (1 << (intNum - 0x08));
-      } else if (intNum >= 0x70 && intNum <= 0x77) {
-        emu._picSlaveISR |= (1 << (intNum - 0x70));
+      const masterBase = emu._picMasterBase;
+      const slaveBase = emu._picSlaveBase;
+      if (intNum >= masterBase && intNum < masterBase + 8) {
+        emu._picMasterISR |= (1 << (intNum - masterBase));
+      } else if (intNum >= slaveBase && intNum < slaveBase + 8) {
+        emu._picSlaveISR |= (1 << (intNum - slaveBase));
       }
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
       // Always read IVT memory first — programs chain multiple handlers
@@ -1219,6 +1224,10 @@ export function emuTick(emu: Emulator): void {
       syncVideoMemory(emu);
     }
   }
+
+  // Flush audio at end of tick — ensures the AudioWorklet ring buffer is fed
+  // even when scheduleImmediate starves setInterval's fill callback at 1x speed.
+  if (emu.isDOS) emu.dosAudio.flushAudio();
 
   if (emu.running && !emu.halted && !emu.waitingForMessage) {
     emu._tickCount++;

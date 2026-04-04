@@ -277,13 +277,14 @@ export class SoundBlasterDSP {
     }
 
     if (this.dmaTransferred >= this.dmaLength) {
-      // Transfer complete
-      dma.status |= 0x02; // TC bit for channel 1
+      // DSP block complete — fire IRQ.
+      // Do NOT reload DMA registers here: the DMA controller manages its own
+      // address/count independently (reloaded only on real DMA TC in the inner
+      // loop above). For double-buffering, the DMA buffer is 2× the DSP block
+      // size and must continue from its current position, not restart.
       if (this.dmaAutoInit) {
-        // Reload from base registers
-        dma.currentAddr[1] = dma.baseAddr[1];
-        dma.currentCount[1] = dma.baseCount[1];
         this.dmaTransferred = 0;
+        this.dmaStartTime = performance.now();
       } else {
         this.dmaActive = false;
       }
