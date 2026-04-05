@@ -78,6 +78,7 @@ export class CPU {
   es = 0; // extra segment selector
   ss = 0; // stack segment selector
   segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
+  segLimits: Map<number, number> = new Map<number, number>(); // selector → segment limit
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
   _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
   _inhibitIRQ = false; // true after MOV SS/POP SS (suppresses HW IRQ for 1 instruction)

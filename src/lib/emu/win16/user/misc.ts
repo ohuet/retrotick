@@ -383,6 +383,9 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 269: GlobalDeleteAtom — 2 bytes
   user.register('GlobalDeleteAtom', 2, () => 0, 269);
 
+  // Ordinal 270: DCHook(hDC, code, data, lParam) — 12 bytes (2+2+4+4) — internal stub
+  user.register('DCHook', 12, () => 0, 270);
+
   // Ordinal 277: GetDlgCtrlID(hWnd) — 2 bytes
   user.register('GetDlgCtrlID', 2, () => {
     const hWnd = emu.readPascalArgs16([2])[0];

@@ -258,6 +258,10 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     // Set up CPU for 16-bit mode
     emu.cpu.use32 = false;
     emu.cpu.segBases = emu.ne.selectorToBase;
+    // Build segment limits from NE segment info (selector → limit)
+    for (const seg of emu.ne.segments) {
+      emu.cpu.segLimits.set(seg.selector, seg.minAlloc - 1);
+    }
     emu.cpu.cs = emu.ne.codeSegSelector;
     emu.cpu.ds = emu.ne.dataSegSelector;
     emu.cpu.es = emu.ne.dataSegSelector;
@@ -937,6 +941,7 @@ async function loadNEDlls(emu: Emulator): Promise<NEDllEntry[]> {
     // Add DLL segments to the main segment list (for WILD EIP validation)
     for (const seg of dll.segments) {
       ne.segments.push(seg);
+      emu.cpu.segLimits.set(seg.selector, seg.minAlloc - 1);
     }
 
     console.log(`[NE DLL] ${modName}: ${dll.segments.length} segments, ${dll.entryPoints.size} exports, ${dll.apiMap.size} imports`);

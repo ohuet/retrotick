@@ -229,9 +229,16 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
     }
 
-    if (!emu.mainWindow && hWndParent === 0) {
-      const wnd = emu.handles.get<WindowInfo>(hwnd);
-      if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+    // Promote to mainWindow: skip WS_POPUP and re-promote if a window with
+    // WS_CAPTION is created after a bare WS_OVERLAPPED (hidden OLE/DDE windows)
+    if (hWndParent === 0 && !(dwStyle & 0x80000000)) { // not WS_POPUP
+      const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
+      const hasCaption = !!(dwStyle & 0x00C00000); // WS_CAPTION
+      const currentHasCaption = currentMain ? !!(currentMain.style & 0x00C00000) : false;
+      if (!emu.mainWindow || (!currentHasCaption && hasCaption)) {
+        const wnd = emu.handles.get<WindowInfo>(hwnd);
+        if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+      }
     }
 
     if (classInfo?.wndProc) {
@@ -862,9 +869,16 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
     }
 
-    if (!emu.mainWindow && hWndParent === 0) {
-      const wnd = emu.handles.get<WindowInfo>(hwnd);
-      if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+    // Promote to mainWindow: skip WS_POPUP and re-promote if a window with
+    // WS_CAPTION is created after a bare WS_OVERLAPPED (hidden OLE/DDE windows)
+    if (hWndParent === 0 && !(dwStyle & 0x80000000)) { // not WS_POPUP
+      const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
+      const hasCaption = !!(dwStyle & 0x00C00000); // WS_CAPTION
+      const currentHasCaption = currentMain ? !!(currentMain.style & 0x00C00000) : false;
+      if (!emu.mainWindow || (!currentHasCaption && hasCaption)) {
+        const wnd = emu.handles.get<WindowInfo>(hwnd);
+        if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+      }
     }
 
     if (classInfo?.wndProc) {
