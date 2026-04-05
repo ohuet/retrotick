@@ -88,6 +88,13 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
     const handle = emu.readArg16(0);
     const addr = state.globalHandleToAddr.get(handle);
     if (addr === undefined) {
+      // Fallback: if the handle is a valid selector (e.g. allocated by a DLL stub),
+      // treat it as a lockable segment
+      if (emu.cpu.segBases.has(handle)) {
+        emu.cpu.setReg16(2, handle);
+        emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000);
+        return (handle << 16) >>> 0;
+      }
       emu.cpu.setReg16(2, 0);
       emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000);
       return 0;

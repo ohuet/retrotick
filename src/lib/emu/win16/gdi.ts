@@ -1466,10 +1466,10 @@ export function registerWin16Gdi(emu: Emulator): void {
     const caps: Record<number, number> = {
       [DRIVERVERSION]: 0x0300,
       [TECHNOLOGY]: 1,     // DT_RASDISPLAY
-      [HORZSIZE]: 320,
-      [VERTSIZE]: 240,
-      [HORZRES]: 640,
-      [VERTRES]: 480,
+      [HORZSIZE]: Math.round((emu.screenWidth || 640) * 25.4 / 96),
+      [VERTSIZE]: Math.round((emu.screenHeight || 480) * 25.4 / 96),
+      [HORZRES]: emu.screenWidth || 640,
+      [VERTRES]: emu.screenHeight || 480,
       [BITSPIXEL]: 8,
       [PLANES]: 1,
       [NUMBRUSHES]: 256,
