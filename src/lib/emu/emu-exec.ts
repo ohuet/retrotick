@@ -315,6 +315,8 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
 
   const savedSP = emu.cpu.reg[4] & 0xFFFF;
   const savedDS = emu.cpu.ds;
+  const savedCS = emu.cpu.cs;
+  const savedEIP = emu.cpu.eip;
   const savedEBX = emu.cpu.reg[3];
   const savedESI = emu.cpu.reg[6];
   const savedEDI = emu.cpu.reg[7];
@@ -363,6 +365,8 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     // No segment contains this address — can't execute, bail out
     console.warn(`[MSG16] callWndProc16: no segment for wndProc=0x${wndProc.toString(16)} msg=0x${message.toString(16)} hwnd=0x${hwnd.toString(16)}`);
     emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+    emu.cpu.cs = savedCS;
+    emu.cpu.eip = savedEIP;
     emu.cpu.ds = savedDS;
     emu.cpu.reg[3] = savedEBX;
     emu.cpu.reg[5] = savedEBP;
@@ -464,11 +468,14 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     emu.wndProcDepth = targetDepth;
   }
 
-  // Synchronous return — always restore SP, DS, and callee-saved registers.
+  // Synchronous return — always restore SP, DS, CS:EIP, and callee-saved registers.
   // SP restoration is critical: even if the WndProc completed normally
   // (RETF cleaned up args), we force SP back to guarantee no leak.
-  // DS restoration is critical for DLL wndProcs that use a different DS.
+  // CS:EIP restoration prevents the tick loop from seeing a stale WNDPROC_RETURN
+  // address and misinterpreting it as a new thunk invocation.
   emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+  emu.cpu.cs = savedCS;
+  emu.cpu.eip = savedEIP;
   emu.cpu.ds = savedDS;
   emu.cpu.reg[3] = savedEBX;
   emu.cpu.reg[5] = savedEBP;

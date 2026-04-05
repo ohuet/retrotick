@@ -79,6 +79,34 @@ if (emu.waitingForMessage) {
   const mainWnd = emu.handles.get(emu.mainWindow);
   console.log(`[TEST] SUCCESS: Reached message loop after ${ticks} ticks`);
   console.log(`[TEST] MainWindow: 0x${emu.mainWindow.toString(16)} class="${mainWnd?.classInfo?.className}" title="${mainWnd?.title}" size=${mainWnd?.width}x${mainWnd?.height} style=0x${(mainWnd?.style||0).toString(16)}`);
+
+  // Dump thunk map to find what's at key addresses
+  const thunkEnd = Math.max(...emu.thunkToApi.keys());
+  console.log(`[TEST] Thunk range: 0x${Math.min(...emu.thunkToApi.keys()).toString(16)} - 0x${thunkEnd.toString(16)} (${emu.thunkToApi.size} entries)`);
+
+  // Check what's at 0xF01B1
+  const t01b1 = emu.thunkToApi.get(0xF01B1);
+  console.log(`[TEST] Thunk@0xF01B1: ${t01b1 ? `${t01b1.dll}:${t01b1.name} (${t01b1.displayName})` : 'NOT FOUND'}`);
+
+  // Simulate menu open (WM_INITMENU + WM_INITMENUPOPUP) like EmulatorView.tsx does
+  const WM_INITMENU = 0x0116;
+  const WM_INITMENUPOPUP = 0x0117;
+  const hMenu = mainWnd.hMenu || 0;
+  console.log(`\n[TEST] Simulating menu open (hMenu=0x${hMenu.toString(16)}, wndProc=0x${mainWnd.wndProc.toString(16)})...`);
+  emu.traceApi = true;
+  emu.waitingForMessage = false;
+  emu.callWndProc16(mainWnd.wndProc, emu.mainWindow, WM_INITMENU, hMenu, 0);
+  console.log(`[TEST] WM_INITMENU done, halted=${emu.halted}`);
+  if (!emu.halted) {
+    emu.callWndProc16(mainWnd.wndProc, emu.mainWindow, WM_INITMENUPOPUP, 0, 0);
+    console.log(`[TEST] WM_INITMENUPOPUP done, halted=${emu.halted}`);
+  }
+  if (emu.halted) {
+    console.error(`[TEST] HALTED: ${emu.cpu.haltReason}`);
+    console.error(emu.diagThunkDump());
+  } else {
+    console.log(`[TEST] Menu open handled OK`);
+  }
 } else if (emu.halted) {
   console.error(`[TEST] HALTED after ${ticks} ticks: ${emu.cpu.haltReason}`);
 } else {
