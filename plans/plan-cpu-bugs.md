@@ -2,62 +2,67 @@
 
 ## Context
 
-STMIK audio mixing produces DC offset and Second Reality (+ other DOS games) crash after running for a while. A thorough audit of the x86 CPU emulation, cross-referenced with dosemu/QEMU source code and Intel manuals, has revealed **6 confirmed bugs**. The most impactful is likely **Bug #1 (segment overrides ignored in 32-bit mode)** — this would cause DPMI programs using ES:/SS:/GS: overrides to access wrong memory addresses, explaining both the STMIK DC (reading wrong sample data) and Second Reality crashes (memory corruption).
+STMIK audio mixing produces DC offset and Second Reality (+ other DOS games) crash after running for a while. A thorough audit of the x86 CPU emulation, cross-referenced with dosemu/QEMU source code and Intel manuals, has revealed **6 confirmed bugs**.
 
-## Confirmed Bugs
+**Note on Bug 1:** Under PMODEW flat model, all segment bases (CS/DS/ES/SS) are 0, so segment overrides between them are effectively no-ops. However, if a program allocates DOS memory via DPMI (INT 31h, fn 0100h) and uses a separate PM selector with non-zero base, the override IS needed. This bug is real but may not be the primary cause of STMIK/SR issues unless those programs use separate segment selectors.
 
-### Bug 1: Segment overrides silently ignored in 32-bit protected mode (CRITICAL)
-**Files:** `src/lib/emu/x86/dispatch.ts:121-122`
-**Problem:** Only FS (0x64) segment override is recognized in 32-bit mode. ES (0x26), CS (0x2E), SS (0x36), DS (0x3E), GS (0x65) are consumed as prefix bytes but `_segOverride` is never set.
-```js
-// Current (broken):
-else if (opcode === 0x26 || ... || opcode === 0x65) {
-  if (!cpu.use32) cpu._segOverride = opcode;  // ← only in 16-bit mode!
-}
-```
-**Fix:** Remove the `if (!cpu.use32)` guard. Segment overrides must be recognized in all modes.
-**Impact:** DPMI programs using non-DS segment overrides access wrong addresses. Most likely cause of STMIK DC and Second Reality crashes.
+## Confirmed Bugs (all verified with concrete test cases)
+
+### Bug 1: Segment overrides silently ignored in 32-bit protected mode (HIGH)
+**File:** `src/lib/emu/x86/dispatch.ts:121-122`
+**Verified:** Line 122 has `if (!cpu.use32) cpu._segOverride = opcode;` — overrides 0x26/0x2E/0x36/0x3E/0x65 are consumed but _segOverride stays 0 in 32-bit mode. Only FS (0x64) works.
+**Fix:** Remove the `if (!cpu.use32)` guard: `cpu._segOverride = opcode;`
+**Note:** For flat model (all bases=0), this is a no-op change. For programs using selectors with non-zero bases, this is critical.
 
 ### Bug 2: GS missing from getSegOverrideSel (HIGH)
 **File:** `src/lib/emu/x86/decode.ts:103-111`
-**Problem:** GS override (0x65) falls through to `default: return cpu.ds`. GS-based memory accesses silently use DS base.
-**Fix:** Add `case 0x65: return cpu.gs;` to the switch.
+**Verified:** No `case 0x65` in the switch. `default: return cpu.ds` makes GS silently use DS selector.
+**Fix:** Add `case 0x65: return cpu.gs;` before the default.
 
 ### Bug 3: MOV r/m16, Sreg (0x8C) broken in 32-bit mode (HIGH)
 **File:** `src/lib/emu/x86/dispatch.ts:705-719`
-**Problem:** The `if (!cpu.use32)` guard makes all segment register reads return 0 in 32-bit mode. Also missing FS (case 4) and GS (case 5).
-**Fix:** Remove the `if (!cpu.use32)` guard. Add FS and GS cases. In 32-bit mode with register dest, zero-extend to 32 bits (use `decodeModRM(opSize)` instead of hardcoded 16).
+**Verified:** `if (!cpu.use32)` skips segment value read in 32-bit mode → sregVal=0. FS (4) and GS (5) missing.
+**Fix:** Remove guard, add FS/GS cases. Keep `decodeModRM(16)` for memory dest (always 16-bit write per Intel spec). For register dest in 32-bit mode, the full register gets the zero-extended 16-bit value, but `writeModRM(d, sregVal, 16)` already handles this correctly via `setReg16`.
 
 ### Bug 4: ADC/SBB AF flag computation incorrect (MEDIUM)
-**Files:** `src/lib/emu/x86/cpu.ts:343-355`, `src/lib/emu/x86/flags.ts:38,48,60,70,80,91`
-**Problem:** ADC stores `(b >>> 0) + cf` as lazyB. The AF formula `(a ^ b ^ res) & 0x10` then uses corrupted b — when adding cf flips bit 4 of b, AF is wrong. Confirmed by QEMU/Bochs implementations.
-**Fix:** Store cf separately. Options:
-- **Option A (simplest):** Add a `lazyCF` field to CPU. ADC/SBB store original b in lazyB and cf in lazyCF. In materializeFlags, compute AF as `((a ^ b ^ res) & 0x10)` with original b, and compute CF using `(a >>> 0) + (b >>> 0) + lazyCF > 0xFFFFFFFF` (for 32-bit).
-- **Option B:** Compute AF eagerly in the ADC/SBB handler (before modifying b), store it in flagsCache. This avoids adding a new field.
-**Impact:** BCD instructions (DAA/DAS/AAA/AAS) after ADC/SBB give wrong results.
+**Files:** `src/lib/emu/x86/cpu.ts:347,354`
+**Verified with case:** ADC a=0x0F, b=0x0F, CF=1 → result=0x1F, lazyB=0x10. AF = (0x0F ^ 0x10 ^ 0x1F) & 0x10 = 0 **WRONG** (should be 1: 0xF+0xF+1=0x1F carries from bit 3).
+**Fix (Option A — lazyCF field):** Add `lazyCF: number = 0` to CPU. In ADC/SBB: store original b in lazyB, cf in lazyCF. In materializeFlags ADD/SUB cases, use `lazyCF` for CF computation and original b for AF.
+**Fix (Option B — simplest):** In ADC, compute result as `(a + b + cf)` and store lazy as `setLazy(addOp, result, a, b)` (original b, NOT b+cf). Then for CF, compute eagerly: `const hasCF = ((a >>> 0) + (b >>> 0) + cf) > mask;` and store in flagsCache before calling setLazy.
+**Impact:** DAA/DAS/AAA/AAS after ADC/SBB give wrong results. Low impact for audio mixing.
 
-### Bug 5: 16-bit IN/OUT split into two 8-bit operations (MEDIUM)
-**File:** `src/lib/emu/x86/dispatch.ts:1322-1364`
-**Problem:** `IN AX,DX` and `OUT DX,AX` (opcodes 0xED/0xEF) split into two separate 8-bit I/O operations to port and port+1. On real x86, these are single 16-bit transactions. Same for imm8 variants (0xE5/0xE7).
-**Fix:** Call `portIn`/`portOut` once with the full 16-bit value. May need to extend portIn/portOut to accept a size parameter, or let the port handler decide how to handle 16-bit values.
+### Bug 5: 16-bit IN/OUT split into two 8-bit operations (LOW — DEBATABLE)
+**File:** `src/lib/emu/x86/dispatch.ts:1353-1364` (and 0xE5/0xE7)
+**Verified:** `OUT DX, AX` sends two separate portOut calls: `portOut(port, lo)` then `portOut(port+1, hi)`.
+**Actually correct for 8-bit ISA devices:** The VGA `OUT DX, AX` trick (DX=0x3CE, AL=index, AH=data) depends on this split behavior. The ISA bus decomposes 16-bit writes to 8-bit devices into two 8-bit transfers.
+**Wrong for 16-bit devices:** SB16 in 16-bit audio mode expects a single 16-bit write.
+**Decision:** Keep current behavior (correct for VGA and most DOS games). Add a `portOut16` path later only if SB16 16-bit mode is needed.
 
 ### Bug 6: INC/DEC lose IOPL and NT flags (LOW)
-**File:** `src/lib/emu/x86/dispatch.ts` (all INC/DEC handlers)
-**Problem:** Save mask `(DF | 0x0300)` = `0x0700` doesn't include IOPL (0x3000) or NT (0x4000). After INC/DEC, these flags are zeroed.
-**Fix:** Change mask to `(DF | 0x7300)` to match the mask used in `materializeFlags`.
+**File:** `src/lib/emu/x86/dispatch.ts` — 10 occurrences
+**Verified:** Mask `(DF | 0x0300)` = 0x0700 excludes IOPL (0x3000) and NT (0x4000). After INC/DEC, these bits are zeroed in flagsCache. `materializeFlags` reads IOPL/NT from flagsCache → lost.
+**Fix:** Change to `(DF | 0x7300)` (10 occurrences). This matches the preserve mask in `materializeFlags` line 27.
+**Impact:** Low — emulator doesn't enforce IOPL, and DOS programs rarely check it after INC/DEC.
 
 ## Implementation Order
 
-1. **Bug 1** — Segment overrides in 32-bit mode (1 line change in dispatch.ts)
-2. **Bug 2** — GS in getSegOverrideSel (1 line addition in decode.ts)
-3. **Bug 3** — MOV Sreg 0x8C (rewrite ~15 lines in dispatch.ts)
-4. **Bug 6** — INC/DEC flag mask (search-replace `(DF | 0x0300)` → `(DF | 0x7300)` in dispatch.ts)
-5. **Bug 4** — ADC/SBB AF (requires careful design in cpu.ts + flags.ts)
-6. **Bug 5** — 16-bit IN/OUT (dispatch.ts + possibly emulator port API)
+1. **Bug 1** — Segment overrides in 32-bit mode (remove `if (!cpu.use32)` guard, 1 line)
+2. **Bug 2** — GS in getSegOverrideSel (add 1 case)
+3. **Bug 3** — MOV Sreg 0x8C (remove guard, add FS/GS cases, ~10 lines)
+4. **Bug 6** — INC/DEC flag mask (replace `0x0300` → `0x7300`, 10 occurrences)
+5. **Bug 4** — ADC/SBB AF (cpu.ts + flags.ts, choose Option A or B)
+6. ~~Bug 5~~ — 16-bit IN/OUT: keep current behavior (correct for VGA)
+
+## Files Modified
+
+- `src/lib/emu/x86/dispatch.ts` — Bugs 1, 3, 6
+- `src/lib/emu/x86/decode.ts` — Bug 2
+- `src/lib/emu/x86/cpu.ts` — Bug 4
+- `src/lib/emu/x86/flags.ts` — Bug 4
 
 ## Verification
 
 1. `npm run build` — type check passes
-2. Run existing test suite: `timeout 2 npx tsx tests/test-calc.mjs` (and other test-*.mjs files)
-3. Test Second Reality in browser — should run longer without crashing
-4. Test STMIK-based programs — audio mixing should no longer produce DC offset
+2. Run existing test suite: all `timeout 2 npx tsx tests/test-*.mjs`
+3. Manual test: Second Reality in browser — should run longer without crashing
+4. Manual test: STMIK-based programs — audio mixing should no longer produce DC offset
