@@ -20,7 +20,9 @@ export function registerKernelProfile(kernel: Win16Module, emu: Emulator, _state
 
   // --- Ordinal 57: GetProfileInt(lpAppName:str, lpKeyName:str, nDefault:s_word) — 10 bytes ---
   kernel.register('GetProfileInt', 10, () => {
-    const [lpAppNameRaw, lpKeyNameRaw, nDefault] = emu.readPascalArgs16([4, 4, 2]);
+    const [lpAppNameRaw, lpKeyNameRaw, nDefaultRaw] = emu.readPascalArgs16([4, 4, 2]);
+    // nDefault is a signed word (s_word) — sign-extend from 16-bit
+    const nDefault = (nDefaultRaw << 16 >> 16);
     const s = ps();
     if (!s) return nDefault;
     const lpAppName = emu.resolveFarPtr(lpAppNameRaw);
