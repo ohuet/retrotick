@@ -211,10 +211,48 @@ export function exec0F(
       break;
     }
 
-    // LAR r, r/m16 — Load Access Rights (always fails in real mode: clear ZF)
-    case 0x02: {
+    case 0x02: { // LAR r16/r32, r/m16 — load access rights
       const d = cpu.decodeModRM(opSize);
-      cpu.setFlags(cpu.getFlags() & ~ZF);
+      const sel = d.val & 0xFFFF;
+      if (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3)) {
+        // Valid selector — return data segment access rights, set ZF
+        const rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+        if (opSize === 16) {
+          cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (rights & 0xFFFF);
+        } else {
+          cpu.reg[d.regField] = rights;
+        }
+        cpu.setFlags(cpu.getFlags() | ZF);
+      } else {
+        cpu.setFlags(cpu.getFlags() & ~ZF);
+      }
+      break;
+    }
+
+    case 0x03: { // LSL r16/r32, r/m16 — load segment limit
+      const d = cpu.decodeModRM(opSize);
+      const sel = d.val & 0xFFFF;
+      const canonical = sel >>> 3;
+      const limit = cpu.segLimits.get(sel) ?? cpu.segLimits.get(canonical);
+      if (limit !== undefined) {
+        if (opSize === 16) {
+          cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (limit & 0xFFFF);
+        } else {
+          cpu.reg[d.regField] = limit;
+        }
+        cpu.setFlags(cpu.getFlags() | ZF);
+      } else if (cpu.segBases.has(sel) || cpu.segBases.has(canonical)) {
+        // Known selector without explicit limit — default to 64KB
+        const defLimit = 0xFFFF;
+        if (opSize === 16) {
+          cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | defLimit;
+        } else {
+          cpu.reg[d.regField] = defLimit;
+        }
+        cpu.setFlags(cpu.getFlags() | ZF);
+      } else {
+        cpu.setFlags(cpu.getFlags() & ~ZF);
+      }
       break;
     }
 
