@@ -122,6 +122,33 @@ if (emu.waitingForMessage) {
     }
   }
 
+  // Simulate clicking on a tool (pbTool at pos 2,2 size 57x278)
+  console.log(`\n[TEST] Simulating click on pbTool (30, 50)...`);
+  const WM_LBUTTONDOWN = 0x0201;
+  const WM_LBUTTONUP = 0x0202;
+  const pbToolHwnd = mainWnd.childList[1]; // pbTool
+  console.log(`[TEST] pbTool hwnd=0x${pbToolHwnd.toString(16)}`);
+  emu.postMessage(pbToolHwnd, WM_LBUTTONDOWN, 1, (50 << 16) | 28);
+  emu.postMessage(pbToolHwnd, WM_LBUTTONUP, 0, (50 << 16) | 28);
+  emu.waitingForMessage = false;
+  let clickTicks = 0;
+  while (!emu.waitingForMessage && !emu.halted && clickTicks < 50) {
+    emu.tick();
+    clickTicks++;
+  }
+  console.log(`[TEST] After tool click: halted=${emu.halted} ticks=${clickTicks} capturedWindow=0x${(emu.capturedWindow||0).toString(16)} reason=${emu.cpu.haltReason || 'none'}`);
+  // Process more ticks to handle WM_LBUTTONUP
+  emu.waitingForMessage = false;
+  let clickTicks2 = 0;
+  while (!emu.waitingForMessage && !emu.halted && clickTicks2 < 50) {
+    emu.tick();
+    clickTicks2++;
+  }
+  console.log(`[TEST] After LBUTTONUP dispatch: halted=${emu.halted} ticks=${clickTicks2} capturedWindow=0x${(emu.capturedWindow||0).toString(16)}`);
+  if (emu.halted) {
+    console.error(emu.diagThunkDump());
+  }
+
   // Simulate menu open (WM_INITMENU + WM_INITMENUPOPUP) like EmulatorView.tsx does
   const WM_INITMENU = 0x0116;
   const WM_INITMENUPOPUP = 0x0117;
