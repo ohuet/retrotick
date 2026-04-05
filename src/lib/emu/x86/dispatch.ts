@@ -115,6 +115,7 @@ export function cpuStep(cpu: CPU): void {
   for (;;) {
     if (opcode === 0x66) { prefix66 = true; }
     else if (opcode === 0x67) { prefix67 = true; }
+    else if (opcode === 0xF0) { /* LOCK prefix — NOP in single-threaded emulator */ }
     else if (opcode === 0xF2) { prefixF2 = true; }
     else if (opcode === 0xF3) { prefixF3 = true; }
     else if (opcode === 0x64) { cpu._segOverride = 0x64; }
@@ -1362,11 +1363,6 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
     }
-
-    // LOCK prefix (ignore)
-    case 0xF0:
-      cpu.step();
-      break;
 
     // CMC - Complement Carry Flag
     case 0xF5:
