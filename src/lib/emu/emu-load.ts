@@ -343,6 +343,23 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
 
     rebuildThunkPages(emu);
 
+    // Pre-populate WIN.INI with standard Windows 3.1 defaults (if profile store exists)
+    // A real Windows install would have these values; apps like Paintbrush read them
+    // and fall back to printer-based calculations when missing, which we can't emulate.
+    if (emu.profileStore) {
+      const ps = emu.profileStore;
+      const winIni = 'win.ini';
+      // Screen-sized defaults for Paintbrush (width/height in current unit, positive = direct)
+      const defW = Math.round((emu.screenWidth || 640) * 2.54 / 9.6); // pixels → ~cm
+      const defH = Math.round((emu.screenHeight || 480) * 2.54 / 9.6);
+      if (!ps.getString(winIni, 'Paintbrush', 'width', '')) {
+        ps.writeString(winIni, 'Paintbrush', 'width', String(defW));
+      }
+      if (!ps.getString(winIni, 'Paintbrush', 'height', '')) {
+        ps.writeString(winIni, 'Paintbrush', 'height', String(defH));
+      }
+    }
+
     // Pre-load menu items from NE resources so GetMenuState works during init
     if (!emu.menuItems) {
       const menus = extractMenus(peInfo, arrayBuffer);

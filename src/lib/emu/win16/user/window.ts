@@ -434,6 +434,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
       let mx = (x << 16 >> 16), my = (y << 16 >> 16);
+      // Sign-extend and clamp dimensions (Win16 uses signed int for width/height)
+      const sw = (w << 16 >> 16); const sh = (height << 16 >> 16);
+      const mw = sw < 0 ? 0 : sw; const mh = sh < 0 ? 0 : sh;
       // If parent is a CCS control, adjust Y coordinate only: the x86 COMMCTRL code
       // computes Y positions using GetWindowRect which returns screen coords based on
       // the old CCS position (-100,-100). X is already parent-client-relative.
@@ -448,10 +451,10 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         }
       }
       wnd.x = mx; wnd.y = my;
-      const sizeChanged = wnd.width !== w || wnd.height !== height;
-      wnd.width = w; wnd.height = height;
+      const sizeChanged = wnd.width !== mw || wnd.height !== mh;
+      wnd.width = mw; wnd.height = mh;
       if (sizeChanged) {
-        const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
+        const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, mw, mh, true);
         if (hWnd === emu.mainWindow) {
           emu.setupCanvasSize(cw, ch);
           emu.onWindowChange?.(wnd);

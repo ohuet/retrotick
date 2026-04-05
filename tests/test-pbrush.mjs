@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { Emulator } from '../src/lib/emu/emulator.ts';
 import { parsePE } from '../src/lib/pe/index.ts';
 import { RegistryStore } from '../src/lib/registry-store.ts';
+import { ProfileStore } from '../src/lib/profile-store.ts';
 
 // Mock Canvas/OffscreenCanvas for headless Node.js
 const noop = () => {};
@@ -61,6 +62,7 @@ const emu = new Emulator();
 emu.screenWidth = 800;
 emu.screenHeight = 600;
 emu.registryStore = new RegistryStore();
+emu.profileStore = new ProfileStore();
 // Load companion DLLs that PBRUSH imports
 emu.additionalFiles.set('PBRUSH.DLL', readToArrayBuffer('H:/WINDOWS/PBRUSH.DLL'));
 emu.additionalFiles.set('OLESVR.DLL', readToArrayBuffer('H:/WINDOWS/SYSTEM/OLESVR.DLL'));
