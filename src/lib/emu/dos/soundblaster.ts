@@ -42,6 +42,10 @@ export class SoundBlasterDSP {
   irqPending = false;    // true when transfer complete, waiting for ACK
   private highSpeed = false;
 
+  // SB Pro mixer state
+  mixerAddr = 0;
+  stereoMode = false;
+
   // PCM output buffer for AudioWorklet consumption
   pcmRing = new Float32Array(65536);
   pcmWritePos = 0;
@@ -78,11 +82,6 @@ export class SoundBlasterDSP {
   }
 
   writeCommand(val: number): void {
-    // In high-speed DMA mode, the DSP is locked — it ignores all writes to the
-    // command port until a hardware reset (port 0x226). Programs (e.g. Second
-    // Reality) may write 0x48+0x91 from the ISR, expecting them to be ignored.
-    if (this.highSpeed && this.dmaActive) return;
-
     // If collecting parameters for a previous command
     if (this.expectedParams > 0) {
       this.pendingParams.push(val);

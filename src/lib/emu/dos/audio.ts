@@ -266,6 +266,15 @@ if (!globalThis._oplRegistered) {
     // Sound Blaster DSP ports (base 0x220)
     if (port === 0x226) { this.sbDsp.writeReset(value); return true; }
     if (port === 0x22C) { this.sbDsp.writeCommand(value); return true; }
+    // SB Pro mixer ports
+    if (port === 0x224) { this.sbDsp.mixerAddr = value; return true; }
+    if (port === 0x225) {
+      if (this.sbDsp.mixerAddr === 0x0E) {
+        // Stereo/mono select: bit 1 = stereo, bit 5 = filter
+        this.sbDsp.stereoMode = !!(value & 0x02);
+      }
+      return true;
+    }
 
     // DMA controller ports (channels 0-3)
     if (port === 0x00) { this.dma.writeAddr(0, value); return true; }
