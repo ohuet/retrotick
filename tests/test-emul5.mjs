@@ -178,6 +178,9 @@ for (let i = 0; i < MAX_TICKS; i++) {
   if (i < 5 || i % 100 === 0) console.log(`[TICK ${i}] cpuSteps=${emu.cpuSteps} EIP=0x${eip.toString(16)} CS=0x${emu.cpu.cs.toString(16)} RM=${emu.cpu.realMode}`);
 }
 
+// Set watchpoint on address 0xC9E to catch any write
+emu.memory._watchAddr = 0xC9E;
+
 // Check if address 0xC9E was ever written to
 // We can't set a watchpoint, but let's check memory right after DPMI init vs at end
 console.log(`[EARLY] @0xC9E: ${Array.from({length: 16}, (_, i) => emu.memory.readU8(0xC9E + i).toString(16).padStart(2, '0')).join(' ')}`);
@@ -186,6 +189,8 @@ let nz = 0;
 for (let a = 0; a < 0x5970; a++) { if (emu.memory.readU8(a) !== 0) nz++; }
 console.log(`[EARLY] Non-zero bytes in 0x0000-0x5970: ${nz}`);
 
+// Check PM handler code — also check if code is at overlay base + offset
+console.log(`[CODE] @0x1D9E (0x1100+0xC9E): ${Array.from({length: 16}, (_, i) => emu.memory.readU8(0x1D9E + i).toString(16).padStart(2, '0')).join(' ')}`);
 // Check PM handler code at linear 0xC9E (sel 0x98 base=0, offset 0xC9E)
 console.log(`[CODE] @0xC9E: ${Array.from({length: 16}, (_, i) => emu.memory.readU8(0xC9E + i).toString(16).padStart(2, '0')).join(' ')}`);
 console.log(`[CODE] @0x1000 (PSP): ${Array.from({length: 8}, (_, i) => emu.memory.readU8(0x1000 + i).toString(16).padStart(2, '0')).join(' ')}`);

@@ -113,16 +113,28 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   }
 
   // idx 0 (0x00): null descriptor
-  // DPMI entry is always 16-bit PM. The client upgrades to 32-bit via INT 31h.
-  // idx 1 (0x08): 16-bit code — base=0, limit=4GB, execute/read
-  writeGdtEntry(emu.memory, gdtBase, 1, 0, 0xFFFFF, 0x9A, 0x08); // G=1,D=0
-  // idx 2 (0x10): 16-bit data — base=0, limit=4GB, read/write
-  writeGdtEntry(emu.memory, gdtBase, 2, 0, 0xFFFFF, 0x92, 0x08); // G=1,D=0
-  // idx 3 (0x18): 16-bit stack — base=0, limit=4GB, read/write
-  writeGdtEntry(emu.memory, gdtBase, 3, 0, 0xFFFFF, 0x92, 0x08); // G=1,D=0
+  // DPMI entry is always 16-bit PM. Initial selectors map the caller's
+  // real-mode segments (DPMI spec: the host creates descriptors whose bases
+  // equal the RM segment * 16, so the client can continue accessing its data).
+  // Save caller's RM segments BEFORE popping the return address.
+  // cpu.cs is currently F000 (the DPMI stub), so we'll use retCS from the stack.
+  const rmDS = cpu.ds;
+  const rmSS = cpu.ss;
+  const rmES = cpu.es;
+  const dsBase = (rmDS * 16) >>> 0;
+  const ssBase = (rmSS * 16) >>> 0;
+  const esBase = (rmES * 16) >>> 0;
+  // idx 1 (0x08): code — placeholder, updated after popping retCS below
+  writeGdtEntry(emu.memory, gdtBase, 1, 0, 0xFFFF, 0x9A, 0x00);
+  // idx 2 (0x10): data — base=RM DS*16, limit=64KB, 16-bit, read/write
+  writeGdtEntry(emu.memory, gdtBase, 2, dsBase, 0xFFFF, 0x92, 0x00);
+  // idx 3 (0x18): stack — base=RM SS*16, limit=64KB, 16-bit, read/write
+  writeGdtEntry(emu.memory, gdtBase, 3, ssBase, 0xFFFF, 0x92, 0x00);
   // idx 4 (0x20): PSP — base=PSP*16, limit=0xFF, 16-bit
   const pspBase = (emu._dosPSP || 0) * 16;
   writeGdtEntry(emu.memory, gdtBase, 4, pspBase, 0xFF, 0x92, 0x00);
+  // idx 5 (0x28): ES — base=RM ES*16, limit=64KB, 16-bit, read/write
+  writeGdtEntry(emu.memory, gdtBase, 5, esBase, 0xFFFF, 0x92, 0x00);
 
   // Set GDT in emulator
   emu._gdtBase = gdtBase;
@@ -135,32 +147,37 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   const retCS = cpu.pop16();
   const retLinear = (retCS * 16 + retIP) >>> 0;
 
+  // NOW update the CS GDT entry with the caller's actual CS (retCS, not the stub's F000)
+  const csBase = (retCS * 16) >>> 0;
+  writeGdtEntry(emu.memory, gdtBase, 1, csBase, 0xFFFF, 0x9A, 0x00);
+
   // Convert real-mode stack pointer to flat linear address before switching
   const flatSP = (cpu.ss * 16 + (cpu.reg[ESP] & 0xFFFF)) >>> 0;
 
   // Switch to protected mode
   cpu.realMode = false;
 
-  // Load segment registers with flat selectors
-  cpu.loadCS(0x08);   // flat code
-  cpu.ds = 0x10;      // flat data
-  cpu.es = 0x10;
-  cpu.ss = 0x18;      // stack
+  // Load segment registers — each maps the caller's corresponding RM segment
+  cpu.loadCS(0x08);
+  cpu.ds = 0x10;
+  cpu.es = 0x28;      // ES gets its own selector (idx 5)
+  cpu.ss = 0x18;
   cpu.fs = 0x10;
   cpu.gs = 0x10;
 
-  // Set ESP to flat linear address of the stack
-  cpu.reg[ESP] = flatSP;
+  // ESP stays as the 16-bit SP (within the SS segment, not flat linear)
+  cpu.reg[ESP] = (cpu.reg[ESP] & ~0xFFFF) | ((flatSP - ssBase) & 0xFFFF);
 
-  // Set EIP to caller's return address (converted to flat linear).
-  // This skips the RETF in the stub — execution resumes at the caller.
+  // EIP = segBase + offset. retLinear = retCS*16 + retIP = csBase + retIP.
   cpu.eip = retLinear;
 
-  // Populate segBases/segLimits for fast lookup
-  cpu.segBases.set(0x08, 0);
-  cpu.segBases.set(0x10, 0);
-  cpu.segBases.set(0x18, 0);
+  // Populate segBases for fast lookup
+  cpu.segBases.set(0x08, csBase);
+  cpu.segBases.set(0x10, dsBase);
+  cpu.segBases.set(0x18, ssBase);
   cpu.segBases.set(0x20, pspBase);
+  cpu.segBases.set(0x28, esBase);
+  console.log(`[DPMI] Entry: CS base=0x${csBase.toString(16)} DS base=0x${dsBase.toString(16)} SS base=0x${ssBase.toString(16)}`);
 
   // Initialize DPMI state
   emu._dpmiState = {
