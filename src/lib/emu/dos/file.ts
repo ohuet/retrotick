@@ -145,6 +145,33 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
     emu.waitingForMessage = true;
     return;
   }
+  // Fallback: strip garbage prefix bytes and try base filename in current directory.
+  // DOS4GW sometimes constructs paths with a corrupt prefix; extract just the base name.
+  const cleanName = name.replace(/^[^\x20-\x7E]+/, ''); // strip non-printable prefix
+  const baseName3 = cleanName.replace(/^.*[\\\/]/, '').toUpperCase();
+  if (baseName3 && baseName3 !== name.toUpperCase()) {
+    const dirResolved = dosResolvePath(emu, baseName3);
+    const dirInfo = fs.findFile(dirResolved, emu.additionalFiles);
+    if (dirInfo) {
+      const dirData = getSyncFileData(fs, dirInfo, emu, dirResolved);
+      if (dirData) {
+        const handle = allocDosHandle(emu);
+        emu._dosFiles.set(handle, { data: dirData, pos: 0, name: cleanName });
+        emu.handles.set(handle, 'file', { path: dirResolved, access: 0x80000000, pos: 0, data: dirData, size: dirData.length, modified: false });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+        return;
+      }
+      // Async fallback for base name
+      fs.fetchFileData(dirInfo, emu.additionalFiles, dirResolved).then(() => {
+        if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) requestAnimationFrame(emu.tick); }
+      });
+      cpu.eip -= 2;
+      emu._dosFileOpenPending = true;
+      emu.waitingForMessage = true;
+      return;
+    }
+  }
   cpu.setFlag(CF, true);
   cpu.setReg16(EAX, 2); // file not found
 }

@@ -1311,11 +1311,14 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       dosExtendedOpen(cpu, emu);
       break;
 
-    case 0xF0: // DOS/4GW private API — extended memory transfer
+    case 0xEE: // DOS/4GW private API — internal
+    case 0xEF: // DOS/4GW private API — installation check / RM stub init
     case 0xF1: // DOS/4GW private API — variant
     case 0xFF: // DOS extender private API (PMODEW etc.)
-      // In our flat memory model, conventional and extended memory are the same
-      // address space. These functions are NOPs — return success.
+      cpu.setFlag(CF, false);
+      break;
+
+    case 0xF0: // DOS/4GW private API — extended memory data transfer
       cpu.setFlag(CF, false);
       break;
 
