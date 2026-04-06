@@ -720,6 +720,7 @@ function dpmiGetRawModeSwitch(cpu: CPU): boolean {
  *  Register convention (same for both directions):
  *  AX=new DS, CX=new ES, DX=new SS, (E)BX=new (E)SP, SI=new CS, (E)DI=new (E)IP */
 export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
+  console.log(`[DPMI SWITCH] INT FCh called! RM=${cpu.realMode} EIP=0x${(cpu.eip>>>0).toString(16)}`);
   if (!emu._dpmiState) return false;
 
   const newDS = cpu.getReg16(EAX);
@@ -729,19 +730,21 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
 
   if (cpu.realMode) {
     // RM → PM: switch to protected mode
-    const newESP = cpu.getReg16(EBX);
-    const newEIP = cpu.getReg16(EDI);
+    const newESP = cpu.reg[EBX] >>> 0; // 32-bit ESP for PM
+    const newEIP = cpu.reg[EDI] >>> 0; // 32-bit EIP for PM
+    console.log(`[RAW SWITCH] RM→PM CS=${newCS.toString(16)} EIP=0x${newEIP.toString(16)} SS=${newSS.toString(16)} ESP=0x${newESP.toString(16)} DS=${newDS.toString(16)} ES=${newES.toString(16)}`);
     cpu.realMode = false;
     cpu.loadCS(newCS);
     cpu.ds = newDS;
     cpu.es = newES;
     cpu.ss = newSS;
     cpu.reg[ESP] = newESP;
-    cpu.eip = cpu.segBase(newCS) + newEIP;
+    cpu.eip = (cpu.segBase(newCS) + newEIP) >>> 0;
   } else {
     // PM → RM: switch to real mode
     const newSP = cpu.getReg16(EBX);
     const newIP = cpu.getReg16(EDI);
+    console.log(`[RAW SWITCH] PM→RM CS=${newCS.toString(16)} IP=0x${newIP.toString(16)} SS=${newSS.toString(16)} SP=0x${newSP.toString(16)} DS=${newDS.toString(16)} ES=${newES.toString(16)} (linear EIP=0x${(newCS*16+newIP).toString(16)})`);
     cpu.realMode = true;
     cpu.use32 = false;
     cpu._addrSize16 = true;

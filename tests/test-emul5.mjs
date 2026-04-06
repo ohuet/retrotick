@@ -127,6 +127,8 @@ const hdr = d4gDv.getUint16(8, true) * 16; // header size
 console.log(`[FILE CHECK] dos4gw at offset 0x${(hdr + 0x1190).toString(16)}: ${Array.from(new Uint8Array(dos4gwBuf, hdr + 0x1190, 10)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
 console.log(`[FILE CHECK] dos4gw at offset 0x${(hdr + 0x118E).toString(16)}: ${Array.from(new Uint8Array(dos4gwBuf, hdr + 0x118E, 10)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
 
+emu.traceApi = true;
+emu.traceApi = true;
 emu.run();
 
 // Check memory at 0x2290 after run (overlay is loaded by now)
@@ -159,7 +161,7 @@ console.warn = (...args) => {
   origWarn(...args);
 };
 
-const MAX_TICKS = 500;
+const MAX_TICKS = 50;
 let totalTicks = 0;
 
 for (let i = 0; i < MAX_TICKS; i++) {

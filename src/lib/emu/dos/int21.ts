@@ -1312,15 +1312,27 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0xEE: // DOS/4GW private API — internal
-    case 0xEF: // DOS/4GW private API — installation check / RM stub init
     case 0xF1: // DOS/4GW private API — variant
     case 0xFF: // DOS extender private API (PMODEW etc.)
       cpu.setFlag(CF, false);
       break;
 
-    case 0xF0: // DOS/4GW private API — extended memory data transfer
+    case 0xEF: { // DOS/4GW private API — RM stub check
+      console.warn(`[DOS4GW EFh] AL=${al.toString(16)} BX=${(cpu.reg[3]&0xFFFF).toString(16)} CX=${(cpu.reg[1]&0xFFFF).toString(16)} DX=${(cpu.reg[2]&0xFFFF).toString(16)} DS=${cpu.ds.toString(16)} ES=${cpu.es.toString(16)}`);
+      // Return CF=1 (not installed) — DOS4GW should handle this gracefully
+      // and use DPMI services instead
+      cpu.setFlag(CF, true);
+      break;
+    }
+
+    case 0xF0: { // DOS/4GW private API — extended memory data transfer
+      const f0al = al;
+      const dsBase = cpu.segBase(cpu.ds);
+      const esBase = cpu.segBase(cpu.es);
+      console.warn(`[DOS4GW F0h] AL=${f0al.toString(16)} BX=${(cpu.reg[3]&0xFFFF).toString(16)} CX=${(cpu.reg[1]&0xFFFF).toString(16)} DX=${(cpu.reg[2]&0xFFFF).toString(16)} SI=${(cpu.reg[6]&0xFFFF).toString(16)} DI=${(cpu.reg[7]&0xFFFF).toString(16)} DS=${cpu.ds.toString(16)}(${dsBase.toString(16)}) ES=${cpu.es.toString(16)}(${esBase.toString(16)}) EBX=0x${(cpu.reg[3]>>>0).toString(16)} ECX=0x${(cpu.reg[1]>>>0).toString(16)} ESI=0x${(cpu.reg[6]>>>0).toString(16)} EDI=0x${(cpu.reg[7]>>>0).toString(16)}`);
       cpu.setFlag(CF, false);
       break;
+    }
 
     default:
       console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);

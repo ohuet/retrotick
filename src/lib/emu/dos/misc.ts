@@ -226,14 +226,9 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
   }
 
   if (ax === 0x1687) {
-    // DPMI host detection — present
-    cpu.setReg16(EAX, 0x0000); // AX=0 means DPMI present
-    cpu.setReg16(EBX, 0x0001); // BX=1: 32-bit programs supported
-    cpu.setReg8(ECX, 0x03);    // CL=3: processor type (386)
-    cpu.setReg16(EDX, 0x005A); // DX=version 0.90
-    cpu.setReg16(ESI, 0x0000); // SI=0: no private data needed
-    cpu.es = DPMI_ENTRY_SEG;   // ES:DI = DPMI entry point
-    cpu.setReg16(EDI, DPMI_ENTRY_OFF);
+    // DPMI host detection — not present.
+    // DOS extenders like DOS/4GW use VCPI + raw PM switching instead.
+    cpu.setReg16(EAX, 0x0001); // AX nonzero = DPMI not present
     return true;
   }
 
