@@ -701,12 +701,15 @@ function dpmiSetPmIntVector(cpu: CPU, st: DpmiState): boolean {
  *  BX:CX = address to switch from RM to PM (far call in RM)
  *  SI:(E)DI = address to switch from PM to RM (far call in PM) */
 function dpmiGetRawModeSwitch(cpu: CPU): boolean {
-  // RM→PM: caller does FAR CALL to BX:CX in real mode
-  cpu.setReg16(EBX, DPMI_ENTRY_SEG);
-  cpu.setReg16(ECX, DPMI_RM2PM_OFF);
-  // PM→RM: caller does FAR CALL to SI:(E)DI in protected mode
-  cpu.setReg16(ESI, DPMI_ENTRY_SEG);
-  cpu.setReg16(EDI, DPMI_PM2RM_OFF);
+  // RM→PM: caller does FAR CALL to BX:CX in real mode (seg:off)
+  cpu.setReg16(EBX, DPMI_ENTRY_SEG);      // F000
+  cpu.setReg16(ECX, DPMI_RM2PM_OFF);      // 0A10
+  // PM→RM: caller does FAR CALL to SI:(E)DI in protected mode (sel:off)
+  // Must use a valid PM code selector — 0x08 is flat code (base=0).
+  // The stub's linear address is F000*16 + DPMI_PM2RM_OFF = 0xF0000 + offset.
+  const pm2rmLinear = (DPMI_ENTRY_SEG * 16 + DPMI_PM2RM_OFF) >>> 0;
+  cpu.setReg16(ESI, 0x08);                // PM flat code selector
+  cpu.reg[EDI] = pm2rmLinear;             // 32-bit offset (linear address)
   cpu.setFlag(0x001, false);
   return true;
 }
