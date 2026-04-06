@@ -350,6 +350,42 @@ export function execFPU_DB(cpu: CPU, mod: number, regField: number, rm: number, 
         }
         break;
       }
+      case 4: {
+        // FLDENV — load FPU environment (14 or 28 bytes)
+        cpu.fpuCW = mem.readU16(addr);
+        cpu.fpuSW = mem.readU16(addr + 4);
+        cpu.fpuTW = mem.readU16(addr + 8);
+        cpu.fpuTop = (cpu.fpuSW >>> 11) & 7;
+        break;
+      }
+      case 6: {
+        // FNSTENV / FSTENV — store FPU environment (14 or 28 bytes)
+        // 16-bit protected mode format (14 bytes):
+        //   +0: CW, +2: SW, +4: TW, +6: IP offset, +8: IP selector,
+        //   +10: operand offset, +12: operand selector
+        // 32-bit format (28 bytes): same fields but 32-bit wide
+        cpu.fpuSW = (cpu.fpuSW & ~0x3800) | ((cpu.fpuTop & 7) << 11);
+        if (cpu.use32) {
+          mem.writeU32(addr + 0, cpu.fpuCW);
+          mem.writeU32(addr + 4, cpu.fpuSW);
+          mem.writeU32(addr + 8, cpu.fpuTW);
+          mem.writeU32(addr + 12, 0); // IP offset
+          mem.writeU32(addr + 16, 0); // IP selector + opcode
+          mem.writeU32(addr + 20, 0); // operand offset
+          mem.writeU32(addr + 24, 0); // operand selector
+        } else {
+          mem.writeU16(addr + 0, cpu.fpuCW);
+          mem.writeU16(addr + 2, cpu.fpuSW);
+          mem.writeU16(addr + 4, cpu.fpuTW);
+          mem.writeU16(addr + 6, 0); // IP offset
+          mem.writeU16(addr + 8, 0); // IP selector
+          mem.writeU16(addr + 10, 0); // operand offset
+          mem.writeU16(addr + 12, 0); // operand selector
+        }
+        // FSTENV masks all FPU exceptions after storing
+        cpu.fpuCW |= 0x3F;
+        break;
+      }
       default:
         console.warn(`FPU DB /${regField} mem unimplemented at EIP=0x${((cpu.eip) >>> 0).toString(16)}`);
         break;

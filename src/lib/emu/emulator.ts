@@ -375,6 +375,7 @@ export class Emulator {
   _idtLimit = 0;      // IDT limit
   _ldtr = 0;          // Local Descriptor Table Register (selector)
   _tr = 0;            // Task Register (selector)
+  _dpmiState?: import('./dos/dpmi').DpmiState;  // DPMI host state (set on PM entry)
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosFreedHandles: number[] = []; // recycled handle pool

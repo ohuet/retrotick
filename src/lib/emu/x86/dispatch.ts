@@ -18,6 +18,31 @@ const OF = 0x800;
 
 /** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode). */
 function dispatchException(cpu: CPU, intNum: number): boolean {
+  // In PM with DPMI active, check if the client installed a PM interrupt handler.
+  // Route hardware/software interrupts to it instead of our JS handler.
+  // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
+  if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
+    const dpmi = cpu.emu._dpmiState;
+    const handler = dpmi.pmExcHandlers.get(intNum);
+    if (handler && handler.sel !== 0 && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC) {
+      // Push 16-bit interrupt frame (DPMI entry is 16-bit; if CS is 32-bit, use 32-bit frame)
+      const csIs32 = cpu.loadGdtDescriptorIs32(cpu.cs);
+      const returnIP = cpu.eip - cpu.segBase(cpu.cs);
+      if (csIs32) {
+        cpu.push32(cpu.getFlags());
+        cpu.push32(cpu.cs);
+        cpu.push32(returnIP >>> 0);
+      } else {
+        cpu.push16(cpu.getFlags() & 0xFFFF);
+        cpu.push16(cpu.cs);
+        cpu.push16(returnIP & 0xFFFF);
+      }
+      cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF
+      cpu.loadCS(handler.sel);
+      cpu.eip = (cpu.segBase(handler.sel) + handler.off) >>> 0;
+      return true;
+    }
+  }
   // Try JS-handled DOS/BIOS interrupts first
   if (cpu.emu && handleDosInt(cpu, intNum, cpu.emu)) return true;
   // Protected mode: dispatch through IDT

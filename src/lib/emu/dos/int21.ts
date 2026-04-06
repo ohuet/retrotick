@@ -73,6 +73,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
   switch (ah) {
     case 0x00: // Old-style terminate (same as INT 20h)
       if (dosExecReturn(cpu, emu, 0)) break;
+      cpu.haltReason = 'terminated with code 0';
       emu.halted = true;
       cpu.halted = true;
       break;
@@ -1308,6 +1309,14 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x6C: // Extended open/create (DOS 4.0+)
       dosExtendedOpen(cpu, emu);
+      break;
+
+    case 0xF0: // DOS/4GW private API — extended memory transfer
+    case 0xF1: // DOS/4GW private API — variant
+    case 0xFF: // DOS extender private API (PMODEW etc.)
+      // In our flat memory model, conventional and extended memory are the same
+      // address space. These functions are NOPs — return success.
+      cpu.setFlag(CF, false);
       break;
 
     default:
