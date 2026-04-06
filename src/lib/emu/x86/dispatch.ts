@@ -25,6 +25,7 @@ function dispatchException(cpu: CPU, intNum: number): boolean {
     const dpmi = cpu.emu._dpmiState;
     const handler = dpmi.pmExcHandlers.get(intNum);
     if (handler && handler.sel !== 0 && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC) {
+
       // Push interrupt frame; if CS is 32-bit, use 32-bit frame
       const csIs32 = cpu.loadGdtDescriptorIs32(cpu.cs);
       const returnIP = cpu.eip - cpu.segBase(cpu.cs);
