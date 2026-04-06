@@ -455,6 +455,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         mcbSeg += size + 1;
       }
       if (!allocated) {
+        console.warn(`[AH=48] FAIL: requested ${paras.toString(16)}h paras, largest free=${largestFree.toString(16)}h`);
         cpu.setFlag(CF, true);
         cpu.setReg16(EAX, 8); // insufficient memory
         cpu.setReg16(EBX, largestFree);
