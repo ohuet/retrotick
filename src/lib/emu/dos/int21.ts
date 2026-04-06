@@ -479,6 +479,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       const blockSeg = cpu.es;
       const mcbLin = (blockSeg - 1) * 16;
       const type = cpu.mem.readU8(mcbLin);
+      console.log(`[AH=49] Free ES=0x${blockSeg.toString(16)} mcb@${(blockSeg-1).toString(16)} type=${String.fromCharCode(type)}`);
       if (type === 0x4D || type === 0x5A) {
         cpu.mem.writeU16(mcbLin + 1, 0x0000); // mark as free
       }
@@ -534,13 +535,38 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
             // If next is not free, the 1 paragraph is lost (minor waste)
           }
         } else if (newParas > oldParas) {
-          // Growing — check if the next block is free and large enough
+          // Growing — merge consecutive free blocks after this one, then check
           if (mcbType === 0x4D) {
-            const nextSeg = blockSeg + oldParas;
-            const nextLin = nextSeg * 16;
-            const nextOwner = cpu.mem.readU16(nextLin + 1);
-            const nextSize = cpu.mem.readU16(nextLin + 3);
-            const nextType = cpu.mem.readU8(nextLin);
+            // First merge all consecutive free blocks after this one
+            let nextSeg = blockSeg + oldParas;
+            let nextLin = nextSeg * 16;
+            let nextOwner = cpu.mem.readU16(nextLin + 1);
+            let nextSize = cpu.mem.readU16(nextLin + 3);
+            let nextType = cpu.mem.readU8(nextLin);
+            const psp = emu._dosPSP || 0x100;
+            while (nextOwner === 0 && nextType === 0x4D) {
+              const nn = nextSeg + nextSize + 1;
+              const nnLin = nn * 16;
+              const nnOwner = cpu.mem.readU16(nnLin + 1);
+              const nnSize = cpu.mem.readU16(nnLin + 3);
+              const nnType = cpu.mem.readU8(nnLin);
+              if (nnOwner !== 0 && nnOwner !== psp) break; // stop at blocks owned by other programs
+              if (nnOwner === psp) {
+                // Same PSP owns this block — absorb it (program is managing its own memory)
+                nextSize = nextSize + 1 + nnSize;
+                nextType = nnType;
+                cpu.mem.writeU16(nextLin + 3, nextSize);
+                cpu.mem.writeU8(nextLin, nextType);
+                cpu.mem.writeU16(nnLin + 1, 0); // mark absorbed block as free
+                continue;
+              }
+              if (nnOwner !== 0) break;
+              // Merge nn into next
+              nextSize = nextSize + 1 + nnSize;
+              nextType = nnType;
+              cpu.mem.writeU16(nextLin + 3, nextSize);
+              cpu.mem.writeU8(nextLin, nextType);
+            }
             if (nextOwner === 0 && oldParas + 1 + nextSize >= newParas) {
               // Next block is free and large enough — absorb it
               cpu.mem.writeU16(mcbLinear + 3, newParas);
