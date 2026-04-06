@@ -1170,11 +1170,7 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.memory.writeU8(sftBase + 0x0F, 0x00);
 
   if (emu.dosEnableXms) setupXmsStub(emu.memory);
-  // Debug: check MCB at 0x600 before DPMI stub
-  const mcb600pre = emu.memory.readU8(0x600);
   if (emu.dosEnableDpmi) setupDpmiStub(emu.memory);
-  const mcb600post = emu.memory.readU8(0x600);
-  if (mcb600pre !== mcb600post) console.warn(`[DEBUG] MCB at 0x600 corrupted by setupDpmiStub: was 0x${mcb600pre.toString(16)} now 0x${mcb600post.toString(16)}`);
 
   // Write VGA 8x8 ROM font to F000:1000 (2048 bytes, 256 chars × 8 bytes)
   for (let i = 0; i < VGA_FONT_8X8_ROM.length; i++) {

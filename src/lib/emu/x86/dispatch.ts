@@ -23,45 +23,24 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
   // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
   if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
     const dpmi = cpu.emu._dpmiState;
-    const handler = dpmi.pmExcHandlers.get(intNum);
+    const handler = dpmi.pmExcHandlers.get(intNum + 256); // interrupt namespace (key=vec+256)
     // Don't intercept: INT 31h (DPMI services), INT FCh/FDh (DPMI stubs),
     // INT 20h (terminate), INT 21h AH<0xEE (standard DOS — handled in JS).
     // Only route to PM handlers for interrupts the PM client actually needs
     // (hardware interrupts, exceptions, and high INT 21h subfunctions).
+    // Recursion guard: track which INT handlers are currently active.
+    // When a PM handler for INT N calls INT N again (e.g. DOS4GW's PM
+    // INT 21h handler reflecting to DOS), reflect to JS/RM instead.
+    if (!dpmi._activeHandlers) dpmi._activeHandlers = new Set<number>();
     const shouldDispatchToPM = handler && handler.sel !== 0
       && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC
-      && intNum !== 0x20; // INT 20h = terminate, always handle in JS
+      && intNum !== 0x20 // INT 20h = terminate, always handle in JS
+      && !dpmi._activeHandlers.has(intNum); // recursion guard
     if (shouldDispatchToPM) {
-      {
-        const base = cpu.segBase(handler.sel);
-        const target = (base + handler.off) >>> 0;
-        if (intNum === 0x21 && !cpu.emu?._dpmiPmTraced) {
-          // Trace first PM INT 21h handler execution
-          cpu.emu!._dpmiPmTraced = true;
-          console.log(`[DPMI-PM TRACE] INT 21h handler at 0x${target.toString(16)}, tracing 30 instructions:`);
-          // Save state, push frame, set EIP to handler, trace
-          const csIs32t = cpu.loadGdtDescriptorIs32(cpu.cs);
-          const retIPt = cpu.eip - cpu.segBase(cpu.cs);
-          if (csIs32t) { cpu.push32(cpu.getFlags()); cpu.push32(cpu.cs); cpu.push32(retIPt >>> 0); }
-          else { cpu.push16(cpu.getFlags() & 0xFFFF); cpu.push16(cpu.cs); cpu.push16(retIPt & 0xFFFF); }
-          cpu.setFlags(cpu.getFlags() & ~0x0300);
-          cpu.loadCS(handler.sel);
-          cpu.eip = target;
-          for (let ti = 0; ti < 1000; ti++) {
-            const teip = cpu.eip >>> 0;
-            if (ti < 40 || ti % 50 === 0 || teip === 0x5F0 || teip === 0x7FE6 || cpu.realMode) {
-              const tb = Array.from({length: 6}, (_, i) => cpu.mem.readU8(teip + i).toString(16).padStart(2, '0'));
-              console.log(`  [${ti}] EIP=0x${teip.toString(16)} CS=0x${cpu.cs.toString(16)} DS=0x${cpu.ds.toString(16)} DI=0x${(cpu.reg[7]&0xFFFF).toString(16)} RM=${cpu.realMode} bytes=[${tb.join(' ')}]`);
-            }
-            if (teip === 0x5F0 || cpu.realMode) {
-              console.log(`  >>> RAW MODE SWITCH or RM detected at step ${ti}!`);
-            }
-            if (cpu.halted) break;
-            cpuStep(cpu);
-          }
-          return true;
-        }
-      }
+      dpmi._activeHandlers.add(intNum);
+
+      // Save ESP so we can detect when the handler IRETs
+      const savedESP = cpu.reg[4] >>> 0;
 
       // Push interrupt frame; if CS is 32-bit, use 32-bit frame
       const csIs32 = cpu.loadGdtDescriptorIs32(cpu.cs);
@@ -78,7 +57,24 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
       cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF
       cpu.loadCS(handler.sel);
       cpu.eip = (cpu.segBase(handler.sel) + handler.off) >>> 0;
+
+      // Schedule cleanup: clear active handler flag when ESP returns
+      // (approximation — cleared on next IRET that restores ESP)
+      if (!dpmi._handlerCleanup) dpmi._handlerCleanup = [];
+      dpmi._handlerCleanup.push({ intNum, esp: savedESP });
+
       return true;
+    }
+
+    // Check if any PM handlers have returned (ESP restored after IRET)
+    if (dpmi._handlerCleanup) {
+      const esp = cpu.reg[4] >>> 0;
+      for (let ci = dpmi._handlerCleanup.length - 1; ci >= 0; ci--) {
+        if (esp >= dpmi._handlerCleanup[ci].esp) {
+          dpmi._activeHandlers.delete(dpmi._handlerCleanup[ci].intNum);
+          dpmi._handlerCleanup.splice(ci, 1);
+        }
+      }
     }
   }
   // Try JS-handled DOS/BIOS interrupts first

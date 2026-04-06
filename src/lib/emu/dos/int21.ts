@@ -455,19 +455,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         mcbSeg += size + 1;
       }
       if (!allocated) {
-        // Dump MCB chain at failure point
-        let ms2 = emu._dosMcbFirstSeg || 0x0060;
-        const mcbDump: string[] = [];
-        for (let it3 = 0; it3 < 20; it3++) {
-          const ml2 = ms2 * 16;
-          const mt2 = String.fromCharCode(cpu.mem.readU8(ml2));
-          const mo2 = cpu.mem.readU16(ml2 + 1);
-          const msz2 = cpu.mem.readU16(ml2 + 3);
-          mcbDump.push(`${ms2.toString(16)}:${mt2}(own=${mo2.toString(16)},sz=${msz2.toString(16)})`);
-          if (mt2 === 'Z' || (mt2 !== 'M' && mt2 !== 'Z')) break;
-          ms2 += msz2 + 1;
-        }
-        console.warn(`[AH=48] FAIL: requested ${paras.toString(16)}h paras, largest free=${largestFree.toString(16)}h MCB: ${mcbDump.join(' → ')}`);
+        console.warn(`[AH=48] FAIL: requested ${paras.toString(16)}h paras, largest free=${largestFree.toString(16)}h`);
         cpu.setFlag(CF, true);
         cpu.setReg16(EAX, 8); // insufficient memory
         cpu.setReg16(EBX, largestFree);
@@ -479,7 +467,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       const blockSeg = cpu.es;
       const mcbLin = (blockSeg - 1) * 16;
       const type = cpu.mem.readU8(mcbLin);
-      console.log(`[AH=49] Free ES=0x${blockSeg.toString(16)} mcb@${(blockSeg-1).toString(16)} type=${String.fromCharCode(type)}`);
       if (type === 0x4D || type === 0x5A) {
         cpu.mem.writeU16(mcbLin + 1, 0x0000); // mark as free
       }
@@ -490,7 +477,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4A: { // Resize memory block (ES=segment, BX=new size in paragraphs)
       const blockSeg = cpu.es;
       const newParas = cpu.getReg16(EBX);
-      console.log(`[AH=4A] Resize ES=0x${blockSeg.toString(16)} to ${newParas.toString(16)}h paras (old=${cpu.mem.readU16((blockSeg-1)*16+3).toString(16)}h, type=${String.fromCharCode(cpu.mem.readU8((blockSeg-1)*16))})`);
       const topOfMem = 0xA000;
 
       // Update MCB at blockSeg - 1

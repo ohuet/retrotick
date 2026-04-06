@@ -446,7 +446,6 @@ export class Emulator {
   dosEnableSoundBlaster = true;
   dosEnableAdlib = true;
   dosEnableGus = true;
-  _dpmiPmTraced = false; // debug: trace first PM handler execution
   flatMemory: FlatMemory | null = null;  // created lazily for DOS programs
   wasmRegions = new Map<number, WasmCompiledRegion>();  // EIP-base → compiled region
   _wasmPending = new Set<number>();  // addresses with pending compilations

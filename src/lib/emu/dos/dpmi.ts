@@ -38,6 +38,9 @@ export interface DpmiState {
   memBlocks: Map<number, { base: number; size: number }>;
   nextMemAddr: number;
   dosMemBlocks: Map<number, { rmSeg: number; sel: number; paras: number }>;
+  // Recursion tracking for PM handler dispatch
+  _activeHandlers?: Set<number>;
+  _handlerCleanup?: { intNum: number; esp: number }[];
   pmExcHandlers: Map<number, { sel: number; off: number }>;
 }
 
@@ -181,7 +184,6 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.segBases.set(0x20, pspBase);
   cpu.segBases.set(0x28, esBase);
   cpu.segBases.set(0x30, 0); // flat code for stubs
-  console.log(`[DPMI] Entry: CS base=0x${csBase.toString(16)} DS base=0x${dsBase.toString(16)} SS base=0x${ssBase.toString(16)}`);
 
   // Initialize DPMI state
   emu._dpmiState = {
@@ -232,10 +234,10 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
     // ── Interrupt vectors ──────────────────────────────────────────
     case 0x0200: return dpmiGetRmIntVector(cpu, emu);
     case 0x0201: return dpmiSetRmIntVector(cpu, emu);
-    case 0x0202: // Get PM interrupt vector — same storage as exception handlers
-    case 0x0204: return dpmiGetPmExcHandler(cpu, st);
-    case 0x0203: // Set PM interrupt vector — same storage as exception handlers
-    case 0x0205: return dpmiSetPmExcHandler(cpu, st);
+    case 0x0202: return dpmiGetPmExcHandler(cpu, st, true);  // exception handler (exc 0-31)
+    case 0x0203: return dpmiSetPmExcHandler(cpu, st, true);  // exception handler (exc 0-31)
+    case 0x0204: return dpmiGetPmExcHandler(cpu, st, false); // interrupt vector (int 0-255)
+    case 0x0205: return dpmiSetPmExcHandler(cpu, st, false); // interrupt vector (int 0-255)
 
     // ── Real mode translation ──────────────────────────────────────
     case 0x0300: return dpmiSimulateRmInt(cpu, emu);
@@ -326,7 +328,6 @@ function dpmiSetSegmentBase(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
   const sel = cpu.getReg16(EBX);
   const idx = (sel & 0xFFF8) >>> 3;
   const newBase = ((cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX)) >>> 0;
-  console.log(`[DPMI 0007] Set base: sel=0x${sel.toString(16)} → base=0x${newBase.toString(16)}`);
 
   // Read existing descriptor, update base
   const addr = emu._gdtBase + idx * 8;
@@ -442,8 +443,6 @@ function dpmiSetDescriptor(cpu: CPU, emu: Emulator): boolean {
   const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
   const limit = readGdtEntryLimit(emu.memory, emu._gdtBase, idx);
   cpu.segBases.set(sel, base);
-  const rawBytes = Array.from({length: 8}, (_, i) => emu.memory.readU8(descAddr + i).toString(16).padStart(2, '0'));
-  console.log(`[DPMI 000C] Set desc: sel=0x${sel.toString(16)} base=0x${base.toString(16)} limit=0x${limit.toString(16)} bufAddr=0x${bufAddr.toString(16)} ES=0x${cpu.es.toString(16)} EDI=0x${(cpu.reg[EDI]>>>0).toString(16)} use32=${cpu.use32} raw=[${rawBytes.join(' ')}]`);
   cpu.setFlag(0x001, false);
   return true;
 }
@@ -507,9 +506,10 @@ function dpmiSetRmIntVector(cpu: CPU, emu: Emulator): boolean {
 }
 
 /** AX=0204: Get protected mode exception handler. BL=exc → CX:EDX=sel:off */
-function dpmiGetPmExcHandler(cpu: CPU, st: DpmiState): boolean {
-  const exc = cpu.getReg8(EBX);
-  const handler = st.pmExcHandlers.get(exc);
+function dpmiGetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boolean {
+  const vec = cpu.getReg8(EBX);
+  const key = isException ? vec : vec + 256; // separate namespace
+  const handler = st.pmExcHandlers.get(key);
   if (handler) {
     cpu.setReg16(ECX, handler.sel);
     cpu.reg[EDX] = handler.off;
@@ -521,12 +521,13 @@ function dpmiGetPmExcHandler(cpu: CPU, st: DpmiState): boolean {
   return true;
 }
 
-/** AX=0205: Set protected mode exception handler. BL=exc, CX:EDX=sel:off */
-function dpmiSetPmExcHandler(cpu: CPU, st: DpmiState): boolean {
-  const exc = cpu.getReg8(EBX);
+/** AX=0203/0205: Set PM exception/interrupt handler. BL=vec, CX:EDX=sel:off */
+function dpmiSetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boolean {
+  const vec = cpu.getReg8(EBX);
+  const key = isException ? vec : vec + 256; // separate namespace
   const sel = cpu.getReg16(ECX);
-  const off = cpu.reg[EDX] >>> 0;
-  st.pmExcHandlers.set(exc, { sel, off });
+  const off = cpu.use32 ? (cpu.reg[EDX] >>> 0) : cpu.getReg16(EDX);
+  st.pmExcHandlers.set(key, { sel, off });
   cpu.setFlag(0x001, false);
   return true;
 }
@@ -668,7 +669,6 @@ function dpmiAllocMemBlock(cpu: CPU, st: DpmiState): boolean {
   const handle = st.nextMemHandle++;
   st.memBlocks.set(handle, { base, size });
 
-  console.log(`[DPMI 0501] Alloc mem: size=0x${size.toString(16)} → base=0x${base.toString(16)} handle=${handle}`);
   cpu.setReg16(EBX, (base >>> 16) & 0xFFFF);
   cpu.setReg16(ECX, base & 0xFFFF);
   cpu.setReg16(ESI, (handle >>> 16) & 0xFFFF);
@@ -747,7 +747,6 @@ function dpmiGetRawModeSwitch(cpu: CPU): boolean {
  *  Register convention (same for both directions):
  *  AX=new DS, CX=new ES, DX=new SS, (E)BX=new (E)SP, SI=new CS, (E)DI=new (E)IP */
 export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
-  console.warn(`[DPMI SWITCH] INT FCh called! RM=${cpu.realMode} EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)}`);
   if (!emu._dpmiState) return false;
 
   const newDS = cpu.getReg16(EAX);
@@ -759,7 +758,6 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     // RM → PM: switch to protected mode
     const newESP = cpu.reg[EBX] >>> 0; // 32-bit ESP for PM
     const newEIP = cpu.reg[EDI] >>> 0; // 32-bit EIP for PM
-    console.log(`[RAW SWITCH] RM→PM CS=${newCS.toString(16)} EIP=0x${newEIP.toString(16)} SS=${newSS.toString(16)} ESP=0x${newESP.toString(16)} DS=${newDS.toString(16)} ES=${newES.toString(16)}`);
     cpu.realMode = false;
     cpu.loadCS(newCS);
     cpu.ds = newDS;
@@ -771,7 +769,6 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     // PM → RM: switch to real mode
     const newSP = cpu.getReg16(EBX);
     const newIP = cpu.getReg16(EDI);
-    console.log(`[RAW SWITCH] PM→RM CS=${newCS.toString(16)} IP=0x${newIP.toString(16)} SS=${newSS.toString(16)} SP=0x${newSP.toString(16)} DS=${newDS.toString(16)} ES=${newES.toString(16)} (linear EIP=0x${(newCS*16+newIP).toString(16)})`);
     cpu.realMode = true;
     cpu.use32 = false;
     cpu._addrSize16 = true;
