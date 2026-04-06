@@ -178,6 +178,8 @@ for (let i = 0; i < MAX_TICKS; i++) {
   if (i < 5 || i % 100 === 0) console.log(`[TICK ${i}] cpuSteps=${emu.cpuSteps} EIP=0x${eip.toString(16)} CS=0x${emu.cpu.cs.toString(16)} RM=${emu.cpu.realMode}`);
 }
 
+// Verify PM→RM stub at 0x600
+console.log(`[STUB] @0x600: ${Array.from({length: 3}, (_, i) => emu.memory.readU8(0x600 + i).toString(16).padStart(2, '0')).join(' ')} (expect: cd fc cb)`);
 // Set watchpoint on address 0xC9E to catch any write
 emu.memory._watchAddr = 0xC9E;
 

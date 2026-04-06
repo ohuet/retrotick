@@ -135,6 +135,8 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   writeGdtEntry(emu.memory, gdtBase, 4, pspBase, 0xFF, 0x92, 0x00);
   // idx 5 (0x28): ES — base=RM ES*16, limit=64KB, 16-bit, read/write
   writeGdtEntry(emu.memory, gdtBase, 5, esBase, 0xFFFF, 0x92, 0x00);
+  // idx 6 (0x30): flat code — base=0, limit=4GB, for raw mode switch stubs
+  writeGdtEntry(emu.memory, gdtBase, 6, 0, 0xFFFFF, 0x9A, 0x08); // G=1, 16-bit code
 
   // Set GDT in emulator
   emu._gdtBase = gdtBase;
@@ -177,6 +179,7 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.segBases.set(0x18, ssBase);
   cpu.segBases.set(0x20, pspBase);
   cpu.segBases.set(0x28, esBase);
+  cpu.segBases.set(0x30, 0); // flat code for stubs
   console.log(`[DPMI] Entry: CS base=0x${csBase.toString(16)} DS base=0x${dsBase.toString(16)} SS base=0x${ssBase.toString(16)}`);
 
   // Initialize DPMI state
@@ -730,9 +733,8 @@ function dpmiGetRawModeSwitch(cpu: CPU): boolean {
   cpu.setReg16(EBX, DPMI_ENTRY_SEG);      // F000
   cpu.setReg16(ECX, DPMI_RM2PM_OFF);      // 0A10
   // PM→RM: caller does FAR CALL to SI:(E)DI in protected mode (sel:off)
-  // Selector 0x08 = flat code (base=0). Offset is the linear address of the stub,
-  // which must be < 0x10000 so 16-bit PM code can reach it.
-  cpu.setReg16(ESI, 0x08);
+  // Selector 0x30 = flat code (base=0, limit=4GB). Offset is the linear address.
+  cpu.setReg16(ESI, 0x30);
   cpu.reg[EDI] = DPMI_PM2RM_LINEAR;      // 0x0600 — fits in 16-bit offset
   cpu.setFlag(0x001, false);
   return true;
