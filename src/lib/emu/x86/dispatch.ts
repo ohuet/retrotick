@@ -35,7 +35,32 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
       {
         const base = cpu.segBase(handler.sel);
         const target = (base + handler.off) >>> 0;
-        console.log(`[DPMI-PM] INT 0x${intNum.toString(16)} AH=0x${((cpu.reg[0]>>>8)&0xFF).toString(16)} → ${handler.sel.toString(16)}:${handler.off.toString(16)} from CS=0x${cpu.cs.toString(16)} EIP=0x${(cpu.eip>>>0).toString(16)} DS=0x${cpu.ds.toString(16)}(base=0x${cpu.segBase(cpu.ds).toString(16)}) ESP=0x${(cpu.reg[4]>>>0).toString(16)}`);
+        if (intNum === 0x21 && !cpu.emu?._dpmiPmTraced) {
+          // Trace first PM INT 21h handler execution
+          cpu.emu!._dpmiPmTraced = true;
+          console.log(`[DPMI-PM TRACE] INT 21h handler at 0x${target.toString(16)}, tracing 30 instructions:`);
+          // Save state, push frame, set EIP to handler, trace
+          const csIs32t = cpu.loadGdtDescriptorIs32(cpu.cs);
+          const retIPt = cpu.eip - cpu.segBase(cpu.cs);
+          if (csIs32t) { cpu.push32(cpu.getFlags()); cpu.push32(cpu.cs); cpu.push32(retIPt >>> 0); }
+          else { cpu.push16(cpu.getFlags() & 0xFFFF); cpu.push16(cpu.cs); cpu.push16(retIPt & 0xFFFF); }
+          cpu.setFlags(cpu.getFlags() & ~0x0300);
+          cpu.loadCS(handler.sel);
+          cpu.eip = target;
+          for (let ti = 0; ti < 1000; ti++) {
+            const teip = cpu.eip >>> 0;
+            if (ti < 40 || ti % 50 === 0 || teip === 0x5F0 || teip === 0x7FE6 || cpu.realMode) {
+              const tb = Array.from({length: 6}, (_, i) => cpu.mem.readU8(teip + i).toString(16).padStart(2, '0'));
+              console.log(`  [${ti}] EIP=0x${teip.toString(16)} CS=0x${cpu.cs.toString(16)} DS=0x${cpu.ds.toString(16)} DI=0x${(cpu.reg[7]&0xFFFF).toString(16)} RM=${cpu.realMode} bytes=[${tb.join(' ')}]`);
+            }
+            if (teip === 0x5F0 || cpu.realMode) {
+              console.log(`  >>> RAW MODE SWITCH or RM detected at step ${ti}!`);
+            }
+            if (cpu.halted) break;
+            cpuStep(cpu);
+          }
+          return true;
+        }
       }
 
       // Push interrupt frame; if CS is 32-bit, use 32-bit frame

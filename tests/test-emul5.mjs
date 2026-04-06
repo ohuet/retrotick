@@ -211,6 +211,8 @@ let nz = 0;
 for (let a = 0; a < 0x5970; a++) { if (emu.memory.readU8(a) !== 0) nz++; }
 console.log(`[EARLY] Non-zero bytes in 0x0000-0x5970: ${nz}`);
 
+// Check strlen target area (DS:DI = 0x1100 + 0x15EA = 0x26EA)
+console.log(`[STRLEN] @0x26E0: ${Array.from({length: 32}, (_, i) => emu.memory.readU8(0x26E0 + i).toString(16).padStart(2, '0')).join(' ')}`);
 // Check PM handler code — also check if code is at overlay base + offset
 console.log(`[CODE] @0x1D9E (0x1100+0xC9E): ${Array.from({length: 16}, (_, i) => emu.memory.readU8(0x1D9E + i).toString(16).padStart(2, '0')).join(' ')}`);
 // Check PM handler code at linear 0xC9E (sel 0x98 base=0, offset 0xC9E)
