@@ -212,6 +212,7 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
   const count = cpu.getReg16(ECX);
   const dsBase = cpu.segBase(cpu.ds);
   const bufAddr = dsBase + cpu.getReg16(EDX);
+  if (h > 4 && count > 0) console.log(`[READ] h=${h} count=0x${count.toString(16)} DS:DX=${cpu.ds.toString(16)}:${cpu.getReg16(2).toString(16)} bufAddr=0x${bufAddr.toString(16)}`);
   if (h <= 2) {
     cpu.setReg16(EAX, 0);
     cpu.setFlag(CF, false);

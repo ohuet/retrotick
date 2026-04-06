@@ -305,6 +305,7 @@ function dpmiSetSegmentBase(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
   const sel = cpu.getReg16(EBX);
   const idx = (sel & 0xFFF8) >>> 3;
   const newBase = ((cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX)) >>> 0;
+  console.log(`[DPMI 0007] Set base: sel=0x${sel.toString(16)} → base=0x${newBase.toString(16)}`);
 
   // Read existing descriptor, update base
   const addr = emu._gdtBase + idx * 8;
@@ -396,7 +397,8 @@ function dpmiGetDescriptor(cpu: CPU, emu: Emulator): boolean {
   const sel = cpu.getReg16(EBX);
   const idx = (sel & 0xFFF8) >>> 3;
   const descAddr = emu._gdtBase + idx * 8;
-  const bufAddr = (cpu.segBase(cpu.es) + cpu.reg[EDI]) >>> 0;
+  const edi = cpu.use32 ? (cpu.reg[EDI] >>> 0) : (cpu.reg[EDI] & 0xFFFF);
+  const bufAddr = (cpu.segBase(cpu.es) + edi) >>> 0;
 
   for (let i = 0; i < 8; i++) {
     emu.memory.writeU8(bufAddr + i, emu.memory.readU8(descAddr + i));
@@ -410,14 +412,17 @@ function dpmiSetDescriptor(cpu: CPU, emu: Emulator): boolean {
   const sel = cpu.getReg16(EBX);
   const idx = (sel & 0xFFF8) >>> 3;
   const descAddr = emu._gdtBase + idx * 8;
-  const bufAddr = (cpu.segBase(cpu.es) + cpu.reg[EDI]) >>> 0;
+  const bufAddr = (cpu.segBase(cpu.es) + (cpu.use32 ? cpu.reg[EDI] : (cpu.reg[EDI] & 0xFFFF))) >>> 0;
 
   for (let i = 0; i < 8; i++) {
     emu.memory.writeU8(descAddr + i, emu.memory.readU8(bufAddr + i));
   }
   // Update segBases cache
   const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
+  const limit = readGdtEntryLimit(emu.memory, emu._gdtBase, idx);
   cpu.segBases.set(sel, base);
+  const rawBytes = Array.from({length: 8}, (_, i) => emu.memory.readU8(descAddr + i).toString(16).padStart(2, '0'));
+  console.log(`[DPMI 000C] Set desc: sel=0x${sel.toString(16)} base=0x${base.toString(16)} limit=0x${limit.toString(16)} bufAddr=0x${bufAddr.toString(16)} ES=0x${cpu.es.toString(16)} EDI=0x${(cpu.reg[EDI]>>>0).toString(16)} use32=${cpu.use32} raw=[${rawBytes.join(' ')}]`);
   cpu.setFlag(0x001, false);
   return true;
 }
@@ -642,6 +647,7 @@ function dpmiAllocMemBlock(cpu: CPU, st: DpmiState): boolean {
   const handle = st.nextMemHandle++;
   st.memBlocks.set(handle, { base, size });
 
+  console.log(`[DPMI 0501] Alloc mem: size=0x${size.toString(16)} → base=0x${base.toString(16)} handle=${handle}`);
   cpu.setReg16(EBX, (base >>> 16) & 0xFFFF);
   cpu.setReg16(ECX, base & 0xFFFF);
   cpu.setReg16(ESI, (handle >>> 16) & 0xFFFF);
