@@ -489,6 +489,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4A: { // Resize memory block (ES=segment, BX=new size in paragraphs)
       const blockSeg = cpu.es;
       const newParas = cpu.getReg16(EBX);
+      console.log(`[AH=4A] Resize ES=0x${blockSeg.toString(16)} to ${newParas.toString(16)}h paras (old=${cpu.mem.readU16((blockSeg-1)*16+3).toString(16)}h, type=${String.fromCharCode(cpu.mem.readU8((blockSeg-1)*16))})`);
       const topOfMem = 0xA000;
 
       // Update MCB at blockSeg - 1
@@ -503,20 +504,71 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           cpu.setReg16(EBX, topOfMem - blockSeg); // max available
           break;
         }
-        // Update this MCB's size
-        cpu.mem.writeU16(mcbLinear + 3, newParas);
-
-        // Update or create the free MCB after the resized block
-        const freeSeg = blockSeg + newParas;
-        const freeLinear = freeSeg * 16;
-        const freeParas = topOfMem - freeSeg - 1;
-        if (freeParas > 0) {
-          cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
-          cpu.mem.writeU8(freeLinear, 0x5A); // last block
-          cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
-          cpu.mem.writeU16(freeLinear + 3, freeParas);
+        if (newParas < oldParas) {
+          // Shrinking — update size and create a free MCB if space allows
+          cpu.mem.writeU16(mcbLinear + 3, newParas);
+          const freed = oldParas - newParas;
+          if (freed > 1) {
+            // Enough space for a free MCB header + data
+            const freeSeg = blockSeg + newParas;
+            const freeLinear = freeSeg * 16;
+            cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
+            cpu.mem.writeU8(freeLinear, mcbType); // inherit M or Z from original
+            cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
+            cpu.mem.writeU16(freeLinear + 3, freed - 1);
+          } else if (freed === 1 && mcbType === 0x4D) {
+            // Only 1 paragraph freed — merge it into the next block if free
+            const nextSeg = blockSeg + oldParas;
+            const nextLin = nextSeg * 16;
+            const nextOwner = cpu.mem.readU16(nextLin + 1);
+            if (nextOwner === 0) {
+              // Next is free — just extend it backward by 1
+              const nextSize = cpu.mem.readU16(nextLin + 3);
+              const nextType = cpu.mem.readU8(nextLin);
+              const newFreeSeg = blockSeg + newParas;
+              const newFreeLin = newFreeSeg * 16;
+              cpu.mem.writeU8(newFreeLin, nextType);
+              cpu.mem.writeU16(newFreeLin + 1, 0);
+              cpu.mem.writeU16(newFreeLin + 3, nextSize + 1);
+            }
+            // If next is not free, the 1 paragraph is lost (minor waste)
+          }
+        } else if (newParas > oldParas) {
+          // Growing — check if the next block is free and large enough
+          if (mcbType === 0x4D) {
+            const nextSeg = blockSeg + oldParas;
+            const nextLin = nextSeg * 16;
+            const nextOwner = cpu.mem.readU16(nextLin + 1);
+            const nextSize = cpu.mem.readU16(nextLin + 3);
+            const nextType = cpu.mem.readU8(nextLin);
+            if (nextOwner === 0 && oldParas + 1 + nextSize >= newParas) {
+              // Next block is free and large enough — absorb it
+              cpu.mem.writeU16(mcbLinear + 3, newParas);
+              const remaining = oldParas + 1 + nextSize - newParas;
+              if (remaining > 1) {
+                cpu.mem.writeU8(mcbLinear, 0x4D);
+                const newFreeSeg = blockSeg + newParas;
+                const newFreeLin = newFreeSeg * 16;
+                cpu.mem.writeU8(newFreeLin, nextType);
+                cpu.mem.writeU16(newFreeLin + 1, 0x0000);
+                cpu.mem.writeU16(newFreeLin + 3, remaining - 1);
+              } else {
+                cpu.mem.writeU8(mcbLinear, nextType); // inherit M or Z
+              }
+            } else {
+              // Can't grow — not enough free space after
+              console.warn(`[AH=4A] Grow FAIL: need ${newParas.toString(16)}, have ${oldParas.toString(16)}, next@${nextSeg.toString(16)} own=${nextOwner.toString(16)} sz=${nextSize.toString(16)} type=${String.fromCharCode(nextType)}`);
+              cpu.setFlag(CF, true);
+              cpu.setReg16(EAX, 8);
+              cpu.setReg16(EBX, nextOwner === 0 ? oldParas + 1 + nextSize : oldParas);
+              break;
+            }
+          } else {
+            // Z (last) block — just update size (bounded by topOfMem check above)
+            cpu.mem.writeU16(mcbLinear + 3, newParas);
+          }
         } else {
-          cpu.mem.writeU8(mcbLinear, 0x5A); // this is now last block
+          cpu.mem.writeU16(mcbLinear + 3, newParas);
         }
       }
 

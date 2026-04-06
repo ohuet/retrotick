@@ -747,7 +747,7 @@ function dpmiGetRawModeSwitch(cpu: CPU): boolean {
  *  Register convention (same for both directions):
  *  AX=new DS, CX=new ES, DX=new SS, (E)BX=new (E)SP, SI=new CS, (E)DI=new (E)IP */
 export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
-  console.log(`[DPMI SWITCH] INT FCh called! RM=${cpu.realMode} EIP=0x${(cpu.eip>>>0).toString(16)}`);
+  console.warn(`[DPMI SWITCH] INT FCh called! RM=${cpu.realMode} EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)}`);
   if (!emu._dpmiState) return false;
 
   const newDS = cpu.getReg16(EAX);

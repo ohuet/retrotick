@@ -35,8 +35,7 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
       {
         const base = cpu.segBase(handler.sel);
         const target = (base + handler.off) >>> 0;
-        const b = Array.from({length: 8}, (_, i) => cpu.mem.readU8(target + i).toString(16).padStart(2, '0'));
-        console.log(`[DPMI-PM] INT 0x${intNum.toString(16)} → ${handler.sel.toString(16)}:${handler.off.toString(16)} base=0x${base.toString(16)} linear=0x${target.toString(16)} bytes=[${b.join(' ')}]`);
+        console.log(`[DPMI-PM] INT 0x${intNum.toString(16)} AH=0x${((cpu.reg[0]>>>8)&0xFF).toString(16)} → ${handler.sel.toString(16)}:${handler.off.toString(16)} from CS=0x${cpu.cs.toString(16)} EIP=0x${(cpu.eip>>>0).toString(16)} DS=0x${cpu.ds.toString(16)}(base=0x${cpu.segBase(cpu.ds).toString(16)}) ESP=0x${(cpu.reg[4]>>>0).toString(16)}`);
       }
 
       // Push interrupt frame; if CS is 32-bit, use 32-bit frame
