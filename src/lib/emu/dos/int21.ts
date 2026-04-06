@@ -455,7 +455,19 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         mcbSeg += size + 1;
       }
       if (!allocated) {
-        console.warn(`[AH=48] FAIL: requested ${paras.toString(16)}h paras, largest free=${largestFree.toString(16)}h`);
+        // Dump MCB chain at failure point
+        let ms2 = emu._dosMcbFirstSeg || 0x0060;
+        const mcbDump: string[] = [];
+        for (let it3 = 0; it3 < 20; it3++) {
+          const ml2 = ms2 * 16;
+          const mt2 = String.fromCharCode(cpu.mem.readU8(ml2));
+          const mo2 = cpu.mem.readU16(ml2 + 1);
+          const msz2 = cpu.mem.readU16(ml2 + 3);
+          mcbDump.push(`${ms2.toString(16)}:${mt2}(own=${mo2.toString(16)},sz=${msz2.toString(16)})`);
+          if (mt2 === 'Z' || (mt2 !== 'M' && mt2 !== 'Z')) break;
+          ms2 += msz2 + 1;
+        }
+        console.warn(`[AH=48] FAIL: requested ${paras.toString(16)}h paras, largest free=${largestFree.toString(16)}h MCB: ${mcbDump.join(' → ')}`);
         cpu.setFlag(CF, true);
         cpu.setReg16(EAX, 8); // insufficient memory
         cpu.setReg16(EBX, largestFree);

@@ -178,11 +178,31 @@ for (let i = 0; i < MAX_TICKS; i++) {
   if (i < 5 || i % 100 === 0) console.log(`[TICK ${i}] cpuSteps=${emu.cpuSteps} EIP=0x${eip.toString(16)} CS=0x${emu.cpu.cs.toString(16)} RM=${emu.cpu.realMode}`);
 }
 
+// Dump MCB chain
+function dumpMcb() {
+  const mem = emu.memory;
+  const first = emu._dosMcbFirstSeg || 0x0060;
+  let seg = first;
+  const parts = [];
+  for (let i = 0; i < 50; i++) {
+    const lin = seg * 16;
+    const t = String.fromCharCode(mem.readU8(lin));
+    const owner = mem.readU16(lin + 1);
+    const size = mem.readU16(lin + 3);
+    parts.push(`${seg.toString(16)}:${t}(own=${owner.toString(16)},sz=${size.toString(16)})`);
+    if (t === 'Z') break;
+    seg += size + 1;
+  }
+  return parts.join(' → ');
+}
+console.log(`[MCB before run] ${dumpMcb()}`);
+
 // Verify PM→RM stub at 0x600
 console.log(`[STUB] @0x600: ${Array.from({length: 3}, (_, i) => emu.memory.readU8(0x600 + i).toString(16).padStart(2, '0')).join(' ')} (expect: cd fc cb)`);
-// Set watchpoint on address 0xC9E to catch any write
-emu.memory._watchAddr = 0xC9E;
+// Set watchpoint on 0x600 (the MCB header) to catch corruption
+emu.memory._watchAddr = 0x600;
 
+console.log(`[MCB after run] ${dumpMcb()}`);
 // Check if address 0xC9E was ever written to
 // We can't set a watchpoint, but let's check memory right after DPMI init vs at end
 console.log(`[EARLY] @0xC9E: ${Array.from({length: 16}, (_, i) => emu.memory.readU8(0xC9E + i).toString(16).padStart(2, '0')).join(' ')}`);

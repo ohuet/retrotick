@@ -16,7 +16,8 @@ export const DPMI_INT = 0xFD;
 const DPMI_RM2PM_OFF = 0x0A10; // RM → PM switch stub (at F000:0A10)
 // PM→RM stub must be in the first 64KB (linear < 0x10000) so 16-bit PM code
 // can reach it via CALL FAR with a 16-bit offset.
-const DPMI_PM2RM_LINEAR = 0x0600; // linear address in low memory
+// Must NOT conflict with MCB chain (env MCB at 0x600) or DOS kernel stubs (0x500).
+const DPMI_PM2RM_LINEAR = 0x05F0; // after DOS kernel stubs, before env MCB
 export const DPMI_SWITCH_INT = 0xFC; // trap INT for mode switch stubs
 
 // GDT placed at ~4MB, above EMS at 0x200000
