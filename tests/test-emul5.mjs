@@ -161,7 +161,7 @@ console.warn = (...args) => {
   origWarn(...args);
 };
 
-const MAX_TICKS = 50;
+const MAX_TICKS = 5;
 let totalTicks = 0;
 
 for (let i = 0; i < MAX_TICKS; i++) {

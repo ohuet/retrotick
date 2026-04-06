@@ -3,6 +3,7 @@ import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
 import { dispatchMouseCallback } from './dos/mouse';
+import { dispatchException } from './x86/dispatch';
 import { tryFastLoop, tryCachedLoop } from './fast-loops';
 import { FlatMemory, OFF_ENTRY, OFF_EIP, OFF_EXIT } from './x86/flat-memory';
 import { compileWasmRegion, type WasmImports } from './x86/wasm-module';
@@ -795,6 +796,21 @@ export function emuTick(emu: Emulator): void {
       } else if (intNum >= 0x70 && intNum <= 0x77) {
         emu._picSlaveISR |= (1 << (intNum - 0x70));
       }
+
+      // In PM with DPMI active, dispatch HW interrupts through dispatchException
+      // so PM handlers installed via INT 31h AX=0205 are used.
+      if (!emu.cpu.realMode && emu._dpmiState) {
+        // For now, handle INT 08h (timer) in JS directly to avoid recursion
+        // issues when the PM handler chains back. Other HW interrupts go to PM handlers.
+        if (intNum !== 0x08) {
+          dispatchException(emu.cpu, intNum);
+        } else {
+          // Just update the BIOS tick counter (same as JS handler)
+          emu.memory.writeU32(0x46C, (emu.memory.readU32(0x46C) + 1) >>> 0);
+        }
+        continue;
+      }
+
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
       // Always read IVT memory first — programs chain multiple handlers
       // by writing directly to IVT (e.g. PoP chains timer→animation→sound)

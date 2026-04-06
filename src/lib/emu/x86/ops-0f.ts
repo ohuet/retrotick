@@ -249,6 +249,7 @@ export function exec0F(
           console.warn(`[CR0] Enter PM: EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} gdtBase=0x${(cpu.emu?._gdtBase??0).toString(16)} idtBase=0x${(cpu.emu?._idtBase??0).toString(16)}`);
         } else if (oldPE && !newPE) {
           // Back to real mode — force 16-bit operand/address size
+          console.warn(`[CR0] Leave PM→RM: EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} SS=0x${cpu.ss.toString(16)} ESP=0x${(cpu.reg[4]>>>0).toString(16)}`);
           cpu.realMode = true;
           cpu.use32 = false;
           cpu._addrSize16 = true;

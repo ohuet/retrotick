@@ -17,14 +17,27 @@ const DF = 0x400;
 const OF = 0x800;
 
 /** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode). */
-function dispatchException(cpu: CPU, intNum: number): boolean {
+export function dispatchException(cpu: CPU, intNum: number): boolean {
   // In PM with DPMI active, check if the client installed a PM interrupt handler.
   // Route hardware/software interrupts to it instead of our JS handler.
   // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
   if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
     const dpmi = cpu.emu._dpmiState;
     const handler = dpmi.pmExcHandlers.get(intNum);
-    if (handler && handler.sel !== 0 && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC) {
+    // Don't intercept: INT 31h (DPMI services), INT FCh/FDh (DPMI stubs),
+    // INT 20h (terminate), INT 21h AH<0xEE (standard DOS — handled in JS).
+    // Only route to PM handlers for interrupts the PM client actually needs
+    // (hardware interrupts, exceptions, and high INT 21h subfunctions).
+    const shouldDispatchToPM = handler && handler.sel !== 0
+      && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC
+      && intNum !== 0x20; // INT 20h = terminate, always handle in JS
+    if (shouldDispatchToPM) {
+      {
+        const base = cpu.segBase(handler.sel);
+        const target = (base + handler.off) >>> 0;
+        const b = Array.from({length: 8}, (_, i) => cpu.mem.readU8(target + i).toString(16).padStart(2, '0'));
+        console.log(`[DPMI-PM] INT 0x${intNum.toString(16)} → ${handler.sel.toString(16)}:${handler.off.toString(16)} base=0x${base.toString(16)} linear=0x${target.toString(16)} bytes=[${b.join(' ')}]`);
+      }
 
       // Push interrupt frame; if CS is 32-bit, use 32-bit frame
       const csIs32 = cpu.loadGdtDescriptorIs32(cpu.cs);

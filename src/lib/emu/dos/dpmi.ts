@@ -13,8 +13,10 @@ export const DPMI_ENTRY_OFF = 0x0A00;
 // INT number used by the DPMI entry stub to trap into our handler
 export const DPMI_INT = 0xFD;
 // Raw mode switch stubs
-const DPMI_RM2PM_OFF = 0x0A10; // RM → PM switch stub
-const DPMI_PM2RM_OFF = 0x0A20; // PM → RM switch stub
+const DPMI_RM2PM_OFF = 0x0A10; // RM → PM switch stub (at F000:0A10)
+// PM→RM stub must be in the first 64KB (linear < 0x10000) so 16-bit PM code
+// can reach it via CALL FAR with a 16-bit offset.
+const DPMI_PM2RM_LINEAR = 0x0600; // linear address in low memory
 export const DPMI_SWITCH_INT = 0xFC; // trap INT for mode switch stubs
 
 // GDT placed at ~4MB, above EMS at 0x200000
@@ -46,15 +48,15 @@ export function setupDpmiStub(mem: { writeU8(addr: number, val: number): void })
   mem.writeU8(romBase + DPMI_ENTRY_OFF + 1, DPMI_INT);
   mem.writeU8(romBase + DPMI_ENTRY_OFF + 2, 0xCB); // RETF
 
-  // RM→PM switch stub: INT FC; RETF
+  // RM→PM switch stub at F000:0A10: INT FC; RETF
   mem.writeU8(romBase + DPMI_RM2PM_OFF + 0, 0xCD);
   mem.writeU8(romBase + DPMI_RM2PM_OFF + 1, DPMI_SWITCH_INT);
   mem.writeU8(romBase + DPMI_RM2PM_OFF + 2, 0xCB);
 
-  // PM→RM switch stub: INT FC; RETF
-  mem.writeU8(romBase + DPMI_PM2RM_OFF + 0, 0xCD);
-  mem.writeU8(romBase + DPMI_PM2RM_OFF + 1, DPMI_SWITCH_INT);
-  mem.writeU8(romBase + DPMI_PM2RM_OFF + 2, 0xCB);
+  // PM→RM switch stub at low linear address (must be < 0x10000 for 16-bit PM CALL FAR)
+  mem.writeU8(DPMI_PM2RM_LINEAR + 0, 0xCD);
+  mem.writeU8(DPMI_PM2RM_LINEAR + 1, DPMI_SWITCH_INT);
+  mem.writeU8(DPMI_PM2RM_LINEAR + 2, 0xCB);
 }
 
 // ── GDT helpers ──────────────────────────────────────────────────────
@@ -705,11 +707,10 @@ function dpmiGetRawModeSwitch(cpu: CPU): boolean {
   cpu.setReg16(EBX, DPMI_ENTRY_SEG);      // F000
   cpu.setReg16(ECX, DPMI_RM2PM_OFF);      // 0A10
   // PM→RM: caller does FAR CALL to SI:(E)DI in protected mode (sel:off)
-  // Must use a valid PM code selector — 0x08 is flat code (base=0).
-  // The stub's linear address is F000*16 + DPMI_PM2RM_OFF = 0xF0000 + offset.
-  const pm2rmLinear = (DPMI_ENTRY_SEG * 16 + DPMI_PM2RM_OFF) >>> 0;
-  cpu.setReg16(ESI, 0x08);                // PM flat code selector
-  cpu.reg[EDI] = pm2rmLinear;             // 32-bit offset (linear address)
+  // Selector 0x08 = flat code (base=0). Offset is the linear address of the stub,
+  // which must be < 0x10000 so 16-bit PM code can reach it.
+  cpu.setReg16(ESI, 0x08);
+  cpu.reg[EDI] = DPMI_PM2RM_LINEAR;      // 0x0600 — fits in 16-bit offset
   cpu.setFlag(0x001, false);
   return true;
 }
