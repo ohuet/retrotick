@@ -18,6 +18,11 @@ interface EmsHandle {
 }
 
 export function handleInt67(cpu: CPU, emu: Emulator): boolean {
+  if (!emu.dosEnableEms) {
+    cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8400; // AH=84 function not supported
+    return true;
+  }
+
   const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
 
   // Initialize EMS state on first call

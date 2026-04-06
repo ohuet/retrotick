@@ -218,7 +218,9 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     emu.initConsoleBuffer();
     emu.memory.a20Mask = 0xFFFFF; // A20 off for DOS programs
 
-    const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath);
+    const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath, {
+      soundBlaster: emu.dosEnableSoundBlaster, gus: emu.dosEnableGus,
+    });
     setupDosEnvironment(emu, mz);
     emu.flatMemory = new FlatMemory();
     emu.memory.enableFlatMode(emu.flatMemory.wasmMemory.buffer, 0x08000000);
@@ -242,7 +244,9 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       emu.additionalFiles.set(exeName, arrayBuffer);
     }
 
-    const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath);
+    const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath, {
+      soundBlaster: emu.dosEnableSoundBlaster, gus: emu.dosEnableGus,
+    });
     setupDosEnvironment(emu, mz);
     // Enable flat memory for DOS — shares buffer with WASM JIT (zero-copy)
     emu.flatMemory = new FlatMemory();
@@ -1165,8 +1169,8 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.memory.writeU8(sftBase + 0x0E, 0x00);
   emu.memory.writeU8(sftBase + 0x0F, 0x00);
 
-  setupXmsStub(emu.memory);
-  setupDpmiStub(emu.memory);
+  if (emu.dosEnableXms) setupXmsStub(emu.memory);
+  if (emu.dosEnableDpmi) setupDpmiStub(emu.memory);
 
   // Write VGA 8x8 ROM font to F000:1000 (2048 bytes, 256 chars × 8 bytes)
   for (let i = 0; i < VGA_FONT_8X8_ROM.length; i++) {

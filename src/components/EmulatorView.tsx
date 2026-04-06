@@ -691,7 +691,16 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
         // Load child (this creates its own consoleBuffer via initConsoleBuffer)
         await childEmu.load(childData, childPeInfo, canvas);
-        if (childEmu.isDOS) childEmu.wasmJitEnabled = loadDosSettings().jitEnabled;
+        if (childEmu.isDOS) {
+          const ds = loadDosSettings();
+          childEmu.wasmJitEnabled = ds.jitEnabled;
+          childEmu.dosEnableDpmi = ds.dpmi;
+          childEmu.dosEnableXms = ds.xms;
+          childEmu.dosEnableEms = ds.ems;
+          childEmu.dosEnableSoundBlaster = ds.soundBlaster;
+          childEmu.dosEnableAdlib = ds.adlib;
+          childEmu.dosEnableGus = ds.gus;
+        }
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
         childEmu.consoleBuffer = emu.consoleBuffer;
@@ -750,8 +759,17 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Load registry from IndexedDB then start
       initAndRun().then(() => {
-        // Enable WASM JIT if configured in DOS Settings
-        if (emu.isDOS) emu.wasmJitEnabled = loadDosSettings().jitEnabled;
+        // Apply DOS Settings
+        if (emu.isDOS) {
+          const ds = loadDosSettings();
+          emu.wasmJitEnabled = ds.jitEnabled;
+          emu.dosEnableDpmi = ds.dpmi;
+          emu.dosEnableXms = ds.xms;
+          emu.dosEnableEms = ds.ems;
+          emu.dosEnableSoundBlaster = ds.soundBlaster;
+          emu.dosEnableAdlib = ds.adlib;
+          emu.dosEnableGus = ds.gus;
+        }
 
         // Assign shared AudioContext — created in App during user gesture
         if (sharedAudioContext) {

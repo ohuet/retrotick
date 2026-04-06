@@ -83,6 +83,8 @@ export interface UiStrings {
   textRendererCanvas: string;
   labelJit: string;
   jitExperimental: string;
+  labelMemory: string;
+  labelAudio: string;
   // Properties dialog
   properties: string;
   propType: string;
@@ -202,6 +204,8 @@ const en: UiStrings = {
   textRendererCanvas: 'Canvas (precise, no text selection)',
   labelJit: 'WASM JIT Compiler',
   jitExperimental: 'Enable (experimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Properties',
   propType: 'Type:',
   propLocation: 'Location:',
@@ -310,6 +314,8 @@ const fr: UiStrings = {
   textRendererCanvas: 'Canvas (pr\u00e9cis, pas de s\u00e9lection de texte)',
   labelJit: 'Compilateur WASM JIT',
   jitExperimental: 'Activer (exp\u00e9rimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propri\u00e9t\u00e9s',
   propType: 'Type\u00a0:',
   propLocation: 'Emplacement\u00a0:',
@@ -418,6 +424,8 @@ const de: UiStrings = {
   textRendererCanvas: 'Canvas (pr\u00e4zise, kein Text ausw\u00e4hlbar)',
   labelJit: 'WASM-JIT-Compiler',
   jitExperimental: 'Aktivieren (experimentell)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Eigenschaften',
   propType: 'Typ:',
   propLocation: 'Ort:',
@@ -526,6 +534,8 @@ const es: UiStrings = {
   textRendererCanvas: 'Canvas (preciso, sin selecci\u00f3n de texto)',
   labelJit: 'Compilador WASM JIT',
   jitExperimental: 'Activar (experimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propiedades',
   propType: 'Tipo:',
   propLocation: 'Ubicaci\u00f3n:',
@@ -634,6 +644,8 @@ const ja: UiStrings = {
   textRendererCanvas: 'Canvas (\u6b63\u78ba\u3001\u30c6\u30ad\u30b9\u30c8\u9078\u629e\u4e0d\u53ef)',
   labelJit: 'WASM JIT \u30b3\u30f3\u30d1\u30a4\u30e9',
   jitExperimental: '\u6709\u52b9\u306b\u3059\u308b\uff08\u5b9f\u9a13\u7684\uff09',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: '\u30d7\u30ed\u30d1\u30c6\u30a3',
   propType: '\u7a2e\u985e:',
   propLocation: '\u5834\u6240:',
@@ -742,6 +754,8 @@ const zhCN: UiStrings = {
   textRendererCanvas: 'Canvas (\u7cbe\u786e\uff0c\u4e0d\u53ef\u9009\u62e9\u6587\u672c)',
   labelJit: 'WASM JIT \u7f16\u8bd1\u5668',
   jitExperimental: '\u542f\u7528\uff08\u5b9e\u9a8c\u6027\uff09',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: '\u5c5e\u6027',
   propType: '\u7c7b\u578b:',
   propLocation: '\u4f4d\u7f6e:',
@@ -850,6 +864,8 @@ const ptBR: UiStrings = {
   textRendererCanvas: 'Canvas (preciso, sem sele\u00e7\u00e3o de texto)',
   labelJit: 'Compilador WASM JIT',
   jitExperimental: 'Ativar (experimental)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propriedades',
   propType: 'Tipo:',
   propLocation: 'Local:',
@@ -958,6 +974,8 @@ const it: UiStrings = {
   textRendererCanvas: 'Canvas (preciso, senza selezione testo)',
   labelJit: 'Compilatore WASM JIT',
   jitExperimental: 'Attivare (sperimentale)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'Propriet\u00e0',
   propType: 'Tipo:',
   propLocation: 'Percorso:',
@@ -1066,6 +1084,8 @@ const pl: UiStrings = {
   textRendererCanvas: 'Canvas (dok\u0142adny, bez zaznaczania tekstu)',
   labelJit: 'Kompilator WASM JIT',
   jitExperimental: 'W\u0142\u0105cz (eksperymentalny)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: 'W\u0142a\u015bciwo\u015bci',
   propType: 'Typ:',
   propLocation: 'Lokalizacja:',
@@ -1174,6 +1194,8 @@ const ko: UiStrings = {
   textRendererCanvas: 'Canvas (\uc815\ubc00, \ud14d\uc2a4\ud2b8 \uc120\ud0dd \ubd88\uac00)',
   labelJit: 'WASM JIT \ucef4\ud30c\uc77c\ub7ec',
   jitExperimental: '\ud65c\uc131\ud654 (\uc2e4\ud5d8\uc801)',
+  labelMemory: 'Memory',
+  labelAudio: 'Audio',
   properties: '\uc18d\uc131',
   propType: '\uc720\ud615:',
   propLocation: '\uc704\uce58:',
