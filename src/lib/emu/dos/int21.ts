@@ -465,6 +465,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x49: { // Free memory (ES=segment of block)
       const blockSeg = cpu.es;
+      // (debug log removed)
       const mcbLin = (blockSeg - 1) * 16;
       const type = cpu.mem.readU8(mcbLin);
       if (type === 0x4D || type === 0x5A) {
@@ -477,6 +478,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4A: { // Resize memory block (ES=segment, BX=new size in paragraphs)
       const blockSeg = cpu.es;
       const newParas = cpu.getReg16(EBX);
+      // (debug log removed)
       const topOfMem = 0xA000;
 
       // Find the MCB at blockSeg - 1

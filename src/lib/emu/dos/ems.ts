@@ -295,7 +295,7 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.mem.writeU8(vcpiPmLinear, 0xCD);
           cpu.mem.writeU8(vcpiPmLinear + 1, VCPI_PM_INT);
           cpu.mem.writeU8(vcpiPmLinear + 2, 0xCB); // RETF (32-bit far return)
-          cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | vcpiPmLinear;
+          cpu.reg[EBX] = vcpiPmLinear; // full 32-bit offset in VCPI code segment
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
         }
