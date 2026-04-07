@@ -359,6 +359,7 @@ export class Emulator {
   _emsMapping?: number[];  // 4 physical page mappings
   _emsSavedMaps?: Map<number, number[]>;  // saved page map states (AH=47/48)
   _vcpiNextPage?: number;  // VCPI page allocator (page frame number)
+  _vcpiPrivateArea?: number;   // VCPI host private area base address
   _vcpiSavedIVT?: Uint16Array; // V86 IVT segment values saved before first PM entry
   _vcpiPmGdtBase?: number; // Saved PM GDT/IDT for VCPI V86→PM restore
   _vcpiPmGdtLimit?: number;

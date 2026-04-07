@@ -9,6 +9,69 @@ const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
 // INT number for VCPI PM service trap (called from PM via stub at VCPI entry point)
 export const VCPI_PM_INT = 0xFA;
 
+// VCPI private area — host PM environment loaded during PM→V86 switch.
+// Layout matches DOSBox's EMM386 implementation.
+const VCPI_PRIVATE_AREA = 0x3E0000; // 16KB area in extended memory
+
+/** Set up the VCPI private area (GDT, LDT, IDT, TSS) like DOSBox. */
+function setupVcpiPrivateArea(mem: { writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): void {
+  const P = VCPI_PRIVATE_AREA;
+
+  // === GDT at P+0x0000 (limit=0xFF = 32 entries) ===
+  // [0] null
+  mem.writeU32(P + 0x0000, 0x00000000);
+  mem.writeU32(P + 0x0004, 0x00000000);
+  // [1] LDT descriptor: base=P+0x1000, limit=0xFF, type=0x82 (LDT)
+  const ldtAddr = P + 0x1000;
+  mem.writeU32(P + 0x0008, ((ldtAddr & 0xFFFF) << 16) | 0xFF);
+  mem.writeU32(P + 0x000C, ((ldtAddr & 0xFF0000) >> 16) | (ldtAddr & 0xFF000000) | 0x8200);
+  // [2] TSS descriptor: base=P+0x3000, limit=0x268, type=0x89 (available 32-bit TSS)
+  const tssAddr = P + 0x3000;
+  mem.writeU32(P + 0x0010, ((tssAddr & 0xFFFF) << 16) | (0x0068 + 0x200));
+  mem.writeU32(P + 0x0014, ((tssAddr & 0xFF0000) >> 16) | (tssAddr & 0xFF000000) | 0x8900);
+  // [3..31] zeros (free entries for DOS4GW passup stacks)
+  for (let i = 0x18; i < 0x100; i += 4) mem.writeU32(P + i, 0);
+
+  // === LDT at P+0x1000 ===
+  // [0] null
+  mem.writeU32(P + 0x1000, 0x00000000);
+  mem.writeU32(P + 0x1004, 0x00000000);
+  // [1] sel=0x0C: Code segment (base=P, limit=0xFFFF, 16-bit, execute/read)
+  mem.writeU32(P + 0x1008, ((P & 0xFFFF) << 16) | 0xFFFF);
+  mem.writeU32(P + 0x100C, ((P & 0xFF0000) >> 16) | (P & 0xFF000000) | 0x9A00);
+  // [2] sel=0x14: Data segment (base=P, limit=0xFFFF, 16-bit, read/write)
+  mem.writeU32(P + 0x1010, ((P & 0xFFFF) << 16) | 0xFFFF);
+  mem.writeU32(P + 0x1014, ((P & 0xFF0000) >> 16) | (P & 0xFF000000) | 0x9200);
+
+  // === IDT at P+0x2000 (256 interrupt gates) ===
+  // Each gate: selector=0x0C (LDT code), offset=0x2800+int*4, type=0xEE (32-bit int gate, DPL=3)
+  for (let i = 0; i < 256; i++) {
+    const stubOff = 0x2800 + i * 4;
+    mem.writeU32(P + 0x2000 + i * 8, 0x000C0000 | stubOff);
+    mem.writeU32(P + 0x2000 + i * 8 + 4, 0x0000EE00);
+  }
+
+  // === INT stubs at P+0x2800 (256 × 4 bytes) ===
+  // Each stub: CALL NEAR to V86 monitor at P+0x2E00, then IRET (dummy)
+  // CALL displacement: target is always P+0x2E00
+  for (let i = 0; i < 256; i++) {
+    const stubAddr = P + 0x2800 + i * 4;
+    mem.writeU8(stubAddr, 0xCF); // IRET — in our emulator, just return
+    mem.writeU8(stubAddr + 1, 0x90); // NOP
+    mem.writeU8(stubAddr + 2, 0x90); // NOP
+    mem.writeU8(stubAddr + 3, 0x90); // NOP
+  }
+
+  // === TSS at P+0x3000 ===
+  // Clear TSS
+  for (let i = 0; i < 0x68 + 0x200; i++) mem.writeU8(P + 0x3000 + i, 0);
+  // Ring 0 stack: SS=0x14 (LDT data seg), ESP=0x2000
+  mem.writeU32(P + 0x3004, 0x00002000); // ESP0
+  mem.writeU32(P + 0x3008, 0x00000014); // SS0 (LDT selector for data segment)
+  // IO permission bitmap offset
+  mem.writeU32(P + 0x3066, 0x0068);
+}
+
 // EMS page frame at segment D000 (linear D0000-DFFFF = 64KB = 4 pages)
 const EMS_PAGE_FRAME_SEG = 0xD000;
 const EMS_PAGE_SIZE = 16384; // 16KB per page
@@ -262,7 +325,18 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
       const al = cpu.reg[EAX] & 0xFF;
       switch (al) {
         case 0x00: // VCPI Installation Check
-          // Return success — we support the VCPI interface
+          // Set up private area and save V86 IVT on first call.
+          // Must happen here (before DOS4GW modifies IVT with PM selectors)
+          // so HW interrupts during V86 don't dispatch to PM handlers.
+          if (!emu._vcpiPrivateArea) {
+            setupVcpiPrivateArea(cpu.mem);
+            emu._vcpiPrivateArea = VCPI_PRIVATE_AREA;
+            emu._gdtBase = VCPI_PRIVATE_AREA;
+            emu._gdtLimit = 0xFF;
+            // Save the original V86 IVT segment values NOW
+            emu._vcpiSavedIVT = new Uint16Array(256);
+            for (let i = 0; i < 256; i++) emu._vcpiSavedIVT[i] = cpu.mem.readU16(i * 4 + 2);
+          }
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000; // AH=0 success
           cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x0100; // BX=version 1.0
           break;
@@ -344,13 +418,7 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
         case 0x0C: { // VCPI Switch from V86/RM to Protected Mode
           // Enable A20 first — PM needs full address space for GDT/IDT/LDT
           emu.memory.a20Mask = 0xFFFFFFFF;
-          // Save original V86 IVT on first switch (only the segment values, not offsets).
-          // PM code modifies IVT entries with PM selectors; we need to detect these
-          // to prevent IVT chaining to invalid RM addresses.
-          if (!emu._vcpiSavedIVT) {
-            emu._vcpiSavedIVT = new Uint16Array(256);
-            for (let i = 0; i < 256; i++) emu._vcpiSavedIVT[i] = cpu.mem.readU16(i * 4 + 2);
-          }
+          // IVT already saved during DE00 (before DOS4GW modifies it)
           // ESI = linear address of data structure
           const esi = cpu.reg[ESI] >>> 0;
           const newCR3 = cpu.mem.readU32(esi);
@@ -505,6 +573,21 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       const newFS = cpu.mem.readU32(frameBase + 28) & 0xFFFF;
       const newGS = cpu.mem.readU32(frameBase + 32) & 0xFFFF;
 
+      // Load host private GDT/IDT before switching to V86 (matching DOSBox).
+      // This makes SGDT return 32 entries so DOS4GW allocates enough GDT space.
+      if (emu._vcpiPrivateArea) {
+        const P = emu._vcpiPrivateArea;
+        emu._gdtBase = P;
+        emu._gdtLimit = 0xFF; // 32 entries
+        emu._idtBase = P + 0x2000;
+        emu._idtLimit = 0x7FF; // 256 entries
+        emu._ldtr = 0x08; // GDT[1] = LDT
+        emu._tr = 0x10;   // GDT[2] = TSS
+        // Clear TSS busy bit
+        const tssDescAddr = P + 0x0010 + 5;
+        const tb = cpu.mem.readU8(tssDescAddr);
+        cpu.mem.writeU8(tssDescAddr, tb & 0xFD);
+      }
       // Switch to V86/real mode
       cpu.realMode = true;
       cpu.use32 = false;

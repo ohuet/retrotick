@@ -802,9 +802,12 @@ export function emuTick(emu: Emulator): void {
     }
     if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
-      // Note: IF flag (CLI/STI) is NOT checked. Many DOS demos run rendering
-      // loops with CLI and rely on timer interrupts firing regardless. This is
-      // technically incorrect but matches the practical behavior needed.
+      // IF flag: respect it when VCPI is active (DOS extenders use CLI during
+      // critical PM init). For non-VCPI DOS programs, ignore IF — many demos
+      // run rendering loops with CLI and rely on timer interrupts firing.
+      if (emu._vcpiPrivateArea && emu.cpu.realMode && !(emu.cpu.getFlags() & 0x200)) {
+        continue; // IF=0, VCPI active, V86 mode → skip HW interrupt
+      }
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       const masterBase = emu._picMasterBase;
@@ -836,7 +839,17 @@ export function emuTick(emu: Emulator): void {
       const ivtSeg = emu.memory.readU16(intNum * 4 + 2);
       const ivtVec = (ivtSeg << 16) | ivtOff;
       let vec: number | undefined;
-      if (ivtVec !== biosDefault && ivtSeg !== 0xF000) {
+      // Skip PM-modified IVT entries in V86 mode (VCPI PM code rewrites vectors
+      // with PM selectors; dispatching them as RM segments crashes)
+      // In V86 (RM) with VCPI: skip IVT entries modified by PM code (PM selectors
+      // interpreted as RM segments → wrong addresses). In PM: dispatch normally
+      // (PM selectors ARE valid in PM).
+      let pmModifiedHW = false;
+      if (emu.cpu.realMode && emu._vcpiSavedIVT && ivtSeg !== 0xF000) {
+        const origSeg = emu._vcpiSavedIVT[intNum];
+        if (origSeg !== undefined && ivtSeg !== origSeg) pmModifiedHW = true;
+      }
+      if (ivtVec !== biosDefault && ivtSeg !== 0xF000 && !pmModifiedHW) {
         vec = ivtVec;
       } else {
         vec = emu._dosIntVectors.get(intNum);
