@@ -1314,9 +1314,11 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
 
     default:
-      console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
-      cpu.setFlag(CF, true);
-      cpu.setReg16(EAX, 1); // invalid function
+      if (ah < 0x6D) console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
+      // DOSBox behavior: for unknown functions, set AL=0 and don't set CF.
+      // Functions >= 0x6D are simply skipped. This prevents DOS extenders
+      // (like DOS4GW with AH=FFh) from seeing errors for their internal calls.
+      cpu.setReg8(EAX, 0x00);
       break;
   }
   return true;

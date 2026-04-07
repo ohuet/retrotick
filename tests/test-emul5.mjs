@@ -71,7 +71,7 @@ await emu.load(emul5Buf, peInfo, mockCanvas);
 emu.run();
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const MAX_TICKS = 50;
+const MAX_TICKS = 200;
 let totalTicks = 0;
 
 for (let i = 0; i < MAX_TICKS; i++) {

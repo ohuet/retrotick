@@ -31,49 +31,34 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
     // Recursion guard: track which INT handlers are currently active.
     // When a PM handler for INT N calls INT N again (e.g. DOS4GW's PM
     // INT 21h handler reflecting to DOS), reflect to JS/RM instead.
-    if (!dpmi._activeHandlers) dpmi._activeHandlers = new Set<number>();
     const shouldDispatchToPM = handler && handler.sel !== 0
       && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC
-      && intNum !== 0x20 // INT 20h = terminate, always handle in JS
-      && !dpmi._activeHandlers.has(intNum); // recursion guard
+      && intNum !== 0x20; // INT 20h = terminate, always handle in JS
+
     if (shouldDispatchToPM) {
-      dpmi._activeHandlers.add(intNum);
-
-      // Save ESP so we can detect when the handler IRETs
-      const savedESP = cpu.reg[4] >>> 0;
-
-      // Push interrupt frame; if CS is 32-bit, use 32-bit frame
-      const csIs32 = cpu.loadGdtDescriptorIs32(cpu.cs);
-      const returnIP = cpu.eip - cpu.segBase(cpu.cs);
-      if (csIs32) {
-        cpu.push32(cpu.getFlags());
-        cpu.push32(cpu.cs);
-        cpu.push32(returnIP >>> 0);
+      // Recursion guard: if caller's CS matches the handler's selector or
+      // the initial code segment (0x08), this is the handler calling INT N
+      // to reflect to RM — don't re-enter the handler.
+      const callerCS = cpu.cs;
+      if (callerCS === handler.sel || callerCS === 0x08) {
+        // Handler is reflecting to RM — fall through to JS handler
       } else {
-        cpu.push16(cpu.getFlags() & 0xFFFF);
-        cpu.push16(cpu.cs);
-        cpu.push16(returnIP & 0xFFFF);
-      }
-      cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF
-      cpu.loadCS(handler.sel);
-      cpu.eip = (cpu.segBase(handler.sel) + handler.off) >>> 0;
-
-      // Schedule cleanup: clear active handler flag when ESP returns
-      // (approximation — cleared on next IRET that restores ESP)
-      if (!dpmi._handlerCleanup) dpmi._handlerCleanup = [];
-      dpmi._handlerCleanup.push({ intNum, esp: savedESP });
-
-      return true;
-    }
-
-    // Check if any PM handlers have returned (ESP restored after IRET)
-    if (dpmi._handlerCleanup) {
-      const esp = cpu.reg[4] >>> 0;
-      for (let ci = dpmi._handlerCleanup.length - 1; ci >= 0; ci--) {
-        if (esp >= dpmi._handlerCleanup[ci].esp) {
-          dpmi._activeHandlers.delete(dpmi._handlerCleanup[ci].intNum);
-          dpmi._handlerCleanup.splice(ci, 1);
+        // Push interrupt frame; if CS is 32-bit, use 32-bit frame
+        const csIs32 = cpu.loadGdtDescriptorIs32(callerCS);
+        const returnIP = cpu.eip - cpu.segBase(callerCS);
+        if (csIs32) {
+          cpu.push32(cpu.getFlags());
+          cpu.push32(callerCS);
+          cpu.push32(returnIP >>> 0);
+        } else {
+          cpu.push16(cpu.getFlags() & 0xFFFF);
+          cpu.push16(callerCS);
+          cpu.push16(returnIP & 0xFFFF);
         }
+        cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF
+        cpu.loadCS(handler.sel);
+        cpu.eip = (cpu.segBase(handler.sel) + handler.off) >>> 0;
+        return true;
       }
     }
   }
