@@ -1201,11 +1201,15 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.dosAudio.readMemory = (addr: number) => emu.memory.readU8(addr);
   emu.dosAudio.writeMemory = (addr: number, val: number) => emu.memory.writeU8(addr, val);
   emu.dosAudio.onSBIRQ = () => {
-    if (!emu._pendingHwInts.includes(0x0F)) emu._pendingHwInts.push(0x0F);
+    const intNum = emu._picMasterBase + 7; // IRQ 7
+    if (!(emu._picMasterMask & 0x80) && !emu._pendingHwInts.includes(intNum))
+      emu._pendingHwInts.push(intNum);
   };
-  // Wire GUS IRQ (IRQ 5 = INT 0x0D)
+  // Wire GUS IRQ (IRQ 5)
   emu.dosAudio.onGUSIRQ = () => {
-    if (!emu._pendingHwInts.includes(0x0D)) emu._pendingHwInts.push(0x0D);
+    const intNum = emu._picMasterBase + 5; // IRQ 5
+    if (!(emu._picMasterMask & 0x20) && !emu._pendingHwInts.includes(intNum))
+      emu._pendingHwInts.push(intNum);
   };
   emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readU8(addr);
 }

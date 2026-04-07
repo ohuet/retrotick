@@ -22,7 +22,7 @@ export { GUS } from './gus';
 export class DosAudio {
   private opl2: OPL2;
   private speaker: PCSpeaker;
-  private sbDsp: SoundBlasterDSP;
+  readonly sbDsp: SoundBlasterDSP;
   readonly dma = new DMAController();
   private ctx: AudioContext | null = null;
   private workletNode: AudioWorkletNode | null = null;
@@ -31,6 +31,8 @@ export class DosAudio {
   private sharedBuf: Float32Array | null = null;
   private writePos = 0;
   private fillTimer = 0;
+  /** Fill function reference — called from tick loop to prevent starvation. */
+  private fillFn: (() => void) | null = null;
   /** Callback to read a byte from emulator memory (set by emu-load). */
   readMemory: (addr: number) => number = () => 0;
   /** Callback to write a byte to emulator memory (set by emu-load). */
@@ -186,6 +188,7 @@ if (!globalThis._oplRegistered) {
           Atomics.store(pointers, 0, this.writePos);
           lastFillTime = now;
         };
+        this.fillFn = fill;
         this.fillTimer = setInterval(fill, FILL_INTERVAL_MS) as unknown as number;
       } else {
         // Fallback: periodically post samples via message port, with time tracking
@@ -207,6 +210,7 @@ if (!globalThis._oplRegistered) {
           });
           lastFillTime = now;
         };
+        this.fillFn = fill;
         this.fillTimer = setInterval(fill, FILL_INTERVAL_MS) as unknown as number;
       }
     }).catch(() => {
@@ -231,8 +235,21 @@ if (!globalThis._oplRegistered) {
 
     if (port === 0x00) return this.dma.readAddr(0);
     if (port === 0x01) return this.dma.readCount(0);
-    if (port === 0x02) return this.dma.readAddr(1);
-    if (port === 0x03) return this.dma.readCount(1);
+    if (port === 0x02) {
+      // Sync DMA transfer before reading current address — zpollme uses this
+      // to determine where to write in the buffer. Without sync, the address
+      // is only updated every 512 instructions and zpollme sees stale values.
+      if (this.sbDsp.dmaActive) {
+        if (this.sbDsp.tickDMA(this.dma, this.readMemory)) this.onSBIRQ();
+      }
+      return this.dma.readAddr(1);
+    }
+    if (port === 0x03) {
+      if (this.sbDsp.dmaActive) {
+        if (this.sbDsp.tickDMA(this.dma, this.readMemory)) this.onSBIRQ();
+      }
+      return this.dma.readCount(1);
+    }
     if (port === 0x04) return this.dma.readAddr(2);
     if (port === 0x05) return this.dma.readCount(2);
     if (port === 0x06) return this.dma.readAddr(3);
@@ -262,6 +279,15 @@ if (!globalThis._oplRegistered) {
     // Sound Blaster DSP ports (base 0x220)
     if (port === 0x226) { this.sbDsp.writeReset(value); return true; }
     if (port === 0x22C) { this.sbDsp.writeCommand(value); return true; }
+    // SB Pro mixer ports
+    if (port === 0x224) { this.sbDsp.mixerAddr = value; return true; }
+    if (port === 0x225) {
+      if (this.sbDsp.mixerAddr === 0x0E) {
+        // Stereo/mono select: bit 1 = stereo, bit 5 = filter
+        this.sbDsp.stereoMode = !!(value & 0x02);
+      }
+      return true;
+    }
 
     // DMA controller ports (channels 0-3)
     if (port === 0x00) { this.dma.writeAddr(0, value); return true; }
@@ -297,6 +323,12 @@ if (!globalThis._oplRegistered) {
   }
 
   /**
+   * Force audio sample generation. Call from the tick loop to ensure audio
+   * fills even when scheduleImmediate starves setInterval callbacks.
+   */
+  flushAudio(): void { this.fillFn?.(); }
+
+  /**
    * Advance DMA transfer and check OPL2 timers. Called from main tick loop.
    * Fires IRQ 7 (via onSBIRQ callback) when a transfer block completes
    * or an OPL2 timer expires.
@@ -319,12 +351,17 @@ if (!globalThis._oplRegistered) {
     const outRate = this.ctx?.sampleRate ?? 44100;
     const ratio = sbRate / outRate;
     for (let i = 0; i < length; i++) {
-      this.pcmAccum += ratio;
-      while (this.pcmAccum >= 1 && dsp.pcmReadPos !== dsp.pcmWritePos) {
-        this.pcmAccum -= 1;
-        dsp.pcmReadPos = (dsp.pcmReadPos + 1) & 0xFFFF;
-      }
+      // Only advance the resampling accumulator when source samples exist.
+      // Without this guard, pcmAccum drifts unboundedly while the source is
+      // empty (between DMA blocks), then on the next fill call the while-loop
+      // skips hundreds of fresh samples in one shot → near-silent SB output.
       if (((dsp.pcmWritePos - dsp.pcmReadPos) & 0xFFFF) > 0) {
+        this.pcmAccum += ratio;
+        while (this.pcmAccum >= 1) {
+          this.pcmAccum -= 1;
+          dsp.pcmReadPos = (dsp.pcmReadPos + 1) & 0xFFFF;
+          if (dsp.pcmReadPos === dsp.pcmWritePos) break;
+        }
         const s = dsp.pcmRing[dsp.pcmReadPos & 0xFFFF] * 0.5;
         bufL[i] += s;
         bufR[i] += s;

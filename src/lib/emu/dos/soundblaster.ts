@@ -42,6 +42,10 @@ export class SoundBlasterDSP {
   irqPending = false;    // true when transfer complete, waiting for ACK
   private highSpeed = false;
 
+  // SB Pro mixer state
+  mixerAddr = 0;
+  stereoMode = false;
+
   // PCM output buffer for AudioWorklet consumption
   pcmRing = new Float32Array(65536);
   pcmWritePos = 0;
@@ -267,23 +271,31 @@ export class SoundBlasterDSP {
           dma.currentAddr[1] = dma.baseAddr[1];
           dma.currentCount[1] = dma.baseCount[1];
         } else {
-          // Single-cycle: mask channel, stop transfer
+          // Single-cycle: mask channel, stop transfer.
+          // Only fire DSP IRQ if enough samples were transferred. Programs like
+          // STMIK use a small DMA buffer (4096) with a large DSP block (65001);
+          // the DMA TC fires early and zpollme reprograms it. On a real SB the
+          // DSP IRQ only fires after dmaLength bytes are received.
           dma.mask |= (1 << 1);
           this.dmaActive = false;
-          this.irqPending = true;
-          return true;
+          if (this.dmaTransferred >= this.dmaLength) {
+            this.irqPending = true;
+            return true;
+          }
+          return false;
         }
       }
     }
 
     if (this.dmaTransferred >= this.dmaLength) {
-      // Transfer complete
-      dma.status |= 0x02; // TC bit for channel 1
+      // DSP block complete — fire IRQ.
+      // Do NOT reload DMA registers here: the DMA controller manages its own
+      // address/count independently (reloaded only on real DMA TC in the inner
+      // loop above). For double-buffering, the DMA buffer is 2× the DSP block
+      // size and must continue from its current position, not restart.
       if (this.dmaAutoInit) {
-        // Reload from base registers
-        dma.currentAddr[1] = dma.baseAddr[1];
-        dma.currentCount[1] = dma.baseCount[1];
         this.dmaTransferred = 0;
+        this.dmaStartTime = performance.now();
       } else {
         this.dmaActive = false;
       }
