@@ -336,22 +336,34 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           // ESI = linear address of data structure
           const esi = cpu.reg[ESI] >>> 0;
           const newCR3 = cpu.mem.readU32(esi);
-          const gdtrAddr = cpu.mem.readU32(esi + 4);
-          const idtrAddr = cpu.mem.readU32(esi + 8);
           const newLDTR = cpu.mem.readU16(esi + 0x0C);
           const newTR = cpu.mem.readU16(esi + 0x0E);
           const newEIP = cpu.mem.readU32(esi + 0x10);
           const newCS = cpu.mem.readU16(esi + 0x14);
-          // Load GDT
-          const gdtLimit = cpu.mem.readU16(gdtrAddr);
-          const gdtBase = cpu.mem.readU32(gdtrAddr + 2);
-          emu._gdtBase = gdtBase;
-          emu._gdtLimit = gdtLimit;
-          // Load IDT
-          const idtLimit = cpu.mem.readU16(idtrAddr);
-          const idtBase = cpu.mem.readU32(idtrAddr + 2);
-          emu._idtBase = idtBase;
-          emu._idtLimit = idtLimit;
+          // Load GDT/IDT: On the first switch, read from the client's GDTR/IDTR.
+          // On subsequent switches, reuse the emulator's current GDT/IDT — the PM
+          // code may have modified them (via LGDT/LIDT or direct writes), and the
+          // client's V86 save code may have overwritten the GDTR pseudo-descriptor
+          // in the data structure with unrelated PM state data.
+          if (!emu._vcpiPmGdtBase) {
+            // First switch — read from structure
+            const gdtrAddr = cpu.mem.readU32(esi + 4);
+            const idtrAddr = cpu.mem.readU32(esi + 8);
+            emu._gdtBase = cpu.mem.readU32(gdtrAddr + 2);
+            emu._gdtLimit = cpu.mem.readU16(gdtrAddr);
+            emu._idtBase = cpu.mem.readU32(idtrAddr + 2);
+            emu._idtLimit = cpu.mem.readU16(idtrAddr);
+            emu._vcpiPmGdtBase = emu._gdtBase;
+            emu._vcpiPmGdtLimit = emu._gdtLimit;
+            emu._vcpiPmIdtBase = emu._idtBase;
+            emu._vcpiPmIdtLimit = emu._idtLimit;
+          } else {
+            // Subsequent switches — restore saved PM state
+            emu._gdtBase = emu._vcpiPmGdtBase;
+            emu._gdtLimit = emu._vcpiPmGdtLimit!;
+            emu._idtBase = emu._vcpiPmIdtBase!;
+            emu._idtLimit = emu._vcpiPmIdtLimit!;
+          }
           // Store LDTR/TR
           emu._ldtr = newLDTR;
           emu._tr = newTR;

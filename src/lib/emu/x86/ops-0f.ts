@@ -185,6 +185,11 @@ export function exec0F(
           if (!d.isReg && cpu.emu) {
             cpu.emu._gdtLimit = cpu.mem.readU16(d.addr);
             cpu.emu._gdtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+            // Update VCPI PM cache so V86→PM switch restores the correct GDT
+            if (cpu.emu._vcpiPmGdtBase !== undefined) {
+              cpu.emu._vcpiPmGdtBase = cpu.emu._gdtBase;
+              cpu.emu._vcpiPmGdtLimit = cpu.emu._gdtLimit;
+            }
           }
           break;
         }
@@ -193,6 +198,10 @@ export function exec0F(
           if (!d.isReg && cpu.emu) {
             cpu.emu._idtLimit = cpu.mem.readU16(d.addr);
             cpu.emu._idtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+            if (cpu.emu._vcpiPmIdtBase !== undefined) {
+              cpu.emu._vcpiPmIdtBase = cpu.emu._idtBase;
+              cpu.emu._vcpiPmIdtLimit = cpu.emu._idtLimit;
+            }
           }
           break;
         }

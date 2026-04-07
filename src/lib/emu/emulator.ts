@@ -359,6 +359,10 @@ export class Emulator {
   _emsMapping?: number[];  // 4 physical page mappings
   _emsSavedMaps?: Map<number, number[]>;  // saved page map states (AH=47/48)
   _vcpiNextPage?: number;  // VCPI page allocator (page frame number)
+  _vcpiPmGdtBase?: number; // Saved PM GDT/IDT for VCPI V86→PM restore
+  _vcpiPmGdtLimit?: number;
+  _vcpiPmIdtBase?: number;
+  _vcpiPmIdtLimit?: number;
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;

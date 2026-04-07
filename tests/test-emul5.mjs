@@ -80,15 +80,14 @@ let ringIdx = 0;
 let trapFired = false;
 const origStep = emu.cpu.step.bind(emu.cpu);
 emu.cpu.step = function() {
-  const prevCS = this.cs;
-  const prevRM = this.realMode;
   ringEIP[ringIdx] = this.eip >>> 0;
   ringCS[ringIdx] = this.cs;
   ringRM[ringIdx] = this.realMode ? 1 : 0;
   ringIdx = (ringIdx + 1) & (RING_SIZE - 1);
   origStep();
+  // (watchpoint removed — GDT cache in VCPI handler fixes the issue)
   // Trap: CS transitions to 0 in RM from a non-IVT segment
-  if (!trapFired && this.realMode && this.cs === 0 && prevCS !== 0 && prevCS !== 0xF000) {
+  if (false) {
     trapFired = true;
     console.log(`[TRAP] CS: 0x${prevCS.toString(16)} → 0x0 (RM=${prevRM}→${this.realMode}) step=${emu.cpuSteps}`);
     console.log(`[RING] Last 64 instructions:`);
