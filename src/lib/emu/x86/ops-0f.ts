@@ -217,10 +217,48 @@ export function exec0F(
       break;
     }
 
-    // LAR r, r/m16 — Load Access Rights (always fails in real mode: clear ZF)
-    case 0x02: {
+    case 0x02: { // LAR r16/r32, r/m16 — load access rights
       const d = cpu.decodeModRM(opSize);
-      cpu.setFlags(cpu.getFlags() & ~ZF);
+      const sel = d.val & 0xFFFF;
+      if (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3)) {
+        // Valid selector — return data segment access rights, set ZF
+        const rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+        if (opSize === 16) {
+          cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (rights & 0xFFFF);
+        } else {
+          cpu.reg[d.regField] = rights;
+        }
+        cpu.setFlags(cpu.getFlags() | ZF);
+      } else {
+        cpu.setFlags(cpu.getFlags() & ~ZF);
+      }
+      break;
+    }
+
+    case 0x03: { // LSL r16/r32, r/m16 — load segment limit
+      const d = cpu.decodeModRM(opSize);
+      const sel = d.val & 0xFFFF;
+      const canonical = sel >>> 3;
+      const limit = cpu.segLimits.get(sel) ?? cpu.segLimits.get(canonical);
+      if (limit !== undefined) {
+        if (opSize === 16) {
+          cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (limit & 0xFFFF);
+        } else {
+          cpu.reg[d.regField] = limit;
+        }
+        cpu.setFlags(cpu.getFlags() | ZF);
+      } else if (cpu.segBases.has(sel) || cpu.segBases.has(canonical)) {
+        // Known selector without explicit limit — default to 64KB
+        const defLimit = 0xFFFF;
+        if (opSize === 16) {
+          cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | defLimit;
+        } else {
+          cpu.reg[d.regField] = defLimit;
+        }
+        cpu.setFlags(cpu.getFlags() | ZF);
+      } else {
+        cpu.setFlags(cpu.getFlags() & ~ZF);
+      }
       break;
     }
 
@@ -230,6 +268,14 @@ export function exec0F(
       break;
     }
 
+    // INVD (0F 08) — Invalidate caches (privileged, NOP in emulator)
+    case 0x08:
+      break;
+
+    // WBINVD (0F 09) — Writeback and invalidate caches (privileged, NOP in emulator)
+    case 0x09:
+      break;
+
     // MOV r32, CRn (0F 20 /r) — Read control register
     case 0x20: {
       const d = cpu.decodeModRM(32);
@@ -238,6 +284,13 @@ export function exec0F(
       if (crn === 0) val = cpu.emu?._cr0 ?? 0;
       // CR2 (page fault address), CR3 (page dir base), CR4 (extensions) — return 0
       cpu.writeModRM(d, val, 32);
+      break;
+    }
+
+    // MOV r32, DRn (0F 21 /r) — Read debug register (return 0)
+    case 0x21: {
+      const d = cpu.decodeModRM(32);
+      cpu.writeModRM(d, 0, 32);
       break;
     }
 
@@ -260,6 +313,26 @@ export function exec0F(
           cpu._addrSize16 = true;
         }
       }
+      break;
+    }
+
+    // MOV DRn, r32 (0F 23 /r) — Write debug register (ignore)
+    case 0x23: {
+      cpu.decodeModRM(32); // consume modrm, discard value
+      break;
+    }
+
+    // WRMSR (0F 30) — Write Model Specific Register (ignore)
+    case 0x30: {
+      // ECX = MSR index, EDX:EAX = value to write — just discard
+      break;
+    }
+
+    // RDMSR (0F 32) — Read Model Specific Register (return 0)
+    case 0x32: {
+      // ECX = MSR index — return 0 in EDX:EAX
+      cpu.reg[0] = 0; // EAX
+      cpu.reg[2] = 0; // EDX
       break;
     }
 
