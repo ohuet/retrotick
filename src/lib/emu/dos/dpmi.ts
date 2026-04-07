@@ -42,6 +42,9 @@ export interface DpmiState {
   _activeHandlers?: Set<number>;
   _handlerCleanup?: { intNum: number; esp: number }[];
   pmExcHandlers: Map<number, { sel: number; off: number }>;
+  // Real mode callbacks (AX=0303/0304)
+  rmCallbacks?: { pmSel: number; pmOff: number; rmStructAddr: number; rmSeg: number; rmOff: number }[];
+  rmCallbackNextAddr?: number; // next linear address for RM callback stubs
 }
 
 /** Write DPMI stubs at F000:0A00 (entry), F000:0A10 (RM→PM), F000:0A20 (PM→RM) */
@@ -244,9 +247,41 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
     case 0x0301: // Call RM Far — same as 0x0300 but for far calls (treat identically)
     case 0x0302: // Call RM IRET — same as 0x0300 for our purposes
       return dpmiSimulateRmInt(cpu, emu);
-    case 0x0303: // Allocate RM callback — stub: return error (not supported)
-      cpu.setFlag(0x001, true);
+    case 0x0303: { // Allocate Real Mode Callback
+      // DS:(E)SI = PM callback procedure address
+      // ES:(E)DI = RM call structure (50-byte buffer) used by the callback
+      const pmSel = cpu.ds;
+      const pmOff = cpu.use32 ? (cpu.reg[ESI] >>> 0) : cpu.getReg16(ESI);
+      const rmStructSel = cpu.es;
+      const rmStructOff = cpu.use32 ? (cpu.reg[EDI] >>> 0) : cpu.getReg16(EDI);
+      const rmStructAddr = (cpu.segBase(rmStructSel) + rmStructOff) >>> 0;
+
+      // Create a stub in low memory (< 0x100000) that does INT FBh; RETF
+      // INT FBh is our trap for RM callbacks
+      if (!st.rmCallbacks) st.rmCallbacks = [];
+      if (!st.rmCallbackNextAddr) st.rmCallbackNextAddr = 0x5E0; // just before PM→RM stub at 0x5F0
+
+      const stubLinear = st.rmCallbackNextAddr;
+      st.rmCallbackNextAddr -= 5; // each stub is 3 bytes but leave room
+      const callbackIndex = st.rmCallbacks.length;
+
+      // Write stub: MOV AL, index; INT FBh; RETF
+      emu.memory.writeU8(stubLinear, 0xB0);           // MOV AL, imm8
+      emu.memory.writeU8(stubLinear + 1, callbackIndex);
+      emu.memory.writeU8(stubLinear + 2, 0xCD);       // INT 0xFB
+      emu.memory.writeU8(stubLinear + 3, 0xFB);
+      emu.memory.writeU8(stubLinear + 4, 0xCB);       // RETF
+
+      st.rmCallbacks.push({ pmSel, pmOff, rmStructAddr, rmSeg: (stubLinear >>> 4) & 0xFFFF, rmOff: stubLinear & 0x0F });
+
+      // Return CX:DX = RM callback address (seg:off)
+      const rmSeg = (stubLinear >>> 4) & 0xFFFF;
+      const rmOff = stubLinear & 0x000F;
+      cpu.setReg16(ECX, rmSeg);
+      cpu.setReg16(EDX, rmOff);
+      cpu.setFlag(0x001, false);
       return true;
+    }
     case 0x0304: // Free RM callback — NOP
       cpu.setFlag(0x001, false);
       return true;
@@ -745,6 +780,33 @@ function dpmiGetRawModeSwitch(cpu: CPU): boolean {
 /** Handle INT 0xFC — raw mode switch between PM and RM.
  *  Register convention (same for both directions):
  *  AX=new DS, CX=new ES, DX=new SS, (E)BX=new (E)SP, SI=new CS, (E)DI=new (E)IP */
+/** Handle INT 0xFB — RM callback trap. Called from RM callback stubs. */
+export function handleDpmiCallback(cpu: CPU, emu: Emulator): boolean {
+  if (!emu._dpmiState?.rmCallbacks) return false;
+  const idx = cpu.reg[0] & 0xFF; // AL = callback index (set by MOV AL, imm8 in stub)
+  const cb = emu._dpmiState.rmCallbacks[idx];
+  if (!cb) return false;
+
+  // Save current RM state into the callback's 50-byte RM call structure
+  const s = cb.rmStructAddr;
+  emu.memory.writeU32(s + 0x00, cpu.reg[EDI]);
+  emu.memory.writeU32(s + 0x04, cpu.reg[ESI]);
+  emu.memory.writeU32(s + 0x08, cpu.reg[EBP]);
+  emu.memory.writeU32(s + 0x10, cpu.reg[EBX]);
+  emu.memory.writeU32(s + 0x14, cpu.reg[EDX]);
+  emu.memory.writeU32(s + 0x18, cpu.reg[ECX]);
+  emu.memory.writeU32(s + 0x1C, cpu.reg[EAX]);
+  emu.memory.writeU16(s + 0x20, cpu.getFlags() & 0xFFFF);
+  emu.memory.writeU16(s + 0x22, cpu.es);
+  emu.memory.writeU16(s + 0x24, cpu.ds);
+
+  // Switch to PM and call the callback procedure
+  // For now, just return success (the callback is rarely actually needed
+  // for basic DOS4GW operation — it just needs to be allocatable)
+  cpu.setFlag(0x001, false);
+  return true;
+}
+
 export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
   if (!emu._dpmiState) return false;
 

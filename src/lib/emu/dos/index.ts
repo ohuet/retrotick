@@ -7,7 +7,7 @@ import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt79, handle
 import { handleInt33 } from './mouse';
 import { handleXms, XMS_INT } from './xms';
 import { handleInt67 } from './ems';
-import { handleDpmiEntry, handleInt31, handleDpmiSwitch, DPMI_INT, DPMI_SWITCH_INT } from './dpmi';
+import { handleDpmiEntry, handleInt31, handleDpmiSwitch, handleDpmiCallback, DPMI_INT, DPMI_SWITCH_INT } from './dpmi';
 
 export { handleInt21 } from './int21';
 export { syncVideoMemory } from './video';
@@ -174,6 +174,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     case XMS_INT: return handleXms(cpu, emu);
     case DPMI_INT: return handleDpmiEntry(cpu, emu); // DPMI mode switch
     case DPMI_SWITCH_INT: return handleDpmiSwitch(cpu, emu); // Raw mode switch
+    case 0xFB: return handleDpmiCallback(cpu, emu); // RM callback trap
     default:
       if (cpu.realMode) {
         // No custom handler — just IRET
