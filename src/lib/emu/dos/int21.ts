@@ -478,7 +478,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4A: { // Resize memory block (ES=segment, BX=new size in paragraphs)
       const blockSeg = cpu.es;
       const newParas = cpu.getReg16(EBX);
-      // (debug log removed)
+      console.log(`[4A] seg=0x${blockSeg.toString(16)} BX=${newParas} mcb=${String.fromCharCode(cpu.mem.readU8((blockSeg-1)*16))} old=${cpu.mem.readU16((blockSeg-1)*16+3)}`);
       const topOfMem = 0xA000;
 
       // Find the MCB at blockSeg - 1
@@ -492,58 +492,26 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       }
       const oldParas = cpu.mem.readU16(mcbLinear + 3);
 
-      // Calculate maximum available size including free blocks after this one
-      let maxAvail = oldParas;
-      let absorbedLast = mcbType === 0x5A;
-      // For 'Z' (last) blocks, max available extends to topOfMem
-      if (mcbType === 0x5A) {
-        maxAvail = topOfMem - blockSeg;
-      }
-      if (mcbType === 0x4D) {
-        // Walk the chain to find consecutive free blocks we can absorb
-        let nextSeg = blockSeg + oldParas;
-        while (nextSeg < topOfMem) {
-          const nextLin = nextSeg * 16;
-          const nextType = cpu.mem.readU8(nextLin);
-          const nextOwner = cpu.mem.readU16(nextLin + 1);
-          const nextSize = cpu.mem.readU16(nextLin + 3);
-          if (nextOwner !== 0) break; // not free — can't absorb
-          maxAvail += 1 + nextSize; // +1 for the MCB header paragraph
-          if (nextType === 0x5A) { absorbedLast = true; break; }
-          nextSeg = nextSeg + 1 + nextSize;
-        }
-      }
-
-      if (newParas > maxAvail) {
-        // Not enough memory to grow
+      // Check bounds
+      if (blockSeg + newParas > topOfMem) {
         cpu.setFlag(CF, true);
         cpu.setReg16(EAX, 8); // insufficient memory
-        cpu.setReg16(EBX, maxAvail); // max available
+        cpu.setReg16(EBX, topOfMem - blockSeg);
         break;
       }
-
-      // Update this MCB's size
+      // Update MCB size
       cpu.mem.writeU16(mcbLinear + 3, newParas);
-
-      if (newParas < maxAvail) {
-        // Create a free MCB for the remaining space
-        const freeParas = maxAvail - newParas - 1; // -1 for the MCB header
-        if (freeParas > 0) {
-          const freeSeg = blockSeg + newParas;
-          const freeLinear = freeSeg * 16;
-          cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
-          cpu.mem.writeU8(freeLinear, absorbedLast ? 0x5A : 0x4D);
-          cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
-          cpu.mem.writeU16(freeLinear + 3, freeParas);
-        } else {
-          // Not enough space for a free MCB — absorb the leftover into this block
-          cpu.mem.writeU16(mcbLinear + 3, maxAvail);
-          // If we absorbed the last block, this one becomes the last
-          if (absorbedLast) cpu.mem.writeU8(mcbLinear, 0x5A);
-        }
+      // Create or update the free block after the resized block
+      const freeSeg = blockSeg + newParas;
+      const freeLinear = freeSeg * 16;
+      const freeParas = topOfMem - freeSeg - 1;
+      if (freeParas > 0) {
+        cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
+        cpu.mem.writeU8(freeLinear, 0x5A); // last block
+        cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
+        cpu.mem.writeU16(freeLinear + 3, freeParas);
       } else {
-        // Exact fit or no change — update type if we absorbed the last block
-        if (absorbedLast) cpu.mem.writeU8(mcbLinear, 0x5A);
+        cpu.mem.writeU8(mcbLinear, 0x5A); // this is now last block
       }
 
       cpu.setFlag(CF, false);
