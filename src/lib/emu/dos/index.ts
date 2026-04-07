@@ -57,7 +57,15 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     } else {
       vec = emu._dosIntVectors.get(intNum) ?? biosDefault;
     }
-    if (vec !== biosDefault && !fromSyntheticStub && !alwaysJS) {
+    // Don't chain to IVT entries that were modified by PM code with PM selectors.
+    // In VCPI mode, PM code modifies the IVT with selector values that are invalid
+    // as RM segments. Detect this by comparing against the saved V86 IVT.
+    let pmModified = false;
+    if (emu._vcpiSavedIVT && ivtSeg !== 0xF000) {
+      const origSeg = emu._vcpiSavedIVT[intNum];
+      if (origSeg !== undefined && ivtSeg !== origSeg) pmModified = true;
+    }
+    if (vec !== biosDefault && !fromSyntheticStub && !alwaysJS && !pmModified) {
       const seg = (vec >>> 16) & 0xFFFF;
       const off = vec & 0xFFFF;
       const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;

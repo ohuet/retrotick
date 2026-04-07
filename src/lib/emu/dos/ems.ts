@@ -333,6 +333,13 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
         case 0x0C: { // VCPI Switch from V86/RM to Protected Mode
           // Enable A20 first — PM needs full address space for GDT/IDT/LDT
           emu.memory.a20Mask = 0xFFFFFFFF;
+          // Save original V86 IVT on first switch (only the segment values, not offsets).
+          // PM code modifies IVT entries with PM selectors; we need to detect these
+          // to prevent IVT chaining to invalid RM addresses.
+          if (!emu._vcpiSavedIVT) {
+            emu._vcpiSavedIVT = new Uint16Array(256);
+            for (let i = 0; i < 256; i++) emu._vcpiSavedIVT[i] = cpu.mem.readU16(i * 4 + 2);
+          }
           // ESI = linear address of data structure
           const esi = cpu.reg[ESI] >>> 0;
           const newCR3 = cpu.mem.readU32(esi);

@@ -85,7 +85,22 @@ emu.cpu.step = function() {
   ringRM[ringIdx] = this.realMode ? 1 : 0;
   ringIdx = (ringIdx + 1) & (RING_SIZE - 1);
   origStep();
-  // (watchpoint removed — GDT cache in VCPI handler fixes the issue)
+  // Detect when CS changes to 0x70 (unexpected V86 segment)
+  if (!trapFired && this.realMode && this.cs === 0x70 && ringCS[(ringIdx - 2 + RING_SIZE) & (RING_SIZE - 1)] !== 0x70) {
+    trapFired = true;
+    console.log(`[CS→70] at step ${emu.cpuSteps} EIP=0x${(this.eip>>>0).toString(16)}`);
+    console.log(`[RING] Last 64:`);
+    for (let j = RING_SIZE - 64; j < RING_SIZE; j++) {
+      const idx2 = (ringIdx + j) & (RING_SIZE - 1);
+      const e = ringEIP[idx2], c = ringCS[idx2], r = ringRM[idx2];
+      if (!e && !c) continue;
+      const bytes = [];
+      for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8(e + b).toString(16).padStart(2, '0'));
+      console.log(`  CS=0x${c.toString(16)} EIP=0x${e.toString(16)} RM=${r} [${bytes.join(' ')}]`);
+    }
+    this.halted = true;
+    this.haltReason = 'CS=0x70';
+  }
   // Trap: CS transitions to 0 in RM from a non-IVT segment
   if (false) {
     trapFired = true;
