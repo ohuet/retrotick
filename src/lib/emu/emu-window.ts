@@ -134,10 +134,34 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
 
   const existing = emu.windowDCs.get(hwnd);
   if (existing && !needsTranslate && !hasDomCanvas) return existing;
-  // Free old DC for translated/domCanvas windows to avoid stale state.
-  // Only call releaseChildDC (ctx.restore) if the DC is still in childDCSet —
-  // if EndPaint already restored it, the save stack is already balanced.
-  if (existing && (needsTranslate || hasDomCanvas)) {
+
+  // For child windows sharing the main canvas, reuse existing DC (preserving
+  // app-set attributes like textColor, selectedBrush) but refresh the canvas
+  // state (save/transform/clip) which must be balanced per GetDC/ReleaseDC.
+  if (existing && needsTranslate && wnd) {
+    if (childDCSet.has(existing)) {
+      releaseChildDC(emu, existing);
+    }
+    const dc = getDC(emu, existing);
+    if (dc) {
+      const origin = isPopup ? { x: wnd.x || 0, y: wnd.y || 0 } : getWindowOrigin(emu, hwnd);
+      let ccsYOffset = 0;
+      const internalH = (wnd as any)._ccsInternalHeight;
+      if (internalH && internalH > wnd.height) {
+        ccsYOffset = Math.round((internalH - wnd.height) / 2);
+      }
+      dc.ctx.save();
+      dc.ctx.setTransform(1, 0, 0, 1, origin.x, origin.y + ccsYOffset);
+      dc.ctx.beginPath();
+      dc.ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
+      dc.ctx.clip();
+      childDCSet.add(existing);
+      return existing;
+    }
+  }
+
+  // Free old DC for domCanvas windows
+  if (existing && hasDomCanvas) {
     if (childDCSet.has(existing)) {
       releaseChildDC(emu, existing);
     }
@@ -185,10 +209,6 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
   // For windows sharing the main canvas, apply coordinate offset and clip
   if (needsTranslate && wnd) {
     const origin = isPopup ? { x: wnd.x || 0, y: wnd.y || 0 } : getWindowOrigin(emu, hwnd);
-    // CCS toolbar: the x86 COMMCTRL code computes button positions based on
-    // its internally-desired height (e.g. 47px), but the frame forces the
-    // toolbar to a smaller height (e.g. 27px). The button rects are centered
-    // for the internal height, so we shift the DC origin down to compensate.
     let ccsYOffset = 0;
     const internalH = (wnd as any)._ccsInternalHeight;
     if (internalH && internalH > wnd.height) {
@@ -328,6 +348,28 @@ export function releaseChildDC(emu: Emulator, hdc: number): void {
     }
     childDCSet.delete(hdc);
   }
+}
+
+/**
+ * Read destination pixels at transform-aware canvas coordinates.
+ * getImageData ignores canvas transforms, so we manually apply the offset.
+ */
+export function dcGetImageData(dc: DCInfo, x: number, y: number, w: number, h: number): ImageData {
+  const tf = dc.ctx.getTransform();
+  const cx = Math.round(tf.e + x * tf.a);
+  const cy = Math.round(tf.f + y * tf.d);
+  return dc.ctx.getImageData(cx, cy, w, h);
+}
+
+/**
+ * Write pixels via temp canvas + drawImage to respect transform + clip.
+ * putImageData ignores both canvas transform and clip region;
+ * drawImage respects both.
+ */
+export function dcPutImageData(dc: DCInfo, imgData: ImageData, x: number, y: number): void {
+  const tmp = new OffscreenCanvas(imgData.width, imgData.height);
+  tmp.getContext('2d')!.putImageData(imgData, 0, 0);
+  dc.ctx.drawImage(tmp, x, y);
 }
 
 export function syncDCToCanvas(emu: Emulator, _hdc: number): void {

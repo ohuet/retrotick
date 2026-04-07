@@ -104,6 +104,16 @@ export function registerWin16UserMenu(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 263: GetMenuItemCount(hMenu) — 2 bytes
   user.register('GetMenuItemCount', 2, () => 0, 263);
 
+  // Ordinal 268: IsMenu(hMenu) — 2 bytes → BOOL
+  user.register('IsMenu', 2, () => {
+    const hMenu = emu.readArg16(0);
+    const obj = emu.handles.get(hMenu);
+    return (obj && typeof obj === 'object' && 'items' in obj) ? 1 : 0;
+  }, 268);
+
+  // Ordinal 271: LookupMenuHandle(hMenu, lpPos_ptr) — 6 bytes (2+4)
+  user.register('LookupMenuHandle', 6, () => 0, 271);
+
   // Ordinal 410: InsertMenu — 12 bytes
   user.register('InsertMenu', 12, () => 1, 410);
 

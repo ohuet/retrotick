@@ -284,8 +284,8 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   user.register('GetSystemMetrics', 2, () => {
     const idx = emu.readArg16(0);
     const metrics: Record<number, number> = {
-      0: 640,   // SM_CXSCREEN
-      1: 480,   // SM_CYSCREEN
+      0: emu.screenWidth || 640,   // SM_CXSCREEN
+      1: emu.screenHeight || 480,  // SM_CYSCREEN
       2: 20,    // SM_CXVSCROLL
       3: 20,    // SM_CYVSCROLL
       4: 20,    // SM_CYCAPTION (Win 3.1)
@@ -382,6 +382,9 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
 
   // Ordinal 269: GlobalDeleteAtom — 2 bytes
   user.register('GlobalDeleteAtom', 2, () => 0, 269);
+
+  // Ordinal 270: DCHook(hDC, code, data, lParam) — 12 bytes (2+2+4+4) — internal stub
+  user.register('DCHook', 12, () => 0, 270);
 
   // Ordinal 277: GetDlgCtrlID(hWnd) — 2 bytes
   user.register('GetDlgCtrlID', 2, () => {
