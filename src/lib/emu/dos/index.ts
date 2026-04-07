@@ -43,10 +43,11 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     // Otherwise let IVT dispatch run the program's own handler
   }
   if (cpu.realMode) {
+    // VCPI calls (INT 67h AH=DE) must always reach our JS handler for V86→PM switching,
+    // even if DOS4GW installed its own INT 67h hook. Other EMS functions go through the chain.
+    const alwaysJS = intNum === 0x67 && ((cpu.reg[0] >>> 8) & 0xFF) === 0xDE;
     const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
     const fromSyntheticStub = isFromSyntheticBiosStub(cpu, biosDefault);
-    // Check both _dosIntVectors (set via INT 21h/AH=25h) and IVT memory
-    // (written directly by programs like PoP's sound driver).
     const ivtOff = cpu.mem.readU16(intNum * 4);
     const ivtSeg = cpu.mem.readU16(intNum * 4 + 2);
     const ivtVec = (ivtSeg << 16) | ivtOff;
@@ -56,7 +57,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     } else {
       vec = emu._dosIntVectors.get(intNum) ?? biosDefault;
     }
-    if (vec !== biosDefault && !fromSyntheticStub) {
+    if (vec !== biosDefault && !fromSyntheticStub && !alwaysJS) {
       const seg = (vec >>> 16) & 0xFFFF;
       const off = vec & 0xFFFF;
       const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;

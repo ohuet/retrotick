@@ -335,7 +335,6 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           emu.memory.a20Mask = 0xFFFFFFFF;
           // ESI = linear address of data structure
           const esi = cpu.reg[ESI] >>> 0;
-          // V86→PM switch
           const newCR3 = cpu.mem.readU32(esi);
           const gdtrAddr = cpu.mem.readU32(esi + 4);
           const idtrAddr = cpu.mem.readU32(esi + 8);

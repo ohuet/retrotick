@@ -106,6 +106,8 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
                   {{ soundBlaster: 'Sound Blaster', adlib: 'AdLib (OPL2)', gus: 'Gravis UltraSound' }[key]}
                 </label>
               ))}
+            </div>
+
             {/* Speed */}
             <div style={{ marginBottom: '10px' }}>
               <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelSpeed}</div>
