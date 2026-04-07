@@ -57,6 +57,7 @@ emu.screenWidth = 640;
 emu.screenHeight = 480;
 emu.exeName = 'emul5/EMUL5.EXE';
 emu.exePath = 'D:\\emul5\\EMUL5.EXE';
+emu.dosEnableDpmi = false; // Force VCPI path (DOS4GW manages its own PM)
 emu.additionalFiles.set('DOS4GW.EXE', dos4gwBuf);
 
 // Add all companion files
@@ -101,14 +102,8 @@ emu.cpu.step = function() {
   ringSP[ringIdx] = this.reg[4] >>> 0;
   ringIdx = (ringIdx + 1) & (RING_SIZE - 1);
   origStep();
-  // After step: detect when handler at CS=0x98 runs (INT dispatch to it)
-  if (!trapFired && prevCS !== 0x98 && this.cs === 0x98) {
-    // Mark the handler entry but don't dump yet
-    trapFired = 'pending';
-  }
-  // Detect the crash: CS changes from 0x98 to garbage
-  const knownSels = [0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x80, 0x88, 0x90, 0x98, 0xA0, 0xA8];
-  if (trapFired && !knownSels.includes(this.cs) && this.cs !== prevCS) {
+  // Only trap on actual halts (disable CS-transition trap for now)
+  if (false) {
     trapFired = true;
     trapFired = true;
     console.log(`[TRAP] CS changed from 0x${prevCS.toString(16)} to 0x${this.cs.toString(16)} at step ${emu.cpuSteps}`);
@@ -215,6 +210,11 @@ for (let i = 0; i < MAX_TICKS; i++) {
   if (i < 5 || i % 10 === 0) {
     const eip = emu.cpu.eip >>> 0;
     console.log(`[TICK ${i}] cpuSteps=${emu.cpuSteps} EIP=0x${eip.toString(16)} CS=0x${emu.cpu.cs.toString(16)} RM=${emu.cpu.realMode}`);
+  }
+  // Check LDT entry for selector 0xF34 at address 0xF30
+  if (i <= 10) {
+    const ldtVal = emu.memory.readU32(0xF30);
+    if (ldtVal !== 0) console.log(`[LDT-WATCH] tick${i}: @0xF30 = 0x${(ldtVal>>>0).toString(16)}`);
   }
   // Check key memory locations during execution
   if (i <= 5 && emu._gdtBase) {

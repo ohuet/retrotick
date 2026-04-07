@@ -257,7 +257,6 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
 
     case 0xDE: { // VCPI functions
       const al = cpu.reg[EAX] & 0xFF;
-      console.log(`[VCPI] AX=0x${(cpu.reg[EAX]&0xFFFF).toString(16)} AL=${al.toString(16)} CX=0x${(cpu.reg[ECX]&0xFFFF).toString(16)} DI=0x${(cpu.reg[7]&0xFFFF).toString(16)}`);
       switch (al) {
         case 0x00: // VCPI Installation Check
           // Return success — we support the VCPI interface
@@ -329,12 +328,10 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
         case 0x0C: { // VCPI Switch from V86/RM to Protected Mode
-          // ESI = linear address of data structure (in RM: use full 32-bit ESI or DS:SI?)
-          // VCPI spec says ESI is a linear address.
-          // But in real mode, programs typically pass seg:off in DS:SI and ESI.
-          // DOS4GW uses ESI as a linear address built from a real-mode seg:off.
+          // Enable A20 first — PM needs full address space for GDT/IDT/LDT
+          emu.memory.a20Mask = 0xFFFFFFFF;
+          // ESI = linear address of data structure
           const esi = cpu.reg[ESI] >>> 0;
-          console.log(`[VCPI 0C] ESI=0x${esi.toString(16)} DS=${cpu.ds.toString(16)}`);
           const newCR3 = cpu.mem.readU32(esi);
           const gdtrAddr = cpu.mem.readU32(esi + 4);
           const idtrAddr = cpu.mem.readU32(esi + 8);
@@ -342,7 +339,6 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           const newTR = cpu.mem.readU16(esi + 0x0E);
           const newEIP = cpu.mem.readU32(esi + 0x10);
           const newCS = cpu.mem.readU16(esi + 0x14);
-          console.log(`[VCPI 0C] CR3=0x${newCR3.toString(16)} GDTR@0x${gdtrAddr.toString(16)} IDTR@0x${idtrAddr.toString(16)} LDT=${newLDTR.toString(16)} TR=${newTR.toString(16)} CS:EIP=${newCS.toString(16)}:${newEIP.toString(16)}`);
           // Load GDT
           const gdtLimit = cpu.mem.readU16(gdtrAddr);
           const gdtBase = cpu.mem.readU32(gdtrAddr + 2);
@@ -353,7 +349,9 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           const idtBase = cpu.mem.readU32(idtrAddr + 2);
           emu._idtBase = idtBase;
           emu._idtLimit = idtLimit;
-          console.log(`[VCPI 0C] GDT=${gdtBase.toString(16)}:${gdtLimit.toString(16)} IDT=${idtBase.toString(16)}:${idtLimit.toString(16)}`);
+          // Store LDTR/TR
+          emu._ldtr = newLDTR;
+          emu._tr = newTR;
           // Set CR0 PE bit
           emu._cr0 = (emu._cr0 | 1) >>> 0;
           // Switch to protected mode
@@ -364,13 +362,6 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.fs = 0;
           cpu.gs = 0;
           cpu.eip = (cpu.segBase(newCS) + newEIP) >>> 0;
-          // Dump GDT entry for CS selector
-          const csIdx = (newCS & 0xFFF8) >>> 3;
-          const csDescAddr = gdtBase + csIdx * 8;
-          const csDescLo = cpu.mem.readU32(csDescAddr);
-          const csDescHi = cpu.mem.readU32(csDescAddr + 4);
-          console.log(`[VCPI 0C] GDT[${csIdx}] @ 0x${csDescAddr.toString(16)}: lo=0x${csDescLo.toString(16)} hi=0x${csDescHi.toString(16)} segBase=0x${cpu.segBase(newCS).toString(16)}`);
-          console.log(`[VCPI 0C] Done! EIP=0x${(cpu.eip>>>0).toString(16)} realMode=${cpu.realMode}`);
           break;
         }
         default:

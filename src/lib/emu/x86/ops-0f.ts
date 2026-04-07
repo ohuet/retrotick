@@ -126,7 +126,9 @@ export function exec0F(
         }
         case 2: { // LLDT r/m16
           const d = cpu.decodeModRM(16);
-          if (cpu.emu) cpu.emu._ldtr = d.val & 0xFFFF;
+          if (cpu.emu) {
+            cpu.emu._ldtr = d.val & 0xFFFF;
+          }
           break;
         }
         case 3: { // LTR r/m16
