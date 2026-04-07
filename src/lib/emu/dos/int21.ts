@@ -478,7 +478,6 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x4A: { // Resize memory block (ES=segment, BX=new size in paragraphs)
       const blockSeg = cpu.es;
       const newParas = cpu.getReg16(EBX);
-      console.log(`[4A] seg=0x${blockSeg.toString(16)} BX=${newParas} mcb=${String.fromCharCode(cpu.mem.readU8((blockSeg-1)*16))} old=${cpu.mem.readU16((blockSeg-1)*16+3)}`);
       const topOfMem = 0xA000;
 
       // Find the MCB at blockSeg - 1
