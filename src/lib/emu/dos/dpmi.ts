@@ -25,13 +25,19 @@ const DPMI_GDT_LINEAR = 0x3F0000;
 const DPMI_GDT_ENTRIES = 8192;
 const DPMI_GDT_LIMIT = DPMI_GDT_ENTRIES * 8 - 1;
 
-// Memory blocks start at 4MB
-const DPMI_MEM_START = 0x400000;
+// PM default interrupt reflector stubs — 256 stubs × 5 bytes each = 1280 bytes
+// Placed right after the GDT (0x3F0000 + 0x10000 = 0x400000)
+const DPMI_REFLECTOR_BASE = 0x400000;
+export const DPMI_REFLECTOR_INT = 0xFE; // trap INT for PM reflector stubs
+
+// Memory blocks start after reflector area
+const DPMI_MEM_START = 0x400600;
 
 // First allocatable selector (index 16 → selector 0x80)
 const DPMI_FIRST_SEL = 0x80;
 
 export interface DpmiState {
+  is32bit: boolean; // true if client entered as 32-bit (AX bit 0 = 1)
   nextSelector: number;
   freeSelectors: number[];
   nextMemHandle: number;
@@ -110,7 +116,12 @@ function readGdtEntryLimit(mem: Emulator['memory'], gdtBase: number, index: numb
 
 /** Called on INT 0xFD — switch from real mode to protected mode */
 export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
+  const is32bit = (cpu.reg[EAX] & 1) !== 0;
   console.log('[DPMI] Entering protected mode');
+
+  // Enable A20 gate — required for PM to access memory above 1MB.
+  // The GDT is at 0x3F0000; with A20 off, writes would go to 0xF0000.
+  emu.memory.a20Mask = 0xFFFFFFFF;
 
   // Build GDT
   const gdtBase = DPMI_GDT_LINEAR;
@@ -119,31 +130,44 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
     emu.memory.writeU8(gdtBase + i, 0);
   }
 
-  // idx 0 (0x00): null descriptor
-  // DPMI entry is always 16-bit PM. Initial selectors map the caller's
-  // real-mode segments (DPMI spec: the host creates descriptors whose bases
-  // equal the RM segment * 16, so the client can continue accessing its data).
-  // Save caller's RM segments BEFORE popping the return address.
-  // cpu.cs is currently F000 (the DPMI stub), so we'll use retCS from the stack.
+  // Initial selectors map the caller's real-mode segments (DPMI spec: the host
+  // creates descriptors whose bases equal the RM segment * 16).
+  // For 32-bit clients (AX bit 0 = 1): D=1, for 16-bit: D=0.
   const rmDS = cpu.ds;
   const rmSS = cpu.ss;
   const rmES = cpu.es;
   const dsBase = (rmDS * 16) >>> 0;
   const ssBase = (rmSS * 16) >>> 0;
   const esBase = (rmES * 16) >>> 0;
+  // Initial descriptors are always 16-bit (D=0). The bootstrap code at the
+  // return address is 16-bit MZ code. The 32-bit flag (AX bit 0) only affects
+  // how DPMI services handle register parameters (32-bit offsets vs 16-bit).
   // idx 1 (0x08): code — placeholder, updated after popping retCS below
   writeGdtEntry(emu.memory, gdtBase, 1, 0, 0xFFFF, 0x9A, 0x00);
-  // idx 2 (0x10): data — base=RM DS*16, limit=64KB, 16-bit, read/write
+  // idx 2 (0x10): data — base=RM DS*16, limit=64KB, read/write
   writeGdtEntry(emu.memory, gdtBase, 2, dsBase, 0xFFFF, 0x92, 0x00);
-  // idx 3 (0x18): stack — base=RM SS*16, limit=64KB, 16-bit, read/write
+  // idx 3 (0x18): stack — base=RM SS*16, limit=64KB, read/write
   writeGdtEntry(emu.memory, gdtBase, 3, ssBase, 0xFFFF, 0x92, 0x00);
-  // idx 4 (0x20): PSP — base=PSP*16, limit=0xFF, 16-bit
+  // idx 4 (0x20): PSP — base=PSP*16, limit=0xFF
   const pspBase = (emu._dosPSP || 0) * 16;
   writeGdtEntry(emu.memory, gdtBase, 4, pspBase, 0xFF, 0x92, 0x00);
-  // idx 5 (0x28): ES — base=RM ES*16, limit=64KB, 16-bit, read/write
+  // idx 5 (0x28): ES — base=RM ES*16, limit=64KB, read/write
   writeGdtEntry(emu.memory, gdtBase, 5, esBase, 0xFFFF, 0x92, 0x00);
   // idx 6 (0x30): flat code — base=0, limit=4GB, for raw mode switch stubs
-  writeGdtEntry(emu.memory, gdtBase, 6, 0, 0xFFFFF, 0x9A, 0x08); // G=1, 16-bit code
+  writeGdtEntry(emu.memory, gdtBase, 6, 0, 0xFFFFF, 0x9A, 0x08); // G=1
+
+  // idx 7 (0x38): PM reflector code — base=DPMI_REFLECTOR_BASE, limit=0x500, code, DPL=3
+  writeGdtEntry(emu.memory, gdtBase, 7, DPMI_REFLECTOR_BASE, 0x500, 0xFA, 0x00); // code readable DPL=3
+
+  // Write 256 reflector stubs: MOV AL, intNum; INT FEh; IRET (5 bytes each)
+  for (let i = 0; i < 256; i++) {
+    const addr = DPMI_REFLECTOR_BASE + i * 5;
+    emu.memory.writeU8(addr + 0, 0xB0);              // MOV AL, imm8
+    emu.memory.writeU8(addr + 1, i);                  // interrupt number
+    emu.memory.writeU8(addr + 2, 0xCD);              // INT FEh
+    emu.memory.writeU8(addr + 3, DPMI_REFLECTOR_INT);
+    emu.memory.writeU8(addr + 4, 0xCF);              // IRET
+  }
 
   // Set GDT in emulator
   emu._gdtBase = gdtBase;
@@ -174,7 +198,7 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.fs = 0x10;
   cpu.gs = 0x10;
 
-  // ESP stays as the 16-bit SP (within the SS segment, not flat linear)
+  // ESP stays as the 16-bit SP (initial code is always 16-bit)
   cpu.reg[ESP] = (cpu.reg[ESP] & ~0xFFFF) | ((flatSP - ssBase) & 0xFFFF);
 
   // EIP = segBase + offset. retLinear = retCS*16 + retIP = csBase + retIP.
@@ -187,9 +211,11 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.segBases.set(0x20, pspBase);
   cpu.segBases.set(0x28, esBase);
   cpu.segBases.set(0x30, 0); // flat code for stubs
+  cpu.segBases.set(0x38, DPMI_REFLECTOR_BASE); // PM reflector stubs
 
   // Initialize DPMI state
   emu._dpmiState = {
+    is32bit,
     nextSelector: DPMI_FIRST_SEL,
     freeSelectors: [],
     nextMemHandle: 1,
@@ -210,7 +236,6 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
   const ax = cpu.getReg16(EAX);
 
   if (!emu._dpmiState) {
-    console.warn(`[DPMI] INT 31h called without DPMI active, AX=${ax.toString(16)}`);
     cpu.setFlag(0x001, true); // CF=1 error
     return true;
   }
@@ -285,7 +310,18 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
     case 0x0304: // Free RM callback — NOP
       cpu.setFlag(0x001, false);
       return true;
-    case 0x0305: return dpmiSetPmIntVector(cpu, st);
+    case 0x0305: { // Get State Save/Restore Addresses
+      // AX = size of buffer needed (0 = no state to save)
+      cpu.setReg16(EAX, 0);
+      // BX:CX = real mode save/restore address (0:0 = not applicable)
+      cpu.setReg16(EBX, 0);
+      cpu.setReg16(ECX, 0);
+      // SI:(E)DI = protected mode save/restore address (0:0 = not applicable)
+      cpu.setReg16(ESI, 0);
+      cpu.reg[EDI] = 0;
+      cpu.setFlag(0x001, false);
+      return true;
+    }
     case 0x0306: return dpmiGetRawModeSwitch(cpu);
 
     // ── Vendor API ─────────────────────────────────────────────────
@@ -308,10 +344,11 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
     case 0x0800: return dpmiPhysicalAddrMapping(cpu);
 
     default:
-      console.warn(`[DPMI] Unimplemented INT 31h AX=0x${ax.toString(16).padStart(4, '0')}`);
+      console.warn(`[DPMI] Unimplemented INT 31h AX=0x${ax.toString(16).padStart(4, '0')} → CF=1`);
       cpu.setFlag(0x001, true);
-      return true;
+      break;
   }
+  return true;
 }
 
 // ── Descriptor functions ─────────────────────────────────────────────
@@ -322,7 +359,6 @@ function dpmiAllocDescriptors(cpu: CPU, emu: Emulator, st: DpmiState): boolean {
   const base = st.nextSelector;
   for (let i = 0; i < count; i++) {
     const sel = base + i * 8;
-    // Write a default data descriptor (base=0, limit=0, present, DPL=3, read/write)
     const idx = (sel & 0xFFF8) >>> 3;
     writeGdtEntry(emu.memory, emu._gdtBase, idx, 0, 0, 0xF2, 0x00);
   }
@@ -413,14 +449,11 @@ function dpmiSetAccessRights(cpu: CPU, emu: Emulator): boolean {
   const addr = emu._gdtBase + idx * 8;
   const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
   const limit = readGdtEntryLimit(emu.memory, emu._gdtBase, idx);
+  // CL = access byte, CH upper nibble (bits 12-15 of CX) = G, D/B, L, AVL
   const access = rights & 0xFF;
-  const flags = (rights >>> 8) & 0x0F;
+  const flags = (rights >>> 12) & 0x0F;
 
-  // Reconstruct the limit with granularity
-  const oldHi = emu.memory.readU32(addr + 4);
-  const oldFlags = (oldHi >>> 20) & 0x0F;
-  const gBit = oldFlags & 0x08;
-  writeGdtEntry(emu.memory, emu._gdtBase, idx, base, limit, access, (flags & 0x07) | gBit);
+  writeGdtEntry(emu.memory, emu._gdtBase, idx, base, limit, access, flags);
   cpu.setFlag(0x001, false);
   return true;
 }
@@ -476,7 +509,6 @@ function dpmiSetDescriptor(cpu: CPU, emu: Emulator): boolean {
   }
   // Update segBases cache
   const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
-  const limit = readGdtEntryLimit(emu.memory, emu._gdtBase, idx);
   cpu.segBases.set(sel, base);
   cpu.setFlag(0x001, false);
   return true;
@@ -549,8 +581,12 @@ function dpmiGetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boo
     cpu.setReg16(ECX, handler.sel);
     cpu.reg[EDX] = handler.off;
   } else {
-    cpu.setReg16(ECX, 0);
-    cpu.reg[EDX] = 0;
+    // Return the default PM reflector stub for this interrupt.
+    // Each stub is 5 bytes at selector 0x38, offset = intNum * 5.
+    // The stub does MOV AL,intNum; INT FEh; IRET which traps into our
+    // JS handler to reflect the interrupt to RM/BIOS.
+    cpu.setReg16(ECX, 0x38); // reflector code selector
+    cpu.reg[EDX] = vec * 5;  // offset to the specific INT stub
   }
   cpu.setFlag(0x001, false);
   return true;
@@ -572,6 +608,7 @@ function dpmiSetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boo
 /** AX=0300: Simulate real mode interrupt. BL=int, ES:EDI → 50-byte RM call struct */
 function dpmiSimulateRmInt(cpu: CPU, emu: Emulator): boolean {
   const intNum = cpu.getReg8(EBX); // BL
+  const ax = cpu.getReg16(EAX); // current AX tells us if this is 0300/0301/0302
   const structAddr = (cpu.segBase(cpu.es) + (cpu.use32 ? cpu.reg[EDI] : (cpu.reg[EDI] & 0xFFFF))) >>> 0;
   // Read the 50-byte real mode call structure
   const rmEDI = emu.memory.readU32(structAddr + 0x00);
@@ -614,8 +651,7 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator): boolean {
   cpu.realMode = true;
   cpu.use32 = false;
 
-  // Call the DOS interrupt handler (imported at top — circular but safe:
-  // ESM live bindings resolve before any runtime call).
+  // Call the DOS interrupt handler
   handleDosInt(cpu, intNum, emu);
 
   // Write results back to the struct
@@ -751,15 +787,6 @@ function dpmiResizeMemBlock(cpu: CPU, st: DpmiState): boolean {
 }
 
 /** AX=0305: Set PM interrupt vector. BL=int, CX:EDX=sel:off */
-function dpmiSetPmIntVector(cpu: CPU, st: DpmiState): boolean {
-  const intNum = cpu.getReg8(EBX);
-  const sel = cpu.getReg16(ECX);
-  const off = cpu.reg[EDX] >>> 0;
-  st.pmExcHandlers.set(intNum + 256, { sel, off }); // store in separate range from exceptions
-  cpu.setFlag(0x001, false);
-  return true;
-}
-
 /** AX=0306: Get raw mode switch addresses.
  *  BX:CX = address to switch from RM to PM (far call in RM)
  *  SI:(E)DI = address to switch from PM to RM (far call in PM) */

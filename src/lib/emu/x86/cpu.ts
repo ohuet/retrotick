@@ -100,7 +100,6 @@ export class CPU {
       this.use32 = is32;
       this._addrSize16 = !is32;
     } else {
-      // Real mode is always 16-bit
       this.use32 = false;
       this._addrSize16 = true;
     }

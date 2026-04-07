@@ -33,6 +33,7 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
     // INT 21h handler reflecting to DOS), reflect to JS/RM instead.
     const shouldDispatchToPM = handler && handler.sel !== 0
       && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC
+      && intNum !== 0xFE // DPMI reflector trap
       && intNum !== 0x20; // INT 20h = terminate, always handle in JS
 
     if (shouldDispatchToPM) {
