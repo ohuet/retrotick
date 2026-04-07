@@ -34,6 +34,7 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
     const shouldDispatchToPM = handler && handler.sel !== 0
       && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC
       && intNum !== 0xFE // DPMI reflector trap
+      && intNum !== 0xFA // VCPI PM service trap
       && intNum !== 0x20; // INT 20h = terminate, always handle in JS
 
     if (shouldDispatchToPM) {
@@ -1240,9 +1241,32 @@ export function cpuStep(cpu: CPU): void {
         const eip2 = cpu.pop32() >>> 0;
         const cs2 = cpu.pop32() & 0xFFFF;
         const eflags = cpu.pop32() >>> 0;
-        cpu.loadCS(cs2);
-        cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
-        cpu.setFlags(eflags);
+        // VM bit (bit 17) in EFLAGS: IRET to V86 mode
+        if (!cpu.realMode && (eflags & (1 << 17))) {
+          // Switch to V86/real mode — pop additional SS:ESP + segment registers
+          const newESP = cpu.pop32() >>> 0;
+          const newSS = cpu.pop32() & 0xFFFF;
+          const newES = cpu.pop32() & 0xFFFF;
+          const newDS = cpu.pop32() & 0xFFFF;
+          const newFS = cpu.pop32() & 0xFFFF;
+          const newGS = cpu.pop32() & 0xFFFF;
+          cpu.realMode = true;
+          cpu.use32 = false;
+          cpu._addrSize16 = true;
+          cpu.cs = cs2;
+          cpu.ds = newDS;
+          cpu.es = newES;
+          cpu.ss = newSS;
+          cpu.fs = newFS;
+          cpu.gs = newGS;
+          cpu.reg[ESP] = newESP;
+          cpu.eip = (cs2 * 16 + eip2) >>> 0;
+          cpu.setFlags(eflags & ~(1 << 17)); // clear VM for our RM mode
+        } else {
+          cpu.loadCS(cs2);
+          cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
+          cpu.setFlags(eflags);
+        }
       }
       break;
     }

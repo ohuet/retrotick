@@ -58,6 +58,7 @@ emu.screenHeight = 480;
 emu.exeName = 'emul5/EMUL5.EXE';
 emu.exePath = 'D:\\emul5\\EMUL5.EXE';
 emu.dosEnableDpmi = false; // Force VCPI path (DOS4GW manages its own PM)
+emu.traceApi = true; // Trace all INT 21h calls
 emu.additionalFiles.set('DOS4GW.EXE', dos4gwBuf);
 
 // Add all companion files
@@ -102,7 +103,7 @@ emu.cpu.step = function() {
   ringSP[ringIdx] = this.reg[4] >>> 0;
   ringIdx = (ringIdx + 1) & (RING_SIZE - 1);
   origStep();
-  // Only trap on actual halts (disable CS-transition trap for now)
+  // Disabled — CS=0 is normal V86 behavior (IVT handlers)
   if (false) {
     trapFired = true;
     trapFired = true;

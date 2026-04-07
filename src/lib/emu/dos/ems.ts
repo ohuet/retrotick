@@ -4,7 +4,10 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 
-const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6;
+const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
+
+// INT number for VCPI PM service trap (called from PM via stub at VCPI entry point)
+export const VCPI_PM_INT = 0xFA;
 
 // EMS page frame at segment D000 (linear D0000-DFFFF = 64KB = 4 pages)
 const EMS_PAGE_FRAME_SEG = 0xD000;
@@ -285,13 +288,13 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.mem.writeU32(dsBase + si + 16, 0x0000FFFF);
           cpu.mem.writeU32(dsBase + si + 20, 0x00CF9200);
           // EBX = offset of PM entry point in VCPI code segment
-          // We use a stub at F000:0B00 (just after DPMI stubs)
+          // PM entry stub at F000:0B00 — traps into our VCPI PM service handler
           const VCPI_PM_OFF = 0x0B00;
           const vcpiPmLinear = 0xF0000 + VCPI_PM_OFF;
-          // Write stub: INT FBh; IRETD at F000:0B00
+          // Write stub: INT FAh; RETF (FAR CALL convention, not IRET)
           cpu.mem.writeU8(vcpiPmLinear, 0xCD);
-          cpu.mem.writeU8(vcpiPmLinear + 1, 0xFB); // INT FBh
-          cpu.mem.writeU8(vcpiPmLinear + 2, 0xCF); // IRETD
+          cpu.mem.writeU8(vcpiPmLinear + 1, VCPI_PM_INT);
+          cpu.mem.writeU8(vcpiPmLinear + 2, 0xCB); // RETF (32-bit far return)
           cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | vcpiPmLinear;
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
@@ -332,6 +335,7 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           emu.memory.a20Mask = 0xFFFFFFFF;
           // ESI = linear address of data structure
           const esi = cpu.reg[ESI] >>> 0;
+          // V86→PM switch
           const newCR3 = cpu.mem.readU32(esi);
           const gdtrAddr = cpu.mem.readU32(esi + 4);
           const idtrAddr = cpu.mem.readU32(esi + 8);
@@ -355,12 +359,13 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           // Set CR0 PE bit
           emu._cr0 = (emu._cr0 | 1) >>> 0;
           // Switch to protected mode
+          // VCPI spec: only CS, EIP, SS:ESP are set (ESP from current value).
+          // Other segment regs (DS, ES, FS, GS) are NOT loaded by the host.
+          // SS must be a valid PM selector — use null (base=0) which the PM entry
+          // code will immediately replace with a proper selector.
           cpu.realMode = false;
           cpu.loadCS(newCS);
-          cpu.ds = 0;
-          cpu.es = 0;
-          cpu.fs = 0;
-          cpu.gs = 0;
+          cpu.ss = 0;
           cpu.eip = (cpu.segBase(newCS) + newEIP) >>> 0;
           break;
         }
@@ -379,4 +384,78 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
   }
 
   return true;
+}
+
+/**
+ * Handle VCPI services called from Protected Mode (via INT FAh trap).
+ * DOS4GW calls the VCPI PM entry point (CALL FAR vcpiCS:offset) with AX=function.
+ * The stub does INT FAh which traps here. After handling, the stub does RETF
+ * back to the caller.
+ */
+export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
+  const ax = cpu.getReg16(EAX);
+  const fn = ax & 0xFF;
+
+  switch (fn) {
+    case 0x04: { // Allocate 4KB Page
+      if (!emu._vcpiNextPage) emu._vcpiNextPage = 0x110;
+      const page = emu._vcpiNextPage++;
+      cpu.reg[EDX] = page << 12;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+    case 0x05: // Free 4KB Page
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x0C: { // Switch from PM to V86 mode
+      // The client pushes a return frame on the stack before CALL FAR to the entry point:
+      //   PUSH GS, PUSH FS, PUSH DS, PUSH ES, PUSH SS
+      //   PUSH ESP, PUSH EFLAGS, PUSH CS, PUSH EIP
+      // Then CALL FAR pushes return CS:EIP (8 bytes for 32-bit).
+      // Then the INT FAh in the stub pushes FLAGS+CS+EIP (varies by D bit).
+      //
+      // We need to skip the INT frame + CALL FAR frame to reach the V86 frame.
+      // The stub is in a 16-bit segment (CS from DE01 descriptor 1 has D=0?
+      // Actually DE01 sets it as 32-bit: 0x00CF9A00). Let's check opSize.
+      // With 32-bit CS: INT pushes 12 bytes (EFLAGS+CS+EIP), CALL FAR pushed 8.
+      // Total to skip: 20 bytes.
+      const ssBase = cpu.segBase(cpu.ss);
+      const esp = cpu.reg[ESP] >>> 0;
+      // dispatchException doesn't push a frame for JS handlers, and INT CD FA
+      // only called dispatchException which fell through to handleDosInt.
+      // Only the CALL FAR frame (8 bytes: 32-bit CS + EIP) needs to be skipped.
+      const frameBase = ssBase + esp + 8;
+      const newEIP = cpu.mem.readU32(frameBase + 0);
+      const newCS = cpu.mem.readU32(frameBase + 4) & 0xFFFF;
+      const newEFLAGS = cpu.mem.readU32(frameBase + 8);
+      const newESP = cpu.mem.readU32(frameBase + 12);
+      const newSS = cpu.mem.readU32(frameBase + 16) & 0xFFFF;
+      const newES = cpu.mem.readU32(frameBase + 20) & 0xFFFF;
+      const newDS = cpu.mem.readU32(frameBase + 24) & 0xFFFF;
+      const newFS = cpu.mem.readU32(frameBase + 28) & 0xFFFF;
+      const newGS = cpu.mem.readU32(frameBase + 32) & 0xFFFF;
+
+      // Switch to V86/real mode
+      cpu.realMode = true;
+      cpu.use32 = false;
+      cpu._addrSize16 = true;
+      cpu.cs = newCS;
+      cpu.ds = newDS;
+      cpu.es = newES;
+      cpu.ss = newSS;
+      cpu.fs = newFS;
+      cpu.gs = newGS;
+      cpu.reg[ESP] = newESP;
+      cpu.eip = (newCS * 16 + newEIP) >>> 0;
+      cpu.setFlags(newEFLAGS);
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+
+    default:
+      console.warn(`[VCPI-PM] Unhandled function AX=0x${ax.toString(16)}`);
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8F00;
+      return true;
+  }
 }

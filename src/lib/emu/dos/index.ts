@@ -8,6 +8,7 @@ import { handleInt33 } from './mouse';
 import { handleXms, XMS_INT } from './xms';
 import { handleInt67 } from './ems';
 import { handleDpmiEntry, handleInt31, handleDpmiSwitch, handleDpmiCallback, DPMI_INT, DPMI_SWITCH_INT, DPMI_REFLECTOR_INT } from './dpmi';
+import { handleVcpiPM, VCPI_PM_INT } from './ems';
 
 export { handleInt21 } from './int21';
 export { syncVideoMemory } from './video';
@@ -175,6 +176,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     case DPMI_INT: return handleDpmiEntry(cpu, emu); // DPMI mode switch
     case DPMI_SWITCH_INT: return handleDpmiSwitch(cpu, emu); // Raw mode switch
     case 0xFB: return handleDpmiCallback(cpu, emu); // RM callback trap
+    case VCPI_PM_INT: return handleVcpiPM(cpu, emu); // VCPI PM services
     case DPMI_REFLECTOR_INT: {
       // PM reflector: the stub set AL = original INT number before trapping here.
       // Forward to the JS/BIOS handler for that interrupt.
