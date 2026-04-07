@@ -22,7 +22,13 @@ export function exec0F(
     case 0x8C: case 0x8D: case 0x8E: case 0x8F: {
       const disp = opSize === 16 ? (cpu.fetch16() << 16 >> 16) : cpu.fetchI32();
       if (cpu.testCC(op2 - 0x80)) {
-        cpu.eip = (cpu.eip + disp) | 0;
+        if (!cpu.use32) {
+          // 16-bit mode: IP wraps within the segment
+          const base = cpu.segBase(cpu.cs);
+          cpu.eip = (base + ((cpu.eip - base + disp) & 0xFFFF)) >>> 0;
+        } else {
+          cpu.eip = (cpu.eip + disp) | 0;
+        }
       }
       break;
     }
