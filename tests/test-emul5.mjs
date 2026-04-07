@@ -77,7 +77,6 @@ const ringEIP = new Uint32Array(RING_SIZE);
 const ringCS = new Uint16Array(RING_SIZE);
 const ringRM = new Uint8Array(RING_SIZE);
 let ringIdx = 0;
-let trapFired = false;
 const origStep = emu.cpu.step.bind(emu.cpu);
 emu.cpu.step = function() {
   ringEIP[ringIdx] = this.eip >>> 0;
@@ -85,39 +84,6 @@ emu.cpu.step = function() {
   ringRM[ringIdx] = this.realMode ? 1 : 0;
   ringIdx = (ringIdx + 1) & (RING_SIZE - 1);
   origStep();
-  // Detect when CS changes to 0x70 (unexpected V86 segment)
-  if (!trapFired && this.realMode && this.cs === 0x70 && ringCS[(ringIdx - 2 + RING_SIZE) & (RING_SIZE - 1)] !== 0x70) {
-    trapFired = true;
-    console.log(`[CS→70] at step ${emu.cpuSteps} EIP=0x${(this.eip>>>0).toString(16)}`);
-    console.log(`[RING] Last 64:`);
-    for (let j = RING_SIZE - 64; j < RING_SIZE; j++) {
-      const idx2 = (ringIdx + j) & (RING_SIZE - 1);
-      const e = ringEIP[idx2], c = ringCS[idx2], r = ringRM[idx2];
-      if (!e && !c) continue;
-      const bytes = [];
-      for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8(e + b).toString(16).padStart(2, '0'));
-      console.log(`  CS=0x${c.toString(16)} EIP=0x${e.toString(16)} RM=${r} [${bytes.join(' ')}]`);
-    }
-    this.halted = true;
-    this.haltReason = 'CS=0x70';
-  }
-  // Trap: CS transitions to 0 in RM from a non-IVT segment
-  if (false) {
-    trapFired = true;
-    console.log(`[TRAP] CS: 0x${prevCS.toString(16)} → 0x0 (RM=${prevRM}→${this.realMode}) step=${emu.cpuSteps}`);
-    console.log(`[RING] Last 64 instructions:`);
-    for (let j = RING_SIZE - 64; j < RING_SIZE; j++) {
-      const idx2 = (ringIdx + j) & (RING_SIZE - 1);
-      const e = ringEIP[idx2], c = ringCS[idx2], r = ringRM[idx2];
-      if (!e && !c) continue;
-      const bytes = [];
-      for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8(e + b).toString(16).padStart(2, '0'));
-      const mark = (c !== ringCS[(ringIdx + j - 1 + RING_SIZE) & (RING_SIZE - 1)]) ? ' <<<' : '';
-      console.log(`  CS=0x${c.toString(16)} EIP=0x${e.toString(16)} RM=${r} [${bytes.join(' ')}]${mark}`);
-    }
-    this.halted = true;
-    this.haltReason = 'CS=0 trap';
-  }
 };
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -127,14 +93,17 @@ let totalTicks = 0;
 for (let i = 0; i < MAX_TICKS; i++) {
   if (emu.halted) {
     console.log(`[HALT] after ${totalTicks} ticks: ${emu.cpu.haltReason}`);
-    console.log(`[RING] Last 32 instructions:`);
-    for (let j = RING_SIZE - 32; j < RING_SIZE; j++) {
+    // Dump last 64 ring buffer entries
+    console.log(`[RING] Last 64:`);
+    for (let j = RING_SIZE - 64; j < RING_SIZE; j++) {
       const idx2 = (ringIdx + j) & (RING_SIZE - 1);
       const e = ringEIP[idx2], c = ringCS[idx2], r = ringRM[idx2];
       if (!e && !c) continue;
       const bytes = [];
       for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8(e + b).toString(16).padStart(2, '0'));
-      console.log(`  CS=0x${c.toString(16)} EIP=0x${e.toString(16)} RM=${r} [${bytes.join(' ')}]`);
+      const prev = ringCS[(ringIdx + j - 1 + RING_SIZE) & (RING_SIZE - 1)];
+      const mark = (c !== prev) ? ' <<<' : '';
+      console.log(`  CS=0x${c.toString(16)} EIP=0x${e.toString(16)} RM=${r} [${bytes.join(' ')}]${mark}`);
     }
     break;
   }

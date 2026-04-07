@@ -414,16 +414,45 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
   const ax = cpu.getReg16(EAX);
   const fn = ax & 0xFF;
 
+  // For non-switch functions (0x04, 0x05), we need to return to the CALL FAR caller.
+  // The CALL FAR pushed CS:EIP onto the stack. The caller may use 16-bit or 32-bit
+  // operand size (with 66 prefix), creating a 4-byte or 8-byte frame. The stub's
+  // RETF might not match. Instead, pop the return address ourselves and set EIP.
+  // We detect the frame size by checking if the value at ESP+4 looks like a valid
+  // PM selector (< 0x100 with valid GDT/LDT entry) → 32-bit, otherwise → 16-bit.
+  const returnToCaller = () => {
+    const ssBase = cpu.segBase(cpu.ss);
+    const esp = cpu.reg[ESP] >>> 0;
+    // Try 16-bit frame first (4 bytes: WORD IP + WORD CS)
+    const ret16IP = cpu.mem.readU16(ssBase + esp);
+    const ret16CS = cpu.mem.readU16(ssBase + esp + 2);
+    // Try 32-bit frame (8 bytes: DWORD EIP + DWORD CS)
+    const ret32EIP = cpu.mem.readU32(ssBase + esp);
+    const ret32CS = cpu.mem.readU32(ssBase + esp + 4) & 0xFFFF;
+    // Heuristic: if 32-bit CS is a small valid selector (< 0x100), use 32-bit
+    if (ret32CS > 0 && ret32CS < 0x100 && (ret32CS & 0x3) === 0) {
+      cpu.reg[ESP] = (esp + 8) | 0;
+      cpu.loadCS(ret32CS);
+      cpu.eip = (cpu.segBase(ret32CS) + ret32EIP) >>> 0;
+    } else {
+      cpu.reg[ESP] = (esp + 4) | 0;
+      cpu.loadCS(ret16CS);
+      cpu.eip = (cpu.segBase(ret16CS) + ret16IP) >>> 0;
+    }
+  };
+
   switch (fn) {
     case 0x04: { // Allocate 4KB Page
       if (!emu._vcpiNextPage) emu._vcpiNextPage = 0x110;
       const page = emu._vcpiNextPage++;
       cpu.reg[EDX] = page << 12;
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      returnToCaller();
       return true;
     }
     case 0x05: // Free 4KB Page
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      returnToCaller();
       return true;
 
     case 0x0C: { // Switch from PM to V86 mode
