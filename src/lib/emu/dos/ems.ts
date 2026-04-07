@@ -271,31 +271,42 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           const esBase = cpu.segBase(cpu.es);
           const di = cpu.getReg16(7);
           // Fill page table: identity map first 1MB (256 × 4KB pages)
-          for (let pg = 0; pg < 256; pg++) {
-            // Each entry: 20-bit page frame + flags (present, writable, user)
-            cpu.mem.writeU32(esBase + di + pg * 4, (pg * 0x1000) | 0x67);
+          // Match DOSBox: pages 0x00-0xFE identity-mapped, page 0xFF → program area
+          for (let pg = 0; pg < 0xFF; pg++) {
+            cpu.mem.writeU8(esBase + di + pg * 4 + 0, 0x67);
+            cpu.mem.writeU16(esBase + di + pg * 4 + 1, pg * 0x10);
+            cpu.mem.writeU8(esBase + di + pg * 4 + 3, 0x00);
           }
+          // Page 0xFF maps to program area (0x1100) like DOSBox
+          cpu.mem.writeU8(esBase + di + 0xFF * 4 + 0, 0x67);
+          cpu.mem.writeU16(esBase + di + 0xFF * 4 + 1, 0x1100);
+          cpu.mem.writeU8(esBase + di + 0xFF * 4 + 3, 0x00);
+          // VCPI spec: advance DI past the page table on return
+          cpu.reg[EDI] = (cpu.reg[EDI] & 0xFFFF0000) | ((di + 0x400) & 0xFFFF);
           // DS:SI → 3 GDT descriptors (8 bytes each = 24 bytes)
+          // Match DOSBox: 16-bit segments (D=0, G=0, limit=64KB)
           const dsBase = cpu.segBase(cpu.ds);
           const si = cpu.getReg16(6);
-          // Descriptor 1: code segment (base=0, limit=FFFFF, 32-bit, execute/read)
-          cpu.mem.writeU32(dsBase + si + 0, 0x0000FFFF);
-          cpu.mem.writeU32(dsBase + si + 4, 0x00CF9A00);
-          // Descriptor 2: data segment (base=0, limit=FFFFF, 32-bit, read/write)
-          cpu.mem.writeU32(dsBase + si + 8, 0x0000FFFF);
-          cpu.mem.writeU32(dsBase + si + 12, 0x00CF9200);
-          // Descriptor 3: data segment (same)
-          cpu.mem.writeU32(dsBase + si + 16, 0x0000FFFF);
-          cpu.mem.writeU32(dsBase + si + 20, 0x00CF9200);
-          // EBX = offset of PM entry point in VCPI code segment
-          // PM entry stub at F000:0B00 — traps into our VCPI PM service handler
           const VCPI_PM_OFF = 0x0B00;
-          const vcpiPmLinear = 0xF0000 + VCPI_PM_OFF;
-          // Write stub: INT FAh; RETF (FAR CALL convention, not IRET)
+          const vcpiCodeBase = 0xF0000; // ROM area where the PM entry stub lives
+          const cbseg_low = (vcpiCodeBase & 0xFFFF) << 16; // base[15:0] in descriptor lo
+          const cbseg_high = (vcpiCodeBase >>> 16) & 0xFF;  // base[23:16] in descriptor hi
+          // Descriptor 1: code segment (base=vcpiCodeBase, limit=FFFF, 16-bit)
+          cpu.mem.writeU32(dsBase + si + 0, 0x0000FFFF | cbseg_low);
+          cpu.mem.writeU32(dsBase + si + 4, 0x00009A00 | cbseg_high);
+          // Descriptor 2: data segment (base=0, limit=FFFF, 16-bit)
+          cpu.mem.writeU32(dsBase + si + 8, 0x0000FFFF);
+          cpu.mem.writeU32(dsBase + si + 12, 0x00009200);
+          // Descriptor 3: data segment (base=0, limit=FFFF, 16-bit)
+          cpu.mem.writeU32(dsBase + si + 16, 0x0000FFFF);
+          cpu.mem.writeU32(dsBase + si + 20, 0x00009200);
+          // PM entry stub at F000:0B00 — traps into our VCPI PM service handler
+          const vcpiPmLinear = vcpiCodeBase + VCPI_PM_OFF;
           cpu.mem.writeU8(vcpiPmLinear, 0xCD);
           cpu.mem.writeU8(vcpiPmLinear + 1, VCPI_PM_INT);
-          cpu.mem.writeU8(vcpiPmLinear + 2, 0xCB); // RETF (32-bit far return)
-          cpu.reg[EBX] = vcpiPmLinear; // full 32-bit offset in VCPI code segment
+          cpu.mem.writeU8(vcpiPmLinear + 2, 0xCB); // RETF
+          // EBX = offset within the VCPI code segment (16-bit)
+          cpu.reg[EBX] = VCPI_PM_OFF & 0xFFFF;
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
         }
