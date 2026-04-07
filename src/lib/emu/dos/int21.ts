@@ -492,6 +492,11 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
       // Calculate maximum available size including free blocks after this one
       let maxAvail = oldParas;
+      let absorbedLast = mcbType === 0x5A;
+      // For 'Z' (last) blocks, max available extends to topOfMem
+      if (mcbType === 0x5A) {
+        maxAvail = topOfMem - blockSeg;
+      }
       if (mcbType === 0x4D) {
         // Walk the chain to find consecutive free blocks we can absorb
         let nextSeg = blockSeg + oldParas;
@@ -502,7 +507,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           const nextSize = cpu.mem.readU16(nextLin + 3);
           if (nextOwner !== 0) break; // not free — can't absorb
           maxAvail += 1 + nextSize; // +1 for the MCB header paragraph
-          if (nextType === 0x5A) break; // last block
+          if (nextType === 0x5A) { absorbedLast = true; break; }
           nextSeg = nextSeg + 1 + nextSize;
         }
       }
@@ -525,15 +530,18 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           const freeSeg = blockSeg + newParas;
           const freeLinear = freeSeg * 16;
           cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
-          // Determine if this free block is the last in the chain
-          const wasLast = (mcbType === 0x5A) || (blockSeg + maxAvail >= topOfMem);
-          cpu.mem.writeU8(freeLinear, wasLast ? 0x5A : 0x4D);
+          cpu.mem.writeU8(freeLinear, absorbedLast ? 0x5A : 0x4D);
           cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
           cpu.mem.writeU16(freeLinear + 3, freeParas);
         } else {
           // Not enough space for a free MCB — absorb the leftover into this block
           cpu.mem.writeU16(mcbLinear + 3, maxAvail);
+          // If we absorbed the last block, this one becomes the last
+          if (absorbedLast) cpu.mem.writeU8(mcbLinear, 0x5A);
         }
+      } else {
+        // Exact fit or no change — update type if we absorbed the last block
+        if (absorbedLast) cpu.mem.writeU8(mcbLinear, 0x5A);
       }
 
       cpu.setFlag(CF, false);
