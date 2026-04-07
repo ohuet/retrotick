@@ -385,17 +385,28 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           // Store LDTR/TR
           emu._ldtr = newLDTR;
           emu._tr = newTR;
-          // Set CR0 PE bit
-          emu._cr0 = (emu._cr0 | 1) >>> 0;
-          // Switch to protected mode
-          // VCPI spec: only CS, EIP, SS:ESP are set (ESP from current value).
-          // Other segment regs (DS, ES, FS, GS) are NOT loaded by the host.
-          // SS must be a valid PM selector — use null (base=0) which the PM entry
-          // code will immediately replace with a proper selector.
+          // Set CR0 PE bit + paging if CR3 is non-zero (matching DOSBox)
+          let newCR0 = (emu._cr0 | 1) >>> 0;
+          if (newCR3 !== 0) newCR0 = (newCR0 | 0x80000000) >>> 0;
+          emu._cr0 = newCR0;
+          // Clear TSS busy bit before loading TR (required for LTR)
+          if (newTR && emu._gdtBase) {
+            const trDescAddr = emu._gdtBase + (newTR & 0xFFF8) + 5;
+            const trByte = cpu.mem.readU8(trDescAddr);
+            cpu.mem.writeU8(trDescAddr, trByte & 0xFD);
+          }
+          // Switch to protected mode (matching DOSBox: zero segment regs, set IOPL=3)
           cpu.realMode = false;
           cpu.loadCS(newCS);
           cpu.ss = 0;
+          cpu.ds = 0;
+          cpu.es = 0;
+          cpu.fs = 0;
+          cpu.gs = 0;
           cpu.eip = (cpu.segBase(newCS) + newEIP) >>> 0;
+          // Clear IF, VM, NT; set IOPL=3
+          const flags = cpu.getFlags();
+          cpu.setFlags((flags & ~(0x200 | 0x20000 | 0x4000)) | 0x3000);
           break;
         }
         default:
