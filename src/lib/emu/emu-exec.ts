@@ -554,6 +554,7 @@ export function emuCallNative(emu: Emulator, addr: number): number | undefined {
 }
 
 const BATCH_SIZE = 500000;
+const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
 const DOS_POST_KEY_STEPS = 0x80;
 
 // WASM JIT diagnostics — logs every ~1s
@@ -598,8 +599,7 @@ export function emuTick(emu: Emulator): void {
 
   const tickStart = performance.now();
   let stepCount = 0;
-  const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
-  const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
+  const tickMs = emu.isDOS ? DOS_TICK_MS * emu.dosSpeedFactor : 50;
   let dosYieldAfterKeyAt = -1;
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
   let prevBdaKeyHead = emu.isDOS ? emu.memory.readU16(0x41A) : 0;
@@ -699,10 +699,13 @@ export function emuTick(emu: Emulator): void {
       }
     }
     if (emu.halted || emu.waitingForMessage || emu._dosHalted) break;
-    if (emu.isDOS && dosYieldAfterKeyAt < 0 && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
+    if (emu.isDOS && dosYieldAfterKeyAt < 0 && emu.dosSpeedFactor >= 1
+        && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
       // A DOS key was consumed this tick (INT 16h or direct port 0x60 path):
       // let guest run a little longer
       // so it can finish drawing before we yield/sync the frame.
+      // Disabled at reduced speed: rAF + reduced tickMs already ensures 60Hz sync,
+      // and yielding after 128 insns would starve the game (~7k insns/sec).
       dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
     }
     if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
@@ -769,9 +772,12 @@ export function emuTick(emu: Emulator): void {
         else if (code === 0xB8) emu.memory.writeU8(BDA_SHIFT, flags & ~0x08); // Alt break
         emu._pendingHwInts.push(0x09);
         if (code !== 0xE0) emu._lastHwKeyDeliverTime = now;
-        if (emu.isDOS && dosYieldAfterKeyAt < 0 && code !== 0xE0) {
+        if (emu.isDOS && dosYieldAfterKeyAt < 0 && code !== 0xE0
+            && emu._pendingHwKeys.length === 0) {
           // Hardware key delivered this tick: give DOS app a short execution window
           // to finish drawing, then yield/sync so the frame is observable.
+          // Skip when more keys are queued (key repeat) — no point yielding just
+          // to deliver another key next tick; that starves the game at low speed.
           dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
         }
         emu._hwKeyDelay = 0;
@@ -1237,7 +1243,13 @@ export function emuTick(emu: Emulator): void {
     } else if (emu.isDOS) {
       // DOS games need maximum throughput — MessageChannel avoids setTimeout's
       // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
-      scheduleImmediate(emu.tick);
+      if (emu.dosSpeedFactor < 1) {
+        // Frame-locked throttling: reduced tick budget (tickMs = 16 * speed)
+        // fills only part of each ~16.7ms rAF frame → smooth, predictable slowdown.
+        requestAnimationFrame(emu.tick);
+      } else {
+        scheduleImmediate(emu.tick);
+      }
     } else {
       requestAnimationFrame(emu.tick);
     }

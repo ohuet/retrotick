@@ -11,6 +11,19 @@ const radioStyle: Record<string, string | number> = {
   marginBottom: '4px',
 };
 
+const REFRESH_OPTIONS = [30, 45, 60, 70, 100];
+
+const SPEED_OPTIONS = [
+  { value: 1, label: '1x' },
+  { value: 0.75, label: '0.75x' },
+  { value: 0.65, label: '0.65x' },
+  { value: 0.5, label: '0.5x' },
+  { value: 0.35, label: '0.35x' },
+  { value: 0.25, label: '0.25x' },
+  { value: 0.15, label: '0.15x' },
+  { value: 0.1, label: '0.1x' },
+];
+
 interface DosSettingsWindowProps {
   onClose: () => void;
   onFocus: () => void;
@@ -63,6 +76,34 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
                 />
                 {t().textRendererCanvas}
               </label>
+            </div>
+
+            {/* Speed */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelSpeed}</div>
+              <select
+                style={{ font: FONT, width: '100px', background: '#FFF' }}
+                value={settings.speed}
+                onChange={(e) => setSettings(s => ({ ...s, speed: Number((e.target as HTMLSelectElement).value) }))}
+              >
+                {SPEED_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Refresh rate */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelRefreshRate}</div>
+              <select
+                style={{ font: FONT, width: '100px', background: '#FFF' }}
+                value={settings.refreshRate}
+                onChange={(e) => setSettings(s => ({ ...s, refreshRate: Number((e.target as HTMLSelectElement).value) }))}
+              >
+                {REFRESH_OPTIONS.map(hz => (
+                  <option key={hz} value={hz}>{hz} Hz</option>
+                ))}
+              </select>
             </div>
 
             {/* JIT compiler */}
