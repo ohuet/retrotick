@@ -185,8 +185,46 @@ export function registerWin16Commdlg(emu: Emulator): void {
   commdlg.register('ChooseFont', 4, () => 0, 15);
 
   // Ordinal 20: PrintDlg(lpPd) — 4 bytes (segptr)
-  // Returns 0 = user cancelled
-  commdlg.register('PrintDlg', 4, () => 0, 20);
+  // Allocate a default DEVMODE16 so callers can read paper size
+  commdlg.register('PrintDlg', 4, () => {
+    const [lpPdRaw] = emu.readPascalArgs16([4]);
+    const lpPd = emu.resolveFarPtr(lpPdRaw);
+    if (!lpPd) return 0;
+
+    // Allocate DEVMODE16 on a 64KB-aligned block (acts as its own segment/selector)
+    const DEVMODE_SIZE = 68;
+    const addr = emu.allocHeap64K(DEVMODE_SIZE);
+    const selector = addr >>> 16;
+    // Register in segBases so GlobalLock can resolve it, and in segLimits for LSL
+    emu.cpu.segBases.set(selector, addr);
+    emu.cpu.segLimits.set(selector, DEVMODE_SIZE - 1);
+
+    // dmDeviceName (32 bytes at offset 0)
+    const name = 'Default Printer';
+    for (let i = 0; i < name.length; i++) emu.memory.writeU8(addr + i, name.charCodeAt(i));
+
+    const DM_ORIENTATION = 0x0001;
+    const DM_PAPERSIZE = 0x0002;
+    const DM_PAPERLENGTH = 0x0004;
+    const DM_PAPERWIDTH = 0x0008;
+    emu.memory.writeU16(addr + 32, 0x030A); // dmSpecVersion
+    emu.memory.writeU16(addr + 36, DEVMODE_SIZE); // dmSize
+    emu.memory.writeU16(addr + 40, DM_ORIENTATION | DM_PAPERSIZE | DM_PAPERLENGTH | DM_PAPERWIDTH); // dmFields
+    emu.memory.writeU16(addr + 42, 1);    // dmOrientation = PORTRAIT
+    emu.memory.writeU16(addr + 44, 1);    // dmPaperSize = DMPAPER_LETTER
+    emu.memory.writeU16(addr + 46, 2794); // dmPaperLength = 279.4mm (11")
+    emu.memory.writeU16(addr + 48, 2159); // dmPaperWidth = 215.9mm (8.5")
+    emu.memory.writeU16(addr + 56, 300);  // dmPrintQuality = 300 DPI
+
+    // Write hDevMode into PRINTDLG16 at offset +6
+    emu.memory.writeU16(lpPd + 6, selector);
+
+    // Write a dummy hDC at offset +10
+    const hDC = emu.getWindowDC(emu.mainWindow || 0);
+    emu.memory.writeU16(lpPd + 10, hDC);
+
+    return 1; // success
+  }, 20);
 
   // Ordinal 26: CommDlgExtendedError() — 0 bytes
   commdlg.register('CommDlgExtendedError', 0, () => 0, 26);

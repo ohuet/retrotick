@@ -316,6 +316,8 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
 
   const savedSP = emu.cpu.reg[4] & 0xFFFF;
   const savedDS = emu.cpu.ds;
+  const savedCS = emu.cpu.cs;
+  const savedEIP = emu.cpu.eip;
   const savedEBX = emu.cpu.reg[3];
   const savedESI = emu.cpu.reg[6];
   const savedEDI = emu.cpu.reg[7];
@@ -364,6 +366,8 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     // No segment contains this address — can't execute, bail out
     console.warn(`[MSG16] callWndProc16: no segment for wndProc=0x${wndProc.toString(16)} msg=0x${message.toString(16)} hwnd=0x${hwnd.toString(16)}`);
     emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+    emu.cpu.cs = savedCS;
+    emu.cpu.eip = savedEIP;
     emu.cpu.ds = savedDS;
     emu.cpu.reg[3] = savedEBX;
     emu.cpu.reg[5] = savedEBP;
@@ -465,11 +469,14 @@ export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, m
     emu.wndProcDepth = targetDepth;
   }
 
-  // Synchronous return — always restore SP, DS, and callee-saved registers.
+  // Synchronous return — always restore SP, DS, CS:EIP, and callee-saved registers.
   // SP restoration is critical: even if the WndProc completed normally
   // (RETF cleaned up args), we force SP back to guarantee no leak.
-  // DS restoration is critical for DLL wndProcs that use a different DS.
+  // CS:EIP restoration prevents the tick loop from seeing a stale WNDPROC_RETURN
+  // address and misinterpreting it as a new thunk invocation.
   emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+  emu.cpu.cs = savedCS;
+  emu.cpu.eip = savedEIP;
   emu.cpu.ds = savedDS;
   emu.cpu.reg[3] = savedEBX;
   emu.cpu.reg[5] = savedEBP;
@@ -555,6 +562,7 @@ export function emuCallNative(emu: Emulator, addr: number): number | undefined {
 }
 
 const BATCH_SIZE = 500000;
+const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
 const DOS_POST_KEY_STEPS = 0x80;
 
 // WASM JIT diagnostics — logs every ~1s
@@ -599,8 +607,7 @@ export function emuTick(emu: Emulator): void {
 
   const tickStart = performance.now();
   let stepCount = 0;
-  const DOS_TICK_MS = 16; // fill one rAF frame (~16.7ms) for maximum throughput
-  const tickMs = emu.isDOS ? DOS_TICK_MS : 50;
+  const tickMs = emu.isDOS ? DOS_TICK_MS * emu.dosSpeedFactor : 50;
   let dosYieldAfterKeyAt = -1;
   let prevDosKeyBufferLen = emu.dosKeyBuffer.length;
   let prevBdaKeyHead = emu.isDOS ? emu.memory.readU16(0x41A) : 0;
@@ -619,7 +626,9 @@ export function emuTick(emu: Emulator): void {
       emu._dosLastTimerTick += timerIntervalMs;
       // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
       if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-      emu._pendingHwInts.push(0x08);
+      const timerInt = emu._picMasterBase; // IRQ 0
+      if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt))
+        emu._pendingHwInts.push(timerInt);
       emu._dosHalted = false;
     }
     // Also wake on pending keyboard interrupt
@@ -700,10 +709,13 @@ export function emuTick(emu: Emulator): void {
       }
     }
     if (emu.halted || emu.waitingForMessage || emu._dosHalted) break;
-    if (emu.isDOS && dosYieldAfterKeyAt < 0 && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
+    if (emu.isDOS && dosYieldAfterKeyAt < 0 && emu.dosSpeedFactor >= 1
+        && (emu._dosKeyConsumedThisTick || emu._dosHwKeyReadThisTick)) {
       // A DOS key was consumed this tick (INT 16h or direct port 0x60 path):
       // let guest run a little longer
       // so it can finish drawing before we yield/sync the frame.
+      // Disabled at reduced speed: rAF + reduced tickMs already ensures 60Hz sync,
+      // and yielding after 128 insns would starve the game (~7k insns/sec).
       dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
     }
     if (dosYieldAfterKeyAt >= 0 && i >= dosYieldAfterKeyAt) break;
@@ -716,15 +728,16 @@ export function emuTick(emu: Emulator): void {
       // DOS games do rapid VGA writes and yielding on each one kills throughput)
       if (!emu.isDOS && emu.screenDirty) { emu.screenDirty = false; break; }
 
-      // DOS timer interrupt (INT 08h) — frequency derived from PIT channel 0
+      // DOS timer interrupt — frequency derived from PIT channel 0
       if (emu.isDOS) {
         const pitReload = emu._pitCounters[0] || 0x10000;
         const timerIntervalMs = (pitReload / 1193182) * 1000;
         if (now - emu._dosLastTimerTick >= timerIntervalMs) {
-          if (!emu._pendingHwInts.includes(0x08)) {
+          const timerInt = emu._picMasterBase; // IRQ 0
+          if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt)) {
             emu._dosLastTimerTick += timerIntervalMs;
             if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-            emu._pendingHwInts.push(0x08);
+            emu._pendingHwInts.push(timerInt);
           }
           emu._dosHalted = false;
         }
@@ -770,9 +783,12 @@ export function emuTick(emu: Emulator): void {
         else if (code === 0xB8) emu.memory.writeU8(BDA_SHIFT, flags & ~0x08); // Alt break
         emu._pendingHwInts.push(0x09);
         if (code !== 0xE0) emu._lastHwKeyDeliverTime = now;
-        if (emu.isDOS && dosYieldAfterKeyAt < 0 && code !== 0xE0) {
+        if (emu.isDOS && dosYieldAfterKeyAt < 0 && code !== 0xE0
+            && emu._pendingHwKeys.length === 0) {
           // Hardware key delivered this tick: give DOS app a short execution window
           // to finish drawing, then yield/sync so the frame is observable.
+          // Skip when more keys are queued (key repeat) — no point yielding just
+          // to deliver another key next tick; that starves the game at low speed.
           dosYieldAfterKeyAt = i + DOS_POST_KEY_STEPS;
         }
         emu._hwKeyDelay = 0;
@@ -791,10 +807,12 @@ export function emuTick(emu: Emulator): void {
       // technically incorrect but matches the practical behavior needed.
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
-      if (intNum >= 0x08 && intNum <= 0x0F) {
-        emu._picMasterISR |= (1 << (intNum - 0x08));
-      } else if (intNum >= 0x70 && intNum <= 0x77) {
-        emu._picSlaveISR |= (1 << (intNum - 0x70));
+      const masterBase = emu._picMasterBase;
+      const slaveBase = emu._picSlaveBase;
+      if (intNum >= masterBase && intNum < masterBase + 8) {
+        emu._picMasterISR |= (1 << (intNum - masterBase));
+      } else if (intNum >= slaveBase && intNum < slaveBase + 8) {
+        emu._picSlaveISR |= (1 << (intNum - slaveBase));
       }
 
       // In PM with DPMI active, dispatch HW interrupts through dispatchException
@@ -1236,6 +1254,10 @@ export function emuTick(emu: Emulator): void {
     }
   }
 
+  // Flush audio at end of tick — ensures the AudioWorklet ring buffer is fed
+  // even when scheduleImmediate starves setInterval's fill callback at 1x speed.
+  if (emu.isDOS) emu.dosAudio.flushAudio();
+
   if (emu.running && !emu.halted && !emu.waitingForMessage) {
     emu._tickCount++;
     if (emu._dosHalted) {
@@ -1253,7 +1275,13 @@ export function emuTick(emu: Emulator): void {
     } else if (emu.isDOS) {
       // DOS games need maximum throughput — MessageChannel avoids setTimeout's
       // 4ms clamping after 5 nested calls, giving near-zero inter-tick delay.
-      scheduleImmediate(emu.tick);
+      if (emu.dosSpeedFactor < 1) {
+        // Frame-locked throttling: reduced tick budget (tickMs = 16 * speed)
+        // fills only part of each ~16.7ms rAF frame → smooth, predictable slowdown.
+        requestAnimationFrame(emu.tick);
+      } else {
+        scheduleImmediate(emu.tick);
+      }
     } else {
       requestAnimationFrame(emu.tick);
     }

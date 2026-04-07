@@ -18,6 +18,10 @@ export interface DosSettings {
   adlib: boolean;
   /** Gravis UltraSound emulation. */
   gus: boolean;
+  /** CPU speed factor: 1 = full speed, 0.5 = half speed, etc. */
+  speed: number;
+  /** VGA refresh rate in Hz (standard CRT = 70). */
+  refreshRate: number;
 }
 
 const STORAGE_KEY = 'retrotick-dos';
@@ -31,6 +35,8 @@ const DEFAULTS: DosSettings = {
   soundBlaster: true,
   adlib: true,
   gus: true,
+  speed: 1,
+  refreshRate: 70,
 };
 
 export function loadDosSettings(): DosSettings {

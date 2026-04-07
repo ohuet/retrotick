@@ -174,7 +174,7 @@ export function handleInt09(cpu: CPU, emu: Emulator, scancodeOverride?: number):
   }
 
   // Cap software key buffer to prevent overflow from key repeat
-  if (emu.dosKeyBuffer.length < 32) {
+  if (emu.dosKeyBuffer.length < 16) {
     emu.dosKeyBuffer.push({ ascii, scan: scancode });
   }
   emu.writeBdaKey(ascii, scancode);

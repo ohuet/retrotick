@@ -190,6 +190,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const sw = (w << 16 >> 16);
     const sh = (height << 16 >> 16);
     const CW_USEDEFAULT = -0x8000;
+    const defW = Math.round(emu.screenWidth * 0.75) || 480;
+    const defH = Math.round(emu.screenHeight * 0.75) || 360;
     // MDICLIENT is always visible in practice (container for MDI children)
     const isMDIClient = className.toUpperCase() === 'MDICLIENT';
     const hwnd = emu.handles.alloc('window', {
@@ -199,8 +201,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       exStyle: 0,
       x: sx === CW_USEDEFAULT ? 0 : sx,
       y: sy === CW_USEDEFAULT ? 0 : sy,
-      width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      width: sw === CW_USEDEFAULT ? defW : (sw < 0 ? 0 : sw),
+      height: sh === CW_USEDEFAULT ? defH : (sh < 0 ? 0 : sh),
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
@@ -229,19 +231,39 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
     }
 
-    if (!emu.mainWindow && hWndParent === 0) {
-      const wnd = emu.handles.get<WindowInfo>(hwnd);
-      if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+    // Promote to mainWindow: skip WS_POPUP and re-promote if a window with
+    // WS_CAPTION is created after a bare WS_OVERLAPPED (hidden OLE/DDE windows)
+    if (hWndParent === 0 && !(dwStyle & 0x80000000)) { // not WS_POPUP
+      const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
+      const hasCaption = !!(dwStyle & 0x00C00000); // WS_CAPTION
+      const currentHasCaption = currentMain ? !!(currentMain.style & 0x00C00000) : false;
+      if (!emu.mainWindow || (!currentHasCaption && hasCaption)) {
+        const wnd = emu.handles.get<WindowInfo>(hwnd);
+        if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+      }
     }
 
     if (classInfo?.wndProc) {
+      // Use resolved dimensions in CREATESTRUCT (Windows resolves CW_USEDEFAULT before WM_CREATE)
+      const wndObj = emu.handles.get<WindowInfo>(hwnd);
+      const resolvedW = wndObj?.width ?? (sw < 0 ? 0 : sw);
+      const resolvedH = wndObj?.height ?? (sh < 0 ? 0 : sh);
+      const resolvedX = wndObj?.x ?? (sx < 0 ? 0 : sx);
+      const resolvedY = wndObj?.y ?? (sy < 0 ? 0 : sy);
       const savedSP = emu.cpu.reg[4] & 0xFFFF;
       const cs = buildCreateStruct16(emu, emu.readArg16DWord(0), hInstance, hMenu, hWndParent,
-        height, w, y, x, dwStyle, emu.readArg16DWord(22), emu.readArg16DWord(26), 0);
+        resolvedH, resolvedW, resolvedY, resolvedX, dwStyle, emu.readArg16DWord(22), emu.readArg16DWord(26), 0);
       if (cs) {
         sendCreateMessages16(emu, classInfo.wndProc, hwnd, cs);
       } else {
         emu.callWndProc16(classInfo.wndProc, hwnd, 0x0001, 0, 0);
+      }
+      // Send WM_SIZE after WM_CREATE for the main window (apps position children in WM_SIZE)
+      if (hwnd === emu.mainWindow && emu.canvas) {
+        const WM_SIZE = 0x0005;
+        const cw = emu.canvas.width, ch = emu.canvas.height;
+        const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
+        emu.callWndProc16(classInfo.wndProc, hwnd, WM_SIZE, 0, lParam);
       }
       emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | savedSP;
     }
@@ -412,6 +434,9 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const wnd = emu.handles.get<WindowInfo>(hWnd);
     if (wnd) {
       let mx = (x << 16 >> 16), my = (y << 16 >> 16);
+      // Sign-extend and clamp dimensions (Win16 uses signed int for width/height)
+      const sw = (w << 16 >> 16); const sh = (height << 16 >> 16);
+      const mw = sw < 0 ? 0 : sw; const mh = sh < 0 ? 0 : sh;
       // If parent is a CCS control, adjust Y coordinate only: the x86 COMMCTRL code
       // computes Y positions using GetWindowRect which returns screen coords based on
       // the old CCS position (-100,-100). X is already parent-client-relative.
@@ -426,10 +451,10 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
         }
       }
       wnd.x = mx; wnd.y = my;
-      const sizeChanged = wnd.width !== w || wnd.height !== height;
-      wnd.width = w; wnd.height = height;
+      const sizeChanged = wnd.width !== mw || wnd.height !== mh;
+      wnd.width = mw; wnd.height = mh;
       if (sizeChanged) {
-        const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, w, height, true);
+        const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, mw, mh, true);
         if (hWnd === emu.mainWindow) {
           emu.setupCanvasSize(cw, ch);
           emu.onWindowChange?.(wnd);
@@ -823,6 +848,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
     const sw = (w << 16 >> 16);  // signed width
     const sh = (height << 16 >> 16); // signed height
     const CW_USEDEFAULT = -0x8000; // 0x8000 sign-extended = -32768
+    const defWEx = Math.round(emu.screenWidth * 0.75) || 480;
+    const defHEx = Math.round(emu.screenHeight * 0.75) || 360;
     // MDICLIENT is always visible in practice (container for MDI children)
     const isMDIClient = className.toUpperCase() === 'MDICLIENT';
     const hwnd = emu.handles.alloc('window', {
@@ -832,8 +859,8 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       exStyle: dwExStyle,
       x: sx === CW_USEDEFAULT ? 0 : sx,
       y: sy === CW_USEDEFAULT ? 0 : sy,
-      width: sw === CW_USEDEFAULT ? 320 : (sw < 0 ? 0 : sw),
-      height: sh === CW_USEDEFAULT ? 200 : (sh < 0 ? 0 : sh),
+      width: sw === CW_USEDEFAULT ? defWEx : (sw < 0 ? 0 : sw),
+      height: sh === CW_USEDEFAULT ? defHEx : (sh < 0 ? 0 : sh),
       hMenu: effectiveMenu,
       parent: hWndParent,
       wndProc: classInfo?.wndProc || 0,
@@ -862,15 +889,28 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
     }
 
-    if (!emu.mainWindow && hWndParent === 0) {
-      const wnd = emu.handles.get<WindowInfo>(hwnd);
-      if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+    // Promote to mainWindow: skip WS_POPUP and re-promote if a window with
+    // WS_CAPTION is created after a bare WS_OVERLAPPED (hidden OLE/DDE windows)
+    if (hWndParent === 0 && !(dwStyle & 0x80000000)) { // not WS_POPUP
+      const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
+      const hasCaption = !!(dwStyle & 0x00C00000); // WS_CAPTION
+      const currentHasCaption = currentMain ? !!(currentMain.style & 0x00C00000) : false;
+      if (!emu.mainWindow || (!currentHasCaption && hasCaption)) {
+        const wnd = emu.handles.get<WindowInfo>(hwnd);
+        if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+      }
     }
 
     if (classInfo?.wndProc) {
+      // Use resolved dimensions in CREATESTRUCT (Windows resolves CW_USEDEFAULT before WM_CREATE)
+      const wndObjEx = emu.handles.get<WindowInfo>(hwnd);
+      const resolvedWEx = wndObjEx?.width ?? (sw < 0 ? 0 : sw);
+      const resolvedHEx = wndObjEx?.height ?? (sh < 0 ? 0 : sh);
+      const resolvedXEx = wndObjEx?.x ?? (sx < 0 ? 0 : sx);
+      const resolvedYEx = wndObjEx?.y ?? (sy < 0 ? 0 : sy);
       const savedSP = emu.cpu.reg[4] & 0xFFFF;
       const cs = buildCreateStruct16(emu, emu.readArg16DWord(0), hInstance, hMenu, hWndParent,
-        height, w, y, x, dwStyle, emu.readArg16DWord(22), emu.readArg16DWord(26), dwExStyle);
+        resolvedHEx, resolvedWEx, resolvedYEx, resolvedXEx, dwStyle, emu.readArg16DWord(22), emu.readArg16DWord(26), dwExStyle);
       if (cs) {
         sendCreateMessages16(emu, classInfo.wndProc, hwnd, cs);
       } else {

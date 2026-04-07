@@ -263,6 +263,10 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     // Set up CPU for 16-bit mode
     emu.cpu.use32 = false;
     emu.cpu.segBases = emu.ne.selectorToBase;
+    // Build segment limits from NE segment info (selector → limit)
+    for (const seg of emu.ne.segments) {
+      emu.cpu.segLimits.set(seg.selector, seg.minAlloc - 1);
+    }
     emu.cpu.cs = emu.ne.codeSegSelector;
     emu.cpu.ds = emu.ne.dataSegSelector;
     emu.cpu.es = emu.ne.dataSegSelector;
@@ -343,6 +347,23 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     emu.cpu.push16(HALT_ADDR - (emu.ne.selectorToBase.get(HALT_SELECTOR) ?? 0));
 
     rebuildThunkPages(emu);
+
+    // Pre-populate WIN.INI with standard Windows 3.1 defaults (if profile store exists)
+    // A real Windows install would have these values; apps like Paintbrush read them
+    // and fall back to printer-based calculations when missing, which we can't emulate.
+    if (emu.profileStore) {
+      const ps = emu.profileStore;
+      const winIni = 'win.ini';
+      // Screen-sized defaults for Paintbrush (width/height in current unit, positive = direct)
+      const defW = Math.round((emu.screenWidth || 640) * 2.54 / 9.6); // pixels → ~cm
+      const defH = Math.round((emu.screenHeight || 480) * 2.54 / 9.6);
+      if (!ps.getString(winIni, 'Paintbrush', 'width', '')) {
+        ps.writeString(winIni, 'Paintbrush', 'width', String(defW));
+      }
+      if (!ps.getString(winIni, 'Paintbrush', 'height', '')) {
+        ps.writeString(winIni, 'Paintbrush', 'height', String(defH));
+      }
+    }
 
     // Pre-load menu items from NE resources so GetMenuState works during init
     if (!emu.menuItems) {
@@ -942,6 +963,7 @@ async function loadNEDlls(emu: Emulator): Promise<NEDllEntry[]> {
     // Add DLL segments to the main segment list (for WILD EIP validation)
     for (const seg of dll.segments) {
       ne.segments.push(seg);
+      emu.cpu.segLimits.set(seg.selector, seg.minAlloc - 1);
     }
 
     console.log(`[NE DLL] ${modName}: ${dll.segments.length} segments, ${dll.entryPoints.size} exports, ${dll.apiMap.size} imports`);
@@ -1233,11 +1255,15 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.dosAudio.readMemory = (addr: number) => emu.memory.readU8(addr);
   emu.dosAudio.writeMemory = (addr: number, val: number) => emu.memory.writeU8(addr, val);
   emu.dosAudio.onSBIRQ = () => {
-    if (!emu._pendingHwInts.includes(0x0F)) emu._pendingHwInts.push(0x0F);
+    const intNum = emu._picMasterBase + 7; // IRQ 7
+    if (!(emu._picMasterMask & 0x80) && !emu._pendingHwInts.includes(intNum))
+      emu._pendingHwInts.push(intNum);
   };
-  // Wire GUS IRQ (IRQ 5 = INT 0x0D)
+  // Wire GUS IRQ (IRQ 5)
   emu.dosAudio.onGUSIRQ = () => {
-    if (!emu._pendingHwInts.includes(0x0D)) emu._pendingHwInts.push(0x0D);
+    const intNum = emu._picMasterBase + 5; // IRQ 5
+    if (!(emu._picMasterMask & 0x20) && !emu._pendingHwInts.includes(intNum))
+      emu._pendingHwInts.push(intNum);
   };
   emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readU8(addr);
 }

@@ -23,6 +23,8 @@ const ROOT_HANDLES = new Map<number, string>([
   [HKEY_USERS, 'hkey_users'],
   [HKEY_CURRENT_CONFIG, 'hkey_current_config'],
   [HKEY_DYN_DATA, 'hkey_dyn_data'],
+  // Win16 uses small integer handles for root keys (HKEY_CLASSES_ROOT = 1)
+  [1, 'hkey_classes_root'],
 ]);
 
 const REG_CREATED_NEW_KEY = 1;

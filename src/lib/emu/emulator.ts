@@ -446,6 +446,7 @@ export class Emulator {
   dosEnableSoundBlaster = true;
   dosEnableAdlib = true;
   dosEnableGus = true;
+  dosSpeedFactor = 1; // 1 = full speed, 0.5 = half, 0.25 = quarter
   flatMemory: FlatMemory | null = null;  // created lazily for DOS programs
   wasmRegions = new Map<number, WasmCompiledRegion>();  // EIP-base → compiled region
   _wasmPending = new Set<number>();  // addresses with pending compilations
@@ -1747,7 +1748,9 @@ export class Emulator {
           ];
           const isExtended = this._injectE0Pending || scancode >= 0x3B;
           const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
-          this.dosKeyBuffer.push({ ascii, scan: scancode });
+          if (this.dosKeyBuffer.length < 16) {
+            this.dosKeyBuffer.push({ ascii, scan: scancode });
+          }
           this._injectE0Pending = false;
         }
       }

@@ -17,6 +17,7 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
     const addr = emu.allocHeap64K(allocSize);
     const selector = state.nextGlobalSelector++;
     emu.cpu.segBases.set(selector, addr);
+    emu.cpu.segLimits.set(selector, allocSize - 1);
     state.globalHandleToAddr.set(selector, addr);
     state.globalHandleToSize.set(selector, allocSize);
     state.globalHandleFlags.set(selector, flags & 0xFFFF);
@@ -57,6 +58,7 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
       for (let i = oldSize; i < size; i++) emu.memory.writeU8(newAddr + i, 0);
     }
     emu.cpu.segBases.set(handle, newAddr);
+    emu.cpu.segLimits.set(handle, (size || 1) - 1);
     state.globalHandleToAddr.set(handle, newAddr);
     state.globalHandleToSize.set(handle, size);
     console.log(`[KERNEL16] GlobalReAlloc(handle=0x${handle.toString(16)}, size=${size}, flags=0x${flags.toString(16)}) old=0x${(oldAddr ?? 0).toString(16)} → new=0x${newAddr.toString(16)}`);
@@ -86,6 +88,13 @@ export function registerKernelMemory(kernel: Win16Module, emu: Emulator, state: 
     const handle = emu.readArg16(0);
     const addr = state.globalHandleToAddr.get(handle);
     if (addr === undefined) {
+      // Fallback: if the handle is a valid selector (e.g. allocated by a DLL stub),
+      // treat it as a lockable segment
+      if (emu.cpu.segBases.has(handle)) {
+        emu.cpu.setReg16(2, handle);
+        emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000);
+        return (handle << 16) >>> 0;
+      }
       emu.cpu.setReg16(2, 0);
       emu.cpu.reg[0] = (emu.cpu.reg[0] & 0xFFFF0000);
       return 0;

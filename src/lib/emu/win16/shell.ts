@@ -12,12 +12,13 @@ export function registerWin16Shell(emu: Emulator): void {
 
   // --- Registry APIs ---
 
-  // RegOpenKey(HKEY hKey, LPCSTR lpSubKey, PHKEY phkResult)
+  // RegOpenKey(HKEY hKey, LPCSTR lpSubKey, PHKEY phkResult) — pascal(long, str, ptr)
   shell.register('RegOpenKey', 12, () => {
-    const hKey = emu.readArg16DWord(0);
-    const lpSubKey = emu.readArg16FarPtr(4);
+    const [hKeyRaw, lpSubKeyRaw, phkResultRaw] = emu.readPascalArgs16([4, 4, 4]);
+    const hKey = hKeyRaw;
+    const lpSubKey = emu.resolveFarPtr(lpSubKeyRaw);
     const subKey = lpSubKey ? emu.memory.readCString(lpSubKey) : '';
-    const phkResult = emu.readArg16FarPtr(8);
+    const phkResult = emu.resolveFarPtr(phkResultRaw);
     const s = store();
     if (s) {
       const h = s.openKey(hKey, subKey);
@@ -31,12 +32,13 @@ export function registerWin16Shell(emu: Emulator): void {
     return ERROR_SUCCESS;
   }, 1);
 
-  // RegCreateKey(HKEY hKey, LPCSTR lpSubKey, PHKEY phkResult)
+  // RegCreateKey(HKEY hKey, LPCSTR lpSubKey, PHKEY phkResult) — pascal(long, str, ptr)
   shell.register('RegCreateKey', 12, () => {
-    const hKey = emu.readArg16DWord(0);
-    const lpSubKey = emu.readArg16FarPtr(4);
+    const [hKeyRaw, lpSubKeyRaw, phkResultRaw] = emu.readPascalArgs16([4, 4, 4]);
+    const hKey = hKeyRaw;
+    const lpSubKey = emu.resolveFarPtr(lpSubKeyRaw);
     const subKey = lpSubKey ? emu.memory.readCString(lpSubKey) : '';
-    const phkResult = emu.readArg16FarPtr(8);
+    const phkResult = emu.resolveFarPtr(phkResultRaw);
     const s = store();
     if (s) {
       const r = s.createKey(hKey, subKey);
@@ -49,9 +51,9 @@ export function registerWin16Shell(emu: Emulator): void {
     return ERROR_SUCCESS;
   }, 2);
 
-  // RegCloseKey(HKEY hKey)
+  // RegCloseKey(HKEY hKey) — pascal(long)
   shell.register('RegCloseKey', 4, () => {
-    const hKey = emu.readArg16DWord(0);
+    const [hKey] = emu.readPascalArgs16([4]);
     const s = store();
     if (s) s.closeKey(hKey);
     return ERROR_SUCCESS;
@@ -60,35 +62,38 @@ export function registerWin16Shell(emu: Emulator): void {
   // RegDeleteKey(HKEY hKey, LPCSTR lpSubKey)
   shell.register('RegDeleteKey', 8, () => ERROR_SUCCESS, 4);
 
-  // RegSetValue(HKEY hKey, LPCSTR lpSubKey, DWORD dwType, LPCSTR lpData, DWORD cbData)
+  // RegSetValue(HKEY hKey, LPCSTR lpSubKey, DWORD dwType, LPCSTR lpData, DWORD cbData) — pascal(long, str, long, str, long)
   shell.register('RegSetValue', 20, () => {
-    const hKey = emu.readArg16DWord(0);
-    const lpSubKey = emu.readArg16FarPtr(4);
+    const [hKeyRaw, lpSubKeyRaw, _dwType, lpDataRaw, cbData] = emu.readPascalArgs16([4, 4, 4, 4, 4]);
+    const hKey = hKeyRaw;
+    const lpSubKey = emu.resolveFarPtr(lpSubKeyRaw);
     const subKey = lpSubKey ? emu.memory.readCString(lpSubKey) : '';
-    // dwType at offset 8 (always REG_SZ for RegSetValue)
-    const lpData = emu.readArg16FarPtr(12);
-    const cbData = emu.readArg16DWord(16);
+    const lpData = emu.resolveFarPtr(lpDataRaw);
+    // For REG_SZ, cbData=0 means use lstrlen(lpData) (standard Win16 behavior)
+    const dataStr = lpData ? emu.memory.readCString(lpData) : '';
+    const actualLen = cbData || dataStr.length;
     const s = store();
     if (s) {
       const r = s.createKey(hKey, subKey);
       if (r) {
         const REG_SZ = 1;
-        const data = new Uint8Array(cbData + 1);
-        for (let i = 0; i < cbData; i++) data[i] = emu.memory.readU8(lpData + i);
-        data[cbData] = 0;
+        const data = new Uint8Array(actualLen + 1);
+        for (let i = 0; i < actualLen; i++) data[i] = emu.memory.readU8(lpData + i);
+        data[actualLen] = 0;
         s.setValue(r.handle, '', REG_SZ, data);
       }
     }
     return ERROR_SUCCESS;
   }, 5);
 
-  // RegQueryValue(HKEY hKey, LPCSTR lpSubKey, LPSTR lpValue, LONG FAR* lpcbValue)
+  // RegQueryValue(HKEY hKey, LPCSTR lpSubKey, LPSTR lpValue, LONG FAR* lpcbValue) — pascal(long, str, ptr, ptr)
   shell.register('RegQueryValue', 16, () => {
-    const hKey = emu.readArg16DWord(0);
-    const lpSubKey = emu.readArg16FarPtr(4);
+    const [hKeyRaw, lpSubKeyRaw, lpValueRaw, lpcbValueRaw] = emu.readPascalArgs16([4, 4, 4, 4]);
+    const hKey = hKeyRaw;
+    const lpSubKey = emu.resolveFarPtr(lpSubKeyRaw);
     const subKey = lpSubKey ? emu.memory.readCString(lpSubKey) : '';
-    const lpValue = emu.readArg16FarPtr(8);
-    const lpcbValue = emu.readArg16FarPtr(12);
+    const lpValue = emu.resolveFarPtr(lpValueRaw);
+    const lpcbValue = emu.resolveFarPtr(lpcbValueRaw);
     const s = store();
     if (s) {
       let key = hKey;
