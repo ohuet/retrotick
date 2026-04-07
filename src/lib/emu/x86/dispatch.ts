@@ -837,9 +837,9 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
 
-    // CALL FAR ptr16:16/32 — uses opSize for offset and frame size
+    // CALL FAR ptr16:16/32 — in PM use opSize, in RM use D bit
     case 0x9A: {
-      if (opSize === 16) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
         cpu.push16(cpu.cs);
@@ -1083,10 +1083,10 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
 
-    // RETF imm16 — uses opSize for frame size
+    // RETF imm16 — in PM use opSize (0x66 prefix matters), in RM use D bit
     case 0xCA: {
       const imm = cpu.fetch16();
-      if (opSize === 16) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         cpu.loadCS(cs);
@@ -1103,9 +1103,9 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // RETF — uses opSize for frame size
+    // RETF — in PM use opSize, in RM use D bit
     case 0xCB:
-      if (opSize === 16) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         cpu.loadCS(cs);
@@ -1227,10 +1227,10 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // IRET (0xCF) — return from interrupt, uses opSize for frame size
+    // IRET (0xCF) — in PM use opSize, in RM use D bit
     case 0xCF: {
       cpu._inhibitTF = true; // IRET suppresses TF trap
-      if (opSize === 16) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         const flags = cpu.pop16();
@@ -1338,9 +1338,9 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // JMP FAR ptr16:16/32 — uses opSize for offset size
+    // JMP FAR ptr16:16/32 — in PM use opSize, in RM use D bit
     case 0xEA: {
-      if (opSize === 16) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
         cpu.loadCS(selector);
@@ -1715,8 +1715,8 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 3: { // CALL FAR m16:16/32 (FF /3) — uses opSize, not D bit
-          if (opSize === 16) {
+        case 3: { // CALL FAR m16:16/32 (FF /3) — in PM use opSize, in RM use D bit
+          if (cpu.realMode ? !cpu.use32 : opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
             cpu.push16(cpu.cs);
@@ -1742,8 +1742,8 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 5: { // JMP FAR m16:16/32 (FF /5) — uses opSize, not D bit
-          if (opSize === 16) {
+        case 5: { // JMP FAR m16:16/32 (FF /5) — in PM use opSize, in RM use D bit
+          if (cpu.realMode ? !cpu.use32 : opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
             cpu.loadCS(farSel);
