@@ -479,41 +479,63 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       const newParas = cpu.getReg16(EBX);
       const topOfMem = 0xA000;
 
-      // Update MCB at blockSeg - 1
-      const mcbLinear = (blockSeg - 1) * 16;
+      // Find the MCB at blockSeg - 1
+      const mcbSeg = blockSeg - 1;
+      const mcbLinear = mcbSeg * 16;
       const mcbType = cpu.mem.readU8(mcbLinear);
-      if (mcbType === 0x4D || mcbType === 0x5A) {
-        const oldParas = cpu.mem.readU16(mcbLinear + 3);
-        if (blockSeg + newParas > topOfMem) {
-          // Not enough memory
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 8); // insufficient memory
-          cpu.setReg16(EBX, topOfMem - blockSeg); // max available
-          break;
-        }
-        // Update this MCB's size
-        cpu.mem.writeU16(mcbLinear + 3, newParas);
+      if (mcbType !== 0x4D && mcbType !== 0x5A) {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 7); // memory control block destroyed
+        break;
+      }
+      const oldParas = cpu.mem.readU16(mcbLinear + 3);
 
-        // Update or create the free MCB after the resized block
-        const freeSeg = blockSeg + newParas;
-        const freeLinear = freeSeg * 16;
-        const freeParas = topOfMem - freeSeg - 1;
+      // Calculate maximum available size including free blocks after this one
+      let maxAvail = oldParas;
+      if (mcbType === 0x4D) {
+        // Walk the chain to find consecutive free blocks we can absorb
+        let nextSeg = blockSeg + oldParas;
+        while (nextSeg < topOfMem) {
+          const nextLin = nextSeg * 16;
+          const nextType = cpu.mem.readU8(nextLin);
+          const nextOwner = cpu.mem.readU16(nextLin + 1);
+          const nextSize = cpu.mem.readU16(nextLin + 3);
+          if (nextOwner !== 0) break; // not free — can't absorb
+          maxAvail += 1 + nextSize; // +1 for the MCB header paragraph
+          if (nextType === 0x5A) break; // last block
+          nextSeg = nextSeg + 1 + nextSize;
+        }
+      }
+
+      if (newParas > maxAvail) {
+        // Not enough memory to grow
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 8); // insufficient memory
+        cpu.setReg16(EBX, maxAvail); // max available
+        break;
+      }
+
+      // Update this MCB's size
+      cpu.mem.writeU16(mcbLinear + 3, newParas);
+
+      if (newParas < maxAvail) {
+        // Create a free MCB for the remaining space
+        const freeParas = maxAvail - newParas - 1; // -1 for the MCB header
         if (freeParas > 0) {
+          const freeSeg = blockSeg + newParas;
+          const freeLinear = freeSeg * 16;
           cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
-          cpu.mem.writeU8(freeLinear, 0x5A); // last block
+          // Determine if this free block is the last in the chain
+          const wasLast = (mcbType === 0x5A) || (blockSeg + maxAvail >= topOfMem);
+          cpu.mem.writeU8(freeLinear, wasLast ? 0x5A : 0x4D);
           cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
           cpu.mem.writeU16(freeLinear + 3, freeParas);
         } else {
-          cpu.mem.writeU8(mcbLinear, 0x5A); // this is now last block
+          // Not enough space for a free MCB — absorb the leftover into this block
+          cpu.mem.writeU16(mcbLinear + 3, maxAvail);
         }
       }
 
-      // Update heap pointers
-      const blockEnd = (blockSeg + newParas) * 16;
-      if (blockEnd > emu.heapBase) {
-        emu.heapBase = ((blockEnd + 0xF) & ~0xF);
-        emu.heapPtr = emu.heapBase;
-      }
       cpu.setFlag(CF, false);
       break;
     }
