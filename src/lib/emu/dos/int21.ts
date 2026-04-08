@@ -896,6 +896,32 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x4B: { // EXEC — Load and Execute Program
+      // Ensure the env program path is present. Watcom C runtime reallocates
+      // the env block without copying the DOS 3.0+ program path suffix. DOS4GW
+      // reads this path to find the host EXE (for LE loading). If missing, copy
+      // the path from the PSP command tail or the stored exePath.
+      {
+        const pspLin = (emu._dosPSP || 0x100) * 16;
+        const envSeg = cpu.mem.readU16(pspLin + 0x2C);
+        const envLin = envSeg * 16;
+        // Find the double-null terminator
+        let p = 0;
+        while (p < 0x7FFF) {
+          if (cpu.mem.readU8(envLin + p) === 0 && cpu.mem.readU8(envLin + p + 1) === 0) break;
+          p++;
+        }
+        p += 2; // skip double null
+        const count = cpu.mem.readU16(envLin + p);
+        if (count === 0 && emu.exePath) {
+          // Program path is missing — restore it
+          cpu.mem.writeU16(envLin + p, 1); // count = 1
+          p += 2;
+          for (let i = 0; i < emu.exePath.length; i++) {
+            cpu.mem.writeU8(envLin + p + i, emu.exePath.charCodeAt(i));
+          }
+          cpu.mem.writeU8(envLin + p + emu.exePath.length, 0);
+        }
+      }
       // AL=00 Load+Execute, AL=01 Load overlay, AL=03 Load only
       // DS:DX → ASCIZ program name, ES:BX → parameter block
       const dsBase = cpu.segBase(cpu.ds);

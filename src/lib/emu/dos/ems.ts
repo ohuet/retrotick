@@ -432,15 +432,49 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           // client's V86 save code may have overwritten the GDTR pseudo-descriptor
           // in the data structure with unrelated PM state data.
           if (!emu._vcpiPmGdtBase) {
-            // First switch — read from structure
+            // First switch — read client's GDTR/IDTR
             const gdtrAddr = cpu.mem.readU32(esi + 4);
             const idtrAddr = cpu.mem.readU32(esi + 8);
-            emu._gdtBase = cpu.mem.readU32(gdtrAddr + 2);
-            emu._gdtLimit = cpu.mem.readU16(gdtrAddr);
+            const clientGdtBase = cpu.mem.readU32(gdtrAddr + 2);
+            const clientGdtLimit = cpu.mem.readU16(gdtrAddr);
             emu._idtBase = cpu.mem.readU32(idtrAddr + 2);
             emu._idtLimit = cpu.mem.readU16(idtrAddr);
-            emu._vcpiPmGdtBase = emu._gdtBase;
-            emu._vcpiPmGdtLimit = emu._gdtLimit;
+            // Relocate GDT to extended memory with more entries for passup stacks.
+            // DOS4GW uses GDT[1] (sel 0x08) as a self-alias — its limit controls
+            // the perceived GDT size. We copy the GDT, extend it, and update the
+            // self-alias base+limit to point to the relocated copy.
+            const HOST_GDT = VCPI_PRIVATE_AREA;
+            const TARGET_ENTRIES = 128;
+            const targetLimit = TARGET_ENTRIES * 8 - 1;
+            // Copy existing entries
+            for (let i = 0; i <= clientGdtLimit; i++) {
+              cpu.mem.writeU8(HOST_GDT + i, cpu.mem.readU8(clientGdtBase + i));
+            }
+            // Zero-fill extra entries
+            for (let i = clientGdtLimit + 1; i <= targetLimit; i++) {
+              cpu.mem.writeU8(HOST_GDT + i, 0);
+            }
+            // Update GDT[1] self-alias: new base=HOST_GDT, new limit=targetLimit
+            const selfLo = cpu.mem.readU32(HOST_GDT + 0x08);
+            const selfHi = cpu.mem.readU32(HOST_GDT + 0x0C);
+            const newSelfLo = ((HOST_GDT & 0xFFFF) << 16) | (targetLimit & 0xFFFF);
+            const newSelfHi = (HOST_GDT & 0xFF000000)
+              | (selfHi & 0x00F0FF00)  // keep flags + access
+              | ((targetLimit >>> 16) & 0xF) << 16
+              | ((HOST_GDT >>> 16) & 0xFF);
+            cpu.mem.writeU32(HOST_GDT + 0x08, newSelfLo);
+            cpu.mem.writeU32(HOST_GDT + 0x0C, newSelfHi);
+            // ALSO update the original GDT's self-alias to point to HOST_GDT.
+            // DOS4GW might access GDT[1] via the original GDT address too.
+            cpu.mem.writeU32(clientGdtBase + 0x08, newSelfLo);
+            cpu.mem.writeU32(clientGdtBase + 0x0C, newSelfHi);
+            // Update GDTR in structure
+            cpu.mem.writeU32(gdtrAddr + 2, HOST_GDT);
+            cpu.mem.writeU16(gdtrAddr, targetLimit);
+            emu._gdtBase = HOST_GDT;
+            emu._gdtLimit = targetLimit;
+            emu._vcpiPmGdtBase = HOST_GDT;
+            emu._vcpiPmGdtLimit = targetLimit;
             emu._vcpiPmIdtBase = emu._idtBase;
             emu._vcpiPmIdtLimit = emu._idtLimit;
           } else {
