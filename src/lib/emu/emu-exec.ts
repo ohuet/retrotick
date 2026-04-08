@@ -802,12 +802,6 @@ export function emuTick(emu: Emulator): void {
     }
     if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
-      // IF flag: respect it when VCPI is active (DOS extenders use CLI during
-      // critical PM init). For non-VCPI DOS programs, ignore IF — many demos
-      // run rendering loops with CLI and rely on timer interrupts firing.
-      if (emu._vcpiPrivateArea && emu.cpu.realMode && !(emu.cpu.getFlags() & 0x200)) {
-        continue; // IF=0, VCPI active, V86 mode → skip HW interrupt
-      }
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       const masterBase = emu._picMasterBase;

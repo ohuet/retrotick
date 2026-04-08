@@ -897,29 +897,28 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x4B: { // EXEC — Load and Execute Program
       // Ensure the env program path is present. Watcom C runtime reallocates
-      // the env block without copying the DOS 3.0+ program path suffix. DOS4GW
-      // reads this path to find the host EXE (for LE loading). If missing, copy
-      // the path from the PSP command tail or the stored exePath.
-      {
+      // the env block without the DOS 3.0+ program path suffix. DOS4GW reads
+      // this path to find the host EXE for LE loading.
+      if (emu.exePath) {
         const pspLin = (emu._dosPSP || 0x100) * 16;
         const envSeg = cpu.mem.readU16(pspLin + 0x2C);
         const envLin = envSeg * 16;
-        // Find the double-null terminator
-        let p = 0;
-        while (p < 0x7FFF) {
-          if (cpu.mem.readU8(envLin + p) === 0 && cpu.mem.readU8(envLin + p + 1) === 0) break;
-          p++;
+        const envMcbSz = cpu.mem.readU16((envSeg - 1) * 16 + 3) * 16;
+        let ep = 0;
+        while (ep < envMcbSz - 4) {
+          if (cpu.mem.readU8(envLin + ep) === 0 && cpu.mem.readU8(envLin + ep + 1) === 0) break;
+          ep++;
         }
-        p += 2; // skip double null
-        const count = cpu.mem.readU16(envLin + p);
-        if (count === 0 && emu.exePath) {
-          // Program path is missing — restore it
-          cpu.mem.writeU16(envLin + p, 1); // count = 1
-          p += 2;
-          for (let i = 0; i < emu.exePath.length; i++) {
-            cpu.mem.writeU8(envLin + p + i, emu.exePath.charCodeAt(i));
+        ep += 2;
+        const cnt = cpu.mem.readU16(envLin + ep);
+        const pathLen = emu.exePath.length + 1;
+        if (cnt === 0 && ep + 2 + pathLen <= envMcbSz) {
+          cpu.mem.writeU16(envLin + ep, 1);
+          ep += 2;
+          for (let ci = 0; ci < emu.exePath.length; ci++) {
+            cpu.mem.writeU8(envLin + ep + ci, emu.exePath.charCodeAt(ci));
           }
-          cpu.mem.writeU8(envLin + p + emu.exePath.length, 0);
+          cpu.mem.writeU8(envLin + ep + emu.exePath.length, 0);
         }
       }
       // AL=00 Load+Execute, AL=01 Load overlay, AL=03 Load only
