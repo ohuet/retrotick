@@ -12,6 +12,19 @@ const MOUSE_EVENT_RUP      = 0x10;
 const MOUSE_EVENT_MDOWN    = 0x20;
 const MOUSE_EVENT_MUP      = 0x40;
 
+// Default graphics cursor: 16x16 arrow (AND mask, then XOR mask)
+// Each row is a 16-bit value, MSB = leftmost pixel
+const DEFAULT_CURSOR_AND: Uint16Array = new Uint16Array([
+  0x3FFF, 0x1FFF, 0x0FFF, 0x07FF, 0x03FF, 0x01FF, 0x00FF, 0x007F,
+  0x003F, 0x001F, 0x01FF, 0x10FF, 0x30FF, 0xF87F, 0xF87F, 0xFC3F,
+]);
+const DEFAULT_CURSOR_XOR: Uint16Array = new Uint16Array([
+  0x0000, 0x4000, 0x6000, 0x7000, 0x7800, 0x7C00, 0x7E00, 0x7F00,
+  0x7F80, 0x7FC0, 0x7C00, 0x4600, 0x0600, 0x0300, 0x0300, 0x0000,
+]);
+const DEFAULT_CURSOR_HOTX = 0;
+const DEFAULT_CURSOR_HOTY = 0;
+
 /** DOS mouse driver state, stored on Emulator as `dosMouse` */
 export interface DosMouseState {
   installed: boolean;
@@ -46,6 +59,11 @@ export interface DosMouseState {
   // Last browser mapped position for delta computation (-1 = uninitialized)
   lastBrowserX: number;
   lastBrowserY: number;
+  // Graphics cursor shape (16x16 AND/XOR masks + hotspot)
+  cursorAnd: Uint16Array;
+  cursorXor: Uint16Array;
+  cursorHotX: number;
+  cursorHotY: number;
 }
 
 export function createDosMouseState(): DosMouseState {
@@ -68,6 +86,10 @@ export function createDosMouseState(): DosMouseState {
     sensX: 8, sensY: 16,
     doubleThreshold: 64,
     lastBrowserX: -1, lastBrowserY: -1,
+    cursorAnd: Uint16Array.from(DEFAULT_CURSOR_AND),
+    cursorXor: Uint16Array.from(DEFAULT_CURSOR_XOR),
+    cursorHotX: DEFAULT_CURSOR_HOTX,
+    cursorHotY: DEFAULT_CURSOR_HOTY,
   };
 }
 
@@ -178,9 +200,14 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       m.releaseX = [0, 0, 0]; m.releaseY = [0, 0, 0];
       m.sensX = 8; m.sensY = 16; m.doubleThreshold = 64;
       m.lastBrowserX = -1; m.lastBrowserY = -1;
+      m.cursorAnd = Uint16Array.from(DEFAULT_CURSOR_AND);
+      m.cursorXor = Uint16Array.from(DEFAULT_CURSOR_XOR);
+      m.cursorHotX = DEFAULT_CURSOR_HOTX;
+      m.cursorHotY = DEFAULT_CURSOR_HOTY;
       m.installed = true;
       cpu.setReg16(EAX, 0xFFFF); // mouse installed
       cpu.setReg16(EBX, 3);       // 3 buttons
+      console.log(`[INT 33h] AX=0 reset mouse, maxY=${m.maxY} isGfx=${emu.isGraphicsMode} mode=0x${emu.videoMode.toString(16)}`);
       return true;
     }
 
@@ -235,8 +262,17 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       m.y = Math.max(m.minY, Math.min(m.maxY, m.y));
       return true;
 
-    case 0x0009: // Set graphics cursor shape (stub — no hardware cursor)
+    case 0x0009: { // Set graphics cursor shape
+      m.cursorHotX = cpu.getReg16(EBX); // BX = hot spot column
+      m.cursorHotY = cpu.getReg16(ECX); // CX = hot spot row
+      // ES:DX → pointer to 32 words: 16 AND mask rows, then 16 XOR mask rows
+      const maskAddr = cpu.segBase(cpu.es) + cpu.getReg16(EDX);
+      for (let i = 0; i < 16; i++) {
+        m.cursorAnd[i] = emu.memory.readU16(maskAddr + i * 2);
+        m.cursorXor[i] = emu.memory.readU16(maskAddr + 32 + i * 2);
+      }
       return true;
+    }
 
     case 0x000A: // Set text cursor type (stub)
       return true;
@@ -252,6 +288,7 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       m.callbackMask = cpu.getReg16(ECX);
       m.callbackSeg = cpu.es;
       m.callbackOff = cpu.getReg16(EDX);
+      console.log(`[INT 33h] AX=0C set callback mask=0x${m.callbackMask.toString(16)} addr=${m.callbackSeg.toString(16)}:${m.callbackOff.toString(16)}`);
       return true;
     }
 
@@ -323,6 +360,84 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
 }
 
 /**
+ * Update mouse coordinate range when the video mode changes.
+ * Real DOS mouse drivers hook INT 10h and auto-adjust.
+ */
+export function updateMouseRangeForMode(emu: Emulator): void {
+  const m = emu.dosMouse;
+  if (!m.installed) return;
+  const prevMaxY = m.maxY;
+  m.maxX = 639;
+  m.maxY = emu.isGraphicsMode ? (emu.videoMode === 0x13 ? 199 : 479) : 199;
+  // Clamp current position to new range
+  m.x = Math.max(m.minX, Math.min(m.maxX, m.x));
+  if (prevMaxY !== m.maxY) {
+    m.y = Math.max(m.minY, Math.min(m.maxY, m.y));
+  }
+}
+
+/**
+ * Draw the graphics-mode mouse cursor onto a canvas context.
+ * Called after the framebuffer is rendered so the cursor overlays the image
+ * without modifying the actual VRAM framebuffer data.
+ *
+ * @param ctx - Canvas 2D context at native resolution (e.g. 320x200)
+ * @param emu - Emulator instance
+ */
+export function drawGfxMouseCursor(ctx: CanvasRenderingContext2D, emu: Emulator): void {
+  const m = emu.dosMouse;
+  if (!m.installed || m.cursorVisible < 0 || !emu.isGraphicsMode) return;
+
+  const fb = emu.vga.framebuffer;
+  if (!fb) return;
+  const screenW = fb.width;
+  const screenH = fb.height;
+
+  // Convert virtual mouse coordinates to pixel coordinates
+  const pixelX = Math.round(m.x * (screenW - 1) / m.maxX) - m.cursorHotX;
+  const pixelY = Math.round(m.y * (screenH - 1) / m.maxY) - m.cursorHotY;
+
+  // Clip cursor region to screen bounds
+  const x0 = Math.max(0, pixelX);
+  const y0 = Math.max(0, pixelY);
+  const x1 = Math.min(screenW, pixelX + 16);
+  const y1 = Math.min(screenH, pixelY + 16);
+  if (x0 >= x1 || y0 >= y1) return;
+
+  // Read existing pixels under cursor area
+  const region = ctx.getImageData(x0, y0, x1 - x0, y1 - y0);
+  const data = region.data;
+
+  for (let cy = y0; cy < y1; cy++) {
+    const row = cy - pixelY;
+    const andRow = m.cursorAnd[row];
+    const xorRow = m.cursorXor[row];
+    for (let cx = x0; cx < x1; cx++) {
+      const col = cx - pixelX;
+      const bit = 0x8000 >>> col;
+      const andBit = andRow & bit;
+      const xorBit = xorRow & bit;
+      const idx = ((cy - y0) * (x1 - x0) + (cx - x0)) * 4;
+      if (!andBit && !xorBit) {
+        // Black (cursor outline)
+        data[idx] = 0; data[idx + 1] = 0; data[idx + 2] = 0; data[idx + 3] = 255;
+      } else if (!andBit && xorBit) {
+        // White (cursor fill)
+        data[idx] = 255; data[idx + 1] = 255; data[idx + 2] = 255; data[idx + 3] = 255;
+      } else if (andBit && xorBit) {
+        // XOR: invert existing pixel
+        data[idx] = 255 - data[idx];
+        data[idx + 1] = 255 - data[idx + 1];
+        data[idx + 2] = 255 - data[idx + 2];
+      }
+      // andBit && !xorBit: transparent — leave unchanged
+    }
+  }
+
+  ctx.putImageData(region, x0, y0);
+}
+
+/**
  * Dispatch pending mouse callback (called from tick loop in emu-exec.ts).
  * Returns true if a callback was dispatched (caller should continue tick loop).
  *
@@ -331,6 +446,10 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
  * onto the stack, then a small trampoline that pops them after RETF.
  * Since we can't inject code, we save registers in JS and restore on RETF detect.
  */
+// Mouse callback return trampoline location (written in emu-load.ts)
+const MOUSE_TRAMP_SEG = 0xF000;
+const MOUSE_TRAMP_OFF = 0x0500;
+
 export function dispatchMouseCallback(emu: Emulator): boolean {
   const m = emu.dosMouse;
   if (!m.pendingCallbackMask || !m.callbackMask || !m.callbackSeg) return false;
@@ -341,22 +460,38 @@ export function dispatchMouseCallback(emu: Emulator): boolean {
   const mask = m.pendingCallbackMask;
   m.pendingCallbackMask = 0;
 
-  // Real mouse drivers (CuteMouse etc.) save ALL registers + flags before
-  // calling the user callback and restore after RETF. We do the same in JS.
-  emu._mouseCallbackSavedRegs = {
-    regs: Int32Array.from(emu.cpu.reg), // all 8 GPRs (EAX-EDI)
-    ds: emu.cpu.ds, es: emu.cpu.es,
-    flags: emu.cpu.getFlags(), // materializes lazy flags
-  };
-
   const seg = m.callbackSeg;
   const off = m.callbackOff;
-
-  // Push far return address for RETF
+  const returnCS = emu.cpu.cs;
   const returnIP = (emu.cpu.eip - emu.cpu.segBase(emu.cpu.cs)) & 0xFFFF;
+
+  // Save SP to prevent nested dispatches (cleared when SP returns)
   emu._mouseCallbackSavedSP = emu.cpu.reg[4] & 0xFFFF;
-  emu.cpu.push16(emu.cpu.cs);
+
+  // Build a complete stack frame so the x86 trampoline at F000:0500
+  // restores ALL registers and returns to the interrupted code via IRET.
+  // Push order must match the trampoline's POP order (IRET first, then regs).
+
+  // 1) Interrupted context for IRET (trampoline pops last)
+  emu.cpu.push16(emu.cpu.getFlags() & 0xFFFF);
+  emu.cpu.push16(returnCS);
   emu.cpu.push16(returnIP);
+
+  // 2) All GP registers + segment regs (trampoline POPs in this order:
+  //    AX, BX, CX, DX, BP, SI, DI, DS, ES — so push in reverse)
+  emu.cpu.push16(emu.cpu.getReg16(EAX));
+  emu.cpu.push16(emu.cpu.getReg16(EBX));
+  emu.cpu.push16(emu.cpu.getReg16(ECX));
+  emu.cpu.push16(emu.cpu.getReg16(EDX));
+  emu.cpu.push16(emu.cpu.reg[5] & 0xFFFF); // BP
+  emu.cpu.push16(emu.cpu.getReg16(ESI));
+  emu.cpu.push16(emu.cpu.getReg16(EDI));
+  emu.cpu.push16(emu.cpu.ds);
+  emu.cpu.push16(emu.cpu.es);
+
+  // 3) Trampoline return address for callback's RETF
+  emu.cpu.push16(MOUSE_TRAMP_SEG);
+  emu.cpu.push16(MOUSE_TRAMP_OFF);
 
   // Set callback parameters per INT 33h convention:
   //   AX = event condition mask, BX = button state,

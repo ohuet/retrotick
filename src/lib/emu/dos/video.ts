@@ -2,6 +2,7 @@ import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 import { VGA_MODES } from './vga';
 import { ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_OFF } from './vga-font-data';
+import { updateMouseRangeForMode } from './mouse';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
 
@@ -259,6 +260,9 @@ function setVideoMode(cpu: CPU, emu: Emulator, modeNum: number): void {
       }
     }
   }
+
+  // Update mouse coordinate range to match the new video mode
+  updateMouseRangeForMode(emu);
 }
 
 // --- Pixel operations for all graphics modes ---
