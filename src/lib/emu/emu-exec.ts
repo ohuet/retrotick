@@ -734,10 +734,7 @@ export function emuTick(emu: Emulator): void {
           }
           emu._dosHalted = false;
         }
-        // Dispatch pending mouse callback (throttled to ~once per 4096 instructions)
-        if (emu.dosMouse.pendingCallbackMask && emu._mouseCallbackSavedSP < 0 && emu._hwIntSavedSP < 0) {
-          dispatchMouseCallback(emu);
-        }
+        // (mouse callback dispatch moved to per-instruction check above)
       }
     }
     if (emu.isDOS) {
@@ -793,10 +790,12 @@ export function emuTick(emu: Emulator): void {
     } else if (emu._pendingHwInts.length === 0) {
       emu._hwKeyDelay = 0;
     }
-    // Mouse callback dispatch is done in the periodic time check (every 4096
-    // instructions) to match real hardware rates. Dispatching at every instruction
-    // fires callbacks far too frequently, corrupting programs that share state
-    // between their main code and the callback handler.
+    // Dispatch pending mouse callback (far call via trampoline at F000:0500).
+    // Safe at every instruction boundary since the trampoline handles register
+    // restoration via real x86 POPs + IRET (no fragile JS-side detection).
+    if (emu.dosMouse.pendingCallbackMask && emu._mouseCallbackSavedSP < 0 && emu._hwIntSavedSP < 0) {
+      dispatchMouseCallback(emu);
+    }
     if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
       // Note: IF flag (CLI/STI) is NOT checked. Many DOS demos run rendering

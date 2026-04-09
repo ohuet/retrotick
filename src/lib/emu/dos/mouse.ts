@@ -56,9 +56,6 @@ export interface DosMouseState {
   sensX: number;  // mickeys per 8 pixels (default 8)
   sensY: number;
   doubleThreshold: number;
-  // Last browser mapped position for delta computation (-1 = uninitialized)
-  lastBrowserX: number;
-  lastBrowserY: number;
   // Graphics cursor shape (16x16 AND/XOR masks + hotspot)
   cursorAnd: Uint16Array;
   cursorXor: Uint16Array;
@@ -85,7 +82,6 @@ export function createDosMouseState(): DosMouseState {
     releaseY: [0, 0, 0],
     sensX: 8, sensY: 16,
     doubleThreshold: 64,
-    lastBrowserX: -1, lastBrowserY: -1,
     cursorAnd: Uint16Array.from(DEFAULT_CURSOR_AND),
     cursorXor: Uint16Array.from(DEFAULT_CURSOR_XOR),
     cursorHotX: DEFAULT_CURSOR_HOTX,
@@ -113,30 +109,14 @@ export function injectDosMouseEvent(
   const m = emu.dosMouse;
   if (!m.installed) return;
 
-  // Map browser pixel coordinates to virtual coordinate scale
-  const mappedX = px * m.maxX / (displayW - 1);
-  const mappedY = py * m.maxY / (displayH - 1);
+  // Map browser pixel coordinates directly to virtual coordinate scale
+  const newX = Math.max(m.minX, Math.min(m.maxX, Math.round(px * m.maxX / (displayW - 1))));
+  const newY = Math.max(m.minY, Math.min(m.maxY, Math.round(py * m.maxY / (displayH - 1))));
 
   let eventMask = 0;
 
-  // First event: initialize baseline, place cursor at browser position
-  if (m.lastBrowserX < 0) {
-    m.lastBrowserX = mappedX;
-    m.lastBrowserY = mappedY;
-    m.x = Math.max(m.minX, Math.min(m.maxX, Math.round(mappedX)));
-    m.y = Math.max(m.minY, Math.min(m.maxY, Math.round(mappedY)));
-  }
-
-  // Compute delta from last browser position, apply to m.x/m.y
-  // This way AX=4 (set position) is respected — we add movement on top of it
-  const dx = mappedX - m.lastBrowserX;
-  const dy = mappedY - m.lastBrowserY;
-  m.lastBrowserX = mappedX;
-  m.lastBrowserY = mappedY;
-
-  if (dx !== 0 || dy !== 0) {
-    const newX = Math.max(m.minX, Math.min(m.maxX, Math.round(m.x + dx)));
-    const newY = Math.max(m.minY, Math.min(m.maxY, Math.round(m.y + dy)));
+  // Update mickeys (relative movement counters) and position
+  if (newX !== m.x || newY !== m.y) {
     m.mickeysX += (newX - m.x);
     m.mickeysY += (newY - m.y);
     m.x = newX;
@@ -199,7 +179,6 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       m.pressX = [0, 0, 0]; m.pressY = [0, 0, 0];
       m.releaseX = [0, 0, 0]; m.releaseY = [0, 0, 0];
       m.sensX = 8; m.sensY = 16; m.doubleThreshold = 64;
-      m.lastBrowserX = -1; m.lastBrowserY = -1;
       m.cursorAnd = Uint16Array.from(DEFAULT_CURSOR_AND);
       m.cursorXor = Uint16Array.from(DEFAULT_CURSOR_XOR);
       m.cursorHotX = DEFAULT_CURSOR_HOTX;
@@ -207,7 +186,6 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       m.installed = true;
       cpu.setReg16(EAX, 0xFFFF); // mouse installed
       cpu.setReg16(EBX, 3);       // 3 buttons
-      console.log(`[INT 33h] AX=0 reset mouse, maxY=${m.maxY} isGfx=${emu.isGraphicsMode} mode=0x${emu.videoMode.toString(16)}`);
       return true;
     }
 
@@ -288,7 +266,6 @@ export function handleInt33(cpu: CPU, emu: Emulator): boolean {
       m.callbackMask = cpu.getReg16(ECX);
       m.callbackSeg = cpu.es;
       m.callbackOff = cpu.getReg16(EDX);
-      console.log(`[INT 33h] AX=0C set callback mask=0x${m.callbackMask.toString(16)} addr=${m.callbackSeg.toString(16)}:${m.callbackOff.toString(16)}`);
       return true;
     }
 
