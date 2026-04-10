@@ -677,17 +677,11 @@ export function emuTick(emu: Emulator): void {
         emu._int09ReturnCS = -1;
       }
     }
-    // Detect RETF from mouse callback by monitoring SP — restore all saved state
+    // Detect mouse callback completion: SP returned to pre-dispatch level.
+    // The trampoline at F000:0500 handles register restoration via x86 POPs+IRET;
+    // this check just clears the "active" flag so the next callback can dispatch.
     if (emu._mouseCallbackSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._mouseCallbackSavedSP) {
       emu._mouseCallbackSavedSP = -1;
-      const saved = emu._mouseCallbackSavedRegs;
-      if (saved) {
-        emu.cpu.reg.set(saved.regs);
-        emu.cpu.ds = saved.ds;
-        emu.cpu.es = saved.es;
-        emu.cpu.setFlags(saved.flags);
-        emu._mouseCallbackSavedRegs = undefined;
-      }
     }
     // Detect IRET from hardware interrupt handler by monitoring SP (RM dispatch)
     // or IF flag restoration (PM IDT dispatch).
@@ -740,6 +734,7 @@ export function emuTick(emu: Emulator): void {
           }
           emu._dosHalted = false;
         }
+        // (mouse callback dispatch moved to per-instruction check above)
       }
     }
     if (emu.isDOS) {
@@ -795,7 +790,9 @@ export function emuTick(emu: Emulator): void {
     } else if (emu._pendingHwInts.length === 0) {
       emu._hwKeyDelay = 0;
     }
-    // Dispatch pending mouse callback (far call, returns via RETF)
+    // Dispatch pending mouse callback (far call via trampoline at F000:0500).
+    // Safe at every instruction boundary since the trampoline handles register
+    // restoration via real x86 POPs + IRET (no fragile JS-side detection).
     if (emu.dosMouse.pendingCallbackMask && emu._mouseCallbackSavedSP < 0 && emu._hwIntSavedSP < 0) {
       dispatchMouseCallback(emu);
     }
