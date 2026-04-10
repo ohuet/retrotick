@@ -83,6 +83,7 @@ export class CPU {
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
   _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
   _inhibitIRQ = false; // true after MOV SS/POP SS (suppresses HW IRQ for 1 instruction)
+  _unrealMode = false; // true after PM→RM transition with flat segments (data base=0)
 
   constructor(mem: Memory) {
     this.mem = mem;
@@ -100,7 +101,6 @@ export class CPU {
       this.use32 = is32;
       this._addrSize16 = !is32;
     } else {
-      // Real mode is always 16-bit
       this.use32 = false;
       this._addrSize16 = true;
     }
@@ -108,7 +108,13 @@ export class CPU {
 
   /** Get linear base address for a segment selector */
   segBase(sel: number): number {
-    if (this.realMode) return (sel * 16) >>> 0;
+    if (this.realMode) {
+      // "Unreal mode": after PM→V86 transition, data accesses use flat base (0).
+      // Instruction fetch uses cpu.eip directly (not segBase), so returning 0
+      // for all segments is safe. CS:override data accesses also get flat base.
+      if (this._unrealMode) return 0;
+      return (sel * 16) >>> 0;
+    }
     const cached = this.segBases.get(sel);
     if (cached !== undefined) return cached;
     // Look up in GDT if available (PMODEW protected mode)
@@ -127,31 +133,49 @@ export class CPU {
     return 0;
   }
 
-  /** Read a GDT descriptor and return the base address */
-  loadGdtDescriptorBase(sel: number): number | undefined {
-    if (!this.emu || !this.emu._gdtBase) return undefined;
-    const index = (sel & 0xFFF8) >>> 3; // selector index (ignore RPL and TI)
-    if (index === 0) return 0; // null selector
+  /** Get the descriptor table base for a selector (GDT or LDT based on TI bit) */
+  private _descTableAddr(sel: number): number {
+    if (!this.emu || !this.emu._gdtBase) return -1;
+    const index = (sel & 0xFFF8) >>> 3;
+    if (index === 0) return -1; // null selector
+    const isLDT = (sel & 0x04) !== 0; // TI bit
+    if (isLDT) {
+      // LDT: look up LDT descriptor in GDT to find LDT base
+      const ldtr = this.emu._ldtr ?? 0;
+      if (!ldtr) return -1;
+      const ldtIdx = (ldtr & 0xFFF8) >>> 3;
+      const ldtDescAddr = this.emu._gdtBase + ldtIdx * 8;
+      if (ldtIdx * 8 + 7 > this.emu._gdtLimit) return -1;
+      const ldtLo = this.mem.readU32(ldtDescAddr);
+      const ldtHi = this.mem.readU32(ldtDescAddr + 4);
+      const ldtBase = ((ldtHi >>> 24) << 24) | ((ldtHi & 0xFF) << 16) | ((ldtLo >>> 16) & 0xFFFF);
+      const ldtLimit = (ldtLo & 0xFFFF) | (((ldtHi >>> 16) & 0xF) << 16);
+      if (index * 8 + 7 > ldtLimit) return -1;
+      return ldtBase + index * 8;
+    }
+    // GDT
     const descAddr = this.emu._gdtBase + index * 8;
-    if (index * 8 + 7 > this.emu._gdtLimit) return undefined;
+    if (index * 8 + 7 > this.emu._gdtLimit) return -1;
+    return descAddr;
+  }
+
+  /** Read a GDT/LDT descriptor and return the base address */
+  loadGdtDescriptorBase(sel: number): number | undefined {
+    const descAddr = this._descTableAddr(sel);
+    if (descAddr < 0) return (sel & 0xFFF8) === 0 ? 0 : undefined;
     const lo = this.mem.readU32(descAddr);
     const hi = this.mem.readU32(descAddr + 4);
-    // Base: bits 31:24 of hi, bits 7:0 of hi, bits 31:16 of lo
     const baseLo = (lo >>> 16) & 0xFFFF;
     const baseMid = hi & 0xFF;
     const baseHi = (hi >>> 24) & 0xFF;
     return (baseHi << 24) | (baseMid << 16) | baseLo;
   }
 
-  /** Read a GDT descriptor and return whether it's a 32-bit segment */
+  /** Read a GDT/LDT descriptor and return whether it's a 32-bit segment */
   loadGdtDescriptorIs32(sel: number): boolean {
-    if (!this.emu || !this.emu._gdtBase) return false;
-    const index = (sel & 0xFFF8) >>> 3;
-    if (index === 0) return false;
-    const descAddr = this.emu._gdtBase + index * 8;
-    if (index * 8 + 7 > this.emu._gdtLimit) return false;
+    const descAddr = this._descTableAddr(sel);
+    if (descAddr < 0) return false;
     const hi = this.mem.readU32(descAddr + 4);
-    // D/B bit is bit 22 of hi dword
     return (hi & (1 << 22)) !== 0;
   }
 

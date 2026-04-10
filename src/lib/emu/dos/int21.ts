@@ -73,6 +73,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
   switch (ah) {
     case 0x00: // Old-style terminate (same as INT 20h)
       if (dosExecReturn(cpu, emu, 0)) break;
+      cpu.haltReason = 'terminated with code 0';
       emu.halted = true;
       cpu.halted = true;
       break;
@@ -454,6 +455,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
         mcbSeg += size + 1;
       }
       if (!allocated) {
+        console.warn(`[AH=48] FAIL: requested ${paras.toString(16)}h paras, largest free=${largestFree.toString(16)}h`);
         cpu.setFlag(CF, true);
         cpu.setReg16(EAX, 8); // insufficient memory
         cpu.setReg16(EBX, largestFree);
@@ -463,6 +465,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x49: { // Free memory (ES=segment of block)
       const blockSeg = cpu.es;
+      // (debug log removed)
       const mcbLin = (blockSeg - 1) * 16;
       const type = cpu.mem.readU8(mcbLin);
       if (type === 0x4D || type === 0x5A) {
@@ -477,41 +480,39 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       const newParas = cpu.getReg16(EBX);
       const topOfMem = 0xA000;
 
-      // Update MCB at blockSeg - 1
-      const mcbLinear = (blockSeg - 1) * 16;
+      // Find the MCB at blockSeg - 1
+      const mcbSeg = blockSeg - 1;
+      const mcbLinear = mcbSeg * 16;
       const mcbType = cpu.mem.readU8(mcbLinear);
-      if (mcbType === 0x4D || mcbType === 0x5A) {
-        const oldParas = cpu.mem.readU16(mcbLinear + 3);
-        if (blockSeg + newParas > topOfMem) {
-          // Not enough memory
-          cpu.setFlag(CF, true);
-          cpu.setReg16(EAX, 8); // insufficient memory
-          cpu.setReg16(EBX, topOfMem - blockSeg); // max available
-          break;
-        }
-        // Update this MCB's size
-        cpu.mem.writeU16(mcbLinear + 3, newParas);
+      if (mcbType !== 0x4D && mcbType !== 0x5A) {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 7); // memory control block destroyed
+        break;
+      }
+      const oldParas = cpu.mem.readU16(mcbLinear + 3);
 
-        // Update or create the free MCB after the resized block
-        const freeSeg = blockSeg + newParas;
-        const freeLinear = freeSeg * 16;
-        const freeParas = topOfMem - freeSeg - 1;
-        if (freeParas > 0) {
-          cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
-          cpu.mem.writeU8(freeLinear, 0x5A); // last block
-          cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
-          cpu.mem.writeU16(freeLinear + 3, freeParas);
-        } else {
-          cpu.mem.writeU8(mcbLinear, 0x5A); // this is now last block
-        }
+      // Check bounds
+      if (blockSeg + newParas > topOfMem) {
+        cpu.setFlag(CF, true);
+        cpu.setReg16(EAX, 8); // insufficient memory
+        cpu.setReg16(EBX, topOfMem - blockSeg);
+        break;
+      }
+      // Update MCB size
+      cpu.mem.writeU16(mcbLinear + 3, newParas);
+      // Create or update the free block after the resized block
+      const freeSeg = blockSeg + newParas;
+      const freeLinear = freeSeg * 16;
+      const freeParas = topOfMem - freeSeg - 1;
+      if (freeParas > 0) {
+        cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
+        cpu.mem.writeU8(freeLinear, 0x5A); // last block
+        cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
+        cpu.mem.writeU16(freeLinear + 3, freeParas);
+      } else {
+        cpu.mem.writeU8(mcbLinear, 0x5A); // this is now last block
       }
 
-      // Update heap pointers
-      const blockEnd = (blockSeg + newParas) * 16;
-      if (blockEnd > emu.heapBase) {
-        emu.heapBase = ((blockEnd + 0xF) & ~0xF);
-        emu.heapPtr = emu.heapBase;
-      }
       cpu.setFlag(CF, false);
       break;
     }
@@ -895,6 +896,31 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
 
     case 0x4B: { // EXEC — Load and Execute Program
+      // Ensure the env program path is present. Watcom C runtime reallocates
+      // the env block without the DOS 3.0+ program path suffix. DOS4GW reads
+      // this path to find the host EXE for LE loading.
+      if (emu.exePath) {
+        const pspLin = (emu._dosPSP || 0x100) * 16;
+        const envSeg = cpu.mem.readU16(pspLin + 0x2C);
+        const envLin = envSeg * 16;
+        const envMcbSz = cpu.mem.readU16((envSeg - 1) * 16 + 3) * 16;
+        let ep = 0;
+        while (ep < envMcbSz - 4) {
+          if (cpu.mem.readU8(envLin + ep) === 0 && cpu.mem.readU8(envLin + ep + 1) === 0) break;
+          ep++;
+        }
+        ep += 2;
+        const cnt = cpu.mem.readU16(envLin + ep);
+        const pathLen = emu.exePath.length + 1;
+        if (cnt === 0 && ep + 2 + pathLen <= envMcbSz) {
+          cpu.mem.writeU16(envLin + ep, 1);
+          ep += 2;
+          for (let ci = 0; ci < emu.exePath.length; ci++) {
+            cpu.mem.writeU8(envLin + ep + ci, emu.exePath.charCodeAt(ci));
+          }
+          cpu.mem.writeU8(envLin + ep + emu.exePath.length, 0);
+        }
+      }
       // AL=00 Load+Execute, AL=01 Load overlay, AL=03 Load only
       // DS:DX → ASCIZ program name, ES:BX → parameter block
       const dsBase = cpu.segBase(cpu.ds);
@@ -1310,10 +1336,13 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       dosExtendedOpen(cpu, emu);
       break;
 
+
     default:
-      console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
-      cpu.setFlag(CF, true);
-      cpu.setReg16(EAX, 1); // invalid function
+      if (ah < 0x6D) console.warn(`[INT 21h] Unhandled AH=0x${ah.toString(16)} at EIP=0x${(cpu.eip >>> 0).toString(16)}`);
+      // DOSBox behavior: for unknown functions, set AL=0 and don't set CF.
+      // Functions >= 0x6D are simply skipped. This prevents DOS extenders
+      // (like DOS4GW with AH=FFh) from seeing errors for their internal calls.
+      cpu.setReg8(EAX, 0x00);
       break;
   }
   return true;

@@ -356,6 +356,13 @@ export class Emulator {
   _emsNextAddr = 0x200000; // 2MB start
   _emsMapping?: number[];  // 4 physical page mappings
   _emsSavedMaps?: Map<number, number[]>;  // saved page map states (AH=47/48)
+  _vcpiNextPage?: number;  // VCPI page allocator (page frame number)
+  _vcpiPrivateArea?: number;   // VCPI host private area base address
+  _vcpiSavedIVT?: Uint16Array; // V86 IVT segment values saved before first PM entry
+  _vcpiPmGdtBase?: number; // Saved PM GDT/IDT for VCPI V86→PM restore
+  _vcpiPmGdtLimit?: number;
+  _vcpiPmIdtBase?: number;
+  _vcpiPmIdtLimit?: number;
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;
@@ -373,6 +380,7 @@ export class Emulator {
   _idtLimit = 0;      // IDT limit
   _ldtr = 0;          // Local Descriptor Table Register (selector)
   _tr = 0;            // Task Register (selector)
+  _dpmiState?: import('./dos/dpmi').DpmiState;  // DPMI host state (set on PM entry)
   _dosFiles = new Map<number, { data: Uint8Array; pos: number; name: string }>();
   _dosNextHandle = 5; // 0-4 are stdin/stdout/stderr/stdaux/stdprn
   _dosFreedHandles: number[] = []; // recycled handle pool
@@ -434,6 +442,14 @@ export class Emulator {
 
   // WASM JIT (DOS programs only)
   wasmJitEnabled = false; // set to true to enable WASM JIT for DOS programs
+
+  // DOS feature flags (from DosSettings, applied at load time)
+  dosEnableDpmi = true;
+  dosEnableXms = true;
+  dosEnableEms = true;
+  dosEnableSoundBlaster = true;
+  dosEnableAdlib = true;
+  dosEnableGus = true;
   dosSpeedFactor = 1; // 1 = full speed, 0.5 = half, 0.25 = quarter
   flatMemory: FlatMemory | null = null;  // created lazily for DOS programs
   wasmRegions = new Map<number, WasmCompiledRegion>();  // EIP-base → compiled region

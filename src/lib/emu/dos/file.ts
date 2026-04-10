@@ -145,6 +145,33 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
     emu.waitingForMessage = true;
     return;
   }
+  // Fallback: strip garbage prefix bytes and try base filename in current directory.
+  // DOS4GW sometimes constructs paths with a corrupt prefix; extract just the base name.
+  const cleanName = name.replace(/^[^\x20-\x7E]+/, ''); // strip non-printable prefix
+  const baseName3 = cleanName.replace(/^.*[\\\/]/, '').toUpperCase();
+  if (baseName3 && baseName3 !== name.toUpperCase()) {
+    const dirResolved = dosResolvePath(emu, baseName3);
+    const dirInfo = fs.findFile(dirResolved, emu.additionalFiles);
+    if (dirInfo) {
+      const dirData = getSyncFileData(fs, dirInfo, emu, dirResolved);
+      if (dirData) {
+        const handle = allocDosHandle(emu);
+        emu._dosFiles.set(handle, { data: dirData, pos: 0, name: cleanName });
+        emu.handles.set(handle, 'file', { path: dirResolved, access: 0x80000000, pos: 0, data: dirData, size: dirData.length, modified: false });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+        return;
+      }
+      // Async fallback for base name
+      fs.fetchFileData(dirInfo, emu.additionalFiles, dirResolved).then(() => {
+        if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) requestAnimationFrame(emu.tick); }
+      });
+      cpu.eip -= 2;
+      emu._dosFileOpenPending = true;
+      emu.waitingForMessage = true;
+      return;
+    }
+  }
   cpu.setFlag(CF, true);
   cpu.setReg16(EAX, 2); // file not found
 }
@@ -152,12 +179,13 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
 /** 0x3D: Open file (AL=mode, DS:DX=filename) */
 export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
+  console.log(`[OPEN] "${name}"`);
   // DOS device driver detection: EMMXXXX0 (EMS), NUL, CON, etc.
   const baseName = name.replace(/^[*\\\/]*/, '').toUpperCase();
   if (baseName === 'EMMXXXX0') {
     // EMS driver present — return a dummy handle
     const handle = allocDosHandle(emu);
-    emu._dosFiles.set(handle, { data: new Uint8Array(0), pos: 0, name: 'EMMXXXX0' });
+    emu._dosFiles.set(handle, { data: new Uint8Array(0), pos: 0, name: 'EMMXXXX0', isDevice: true });
     cpu.setReg16(EAX, handle);
     cpu.setFlag(CF, false);
     console.log(`[DOS] Open "${name}" -> CF=0 AX=0x${handle.toString(16)} (EMS device)`);
@@ -308,7 +336,8 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
       cpu.setReg16(EDX, 0x80D3); // character device
       cpu.setFlag(CF, false);
     } else if (emu._dosFiles.has(handle) || emu.handles.getType(handle) === 'file') {
-      cpu.setReg16(EDX, 0x0000); // disk file
+      const df = emu._dosFiles.get(handle);
+      cpu.setReg16(EDX, df?.isDevice ? 0x80D3 : 0x0000); // device or disk file
       cpu.setFlag(CF, false);
     } else {
       cpu.setFlag(CF, true);

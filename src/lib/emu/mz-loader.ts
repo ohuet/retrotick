@@ -12,7 +12,9 @@ export interface LoadedMZ {
   mcbFirstSeg: number;     // first MCB segment for LoL
 }
 
-export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHeader, exePath: string): LoadedMZ {
+export interface MZEnvFlags { soundBlaster?: boolean; adlib?: boolean; gus?: boolean; }
+
+export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHeader, exePath: string, envFlags?: MZEnvFlags): LoadedMZ {
   const data = new Uint8Array(arrayBuffer);
   const dv = new DataView(arrayBuffer);
 
@@ -89,10 +91,14 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   for (let i = 0; i < comspec.length; i++) memory.writeU8(envLinear + envOff++, comspec.charCodeAt(i));
   const pathEnv = 'PATH=C:\\\0';
   for (let i = 0; i < pathEnv.length; i++) memory.writeU8(envLinear + envOff++, pathEnv.charCodeAt(i));
-  const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
-  for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
-  const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
-  for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  if (envFlags?.soundBlaster !== false) {
+    const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
+    for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
+  }
+  if (envFlags?.gus !== false) {
+    const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
+    for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  }
   memory.writeU8(envLinear + envOff++, 0); // double null terminator
   memory.writeU16(envLinear + envOff, 1);
   envOff += 2;
@@ -101,7 +107,7 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
 
   memory.writeU16(pspLinear + 0x2C, ENV_SEG);
 
-  // Command tail at offset 0x80 (empty)
+  // Command tail at offset 0x80 (empty — no command-line arguments)
   memory.writeU8(pspLinear + 0x80, 0x00);
   memory.writeU8(pspLinear + 0x81, 0x0D);
 
@@ -141,7 +147,7 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   };
 }
 
-export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: string): LoadedMZ {
+export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: string, envFlags?: MZEnvFlags): LoadedMZ {
   const data = new Uint8Array(arrayBuffer);
   const imageSize = data.byteLength;
 
@@ -201,10 +207,14 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
   for (let i = 0; i < comspec.length; i++) memory.writeU8(envLinear + envOff++, comspec.charCodeAt(i));
   const pathEnv = 'PATH=C:\\\0';
   for (let i = 0; i < pathEnv.length; i++) memory.writeU8(envLinear + envOff++, pathEnv.charCodeAt(i));
-  const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
-  for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
-  const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
-  for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  if (envFlags?.soundBlaster !== false) {
+    const blasterEnv = 'BLASTER=A220 I7 D1 T4\0';
+    for (let i = 0; i < blasterEnv.length; i++) memory.writeU8(envLinear + envOff++, blasterEnv.charCodeAt(i));
+  }
+  if (envFlags?.gus !== false) {
+    const ultrasndEnv = 'ULTRASND=240,1,1,5,5\0';
+    for (let i = 0; i < ultrasndEnv.length; i++) memory.writeU8(envLinear + envOff++, ultrasndEnv.charCodeAt(i));
+  }
   memory.writeU8(envLinear + envOff++, 0); // double null terminator
   memory.writeU16(envLinear + envOff, 1);
   envOff += 2;
@@ -213,7 +223,7 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
 
   memory.writeU16(pspLinear + 0x2C, ENV_SEG);
 
-  // Command tail at offset 0x80 (empty)
+  // Command tail at offset 0x80 (empty — no command-line arguments)
   memory.writeU8(pspLinear + 0x80, 0x00);
   memory.writeU8(pspLinear + 0x81, 0x0D);
 

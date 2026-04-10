@@ -3,6 +3,7 @@ import type { WindowInfo } from './win32/user32/types';
 import { syncVideoMemory, handleDosInt } from './dos/index';
 import { syncGraphics } from './dos/vga';
 import { dispatchMouseCallback } from './dos/mouse';
+import { dispatchException } from './x86/dispatch';
 import { tryFastLoop, tryCachedLoop } from './fast-loops';
 import { FlatMemory, OFF_ENTRY, OFF_EIP, OFF_EXIT } from './x86/flat-memory';
 import { compileWasmRegion, type WasmImports } from './x86/wasm-module';
@@ -798,9 +799,6 @@ export function emuTick(emu: Emulator): void {
     }
     if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
-      // Note: IF flag (CLI/STI) is NOT checked. Many DOS demos run rendering
-      // loops with CLI and rely on timer interrupts firing regardless. This is
-      // technically incorrect but matches the practical behavior needed.
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       const masterBase = emu._picMasterBase;
@@ -810,6 +808,21 @@ export function emuTick(emu: Emulator): void {
       } else if (intNum >= slaveBase && intNum < slaveBase + 8) {
         emu._picSlaveISR |= (1 << (intNum - slaveBase));
       }
+
+      // In PM with DPMI active, dispatch HW interrupts through dispatchException
+      // so PM handlers installed via INT 31h AX=0205 are used.
+      if (!emu.cpu.realMode && emu._dpmiState) {
+        // For now, handle INT 08h (timer) in JS directly to avoid recursion
+        // issues when the PM handler chains back. Other HW interrupts go to PM handlers.
+        if (intNum !== 0x08) {
+          dispatchException(emu.cpu, intNum);
+        } else {
+          // Just update the BIOS tick counter (same as JS handler)
+          emu.memory.writeU32(0x46C, (emu.memory.readU32(0x46C) + 1) >>> 0);
+        }
+        continue;
+      }
+
       const biosDefault = emu._dosBiosDefaultVectors.get(intNum) ?? ((0xF000 << 16) | (intNum * 5));
       // Always read IVT memory first — programs chain multiple handlers
       // by writing directly to IVT (e.g. PoP chains timer→animation→sound)
@@ -817,7 +830,17 @@ export function emuTick(emu: Emulator): void {
       const ivtSeg = emu.memory.readU16(intNum * 4 + 2);
       const ivtVec = (ivtSeg << 16) | ivtOff;
       let vec: number | undefined;
-      if (ivtVec !== biosDefault && ivtSeg !== 0xF000) {
+      // Skip PM-modified IVT entries in V86 mode (VCPI PM code rewrites vectors
+      // with PM selectors; dispatching them as RM segments crashes)
+      // In V86 (RM) with VCPI: skip IVT entries modified by PM code (PM selectors
+      // interpreted as RM segments → wrong addresses). In PM: dispatch normally
+      // (PM selectors ARE valid in PM).
+      let pmModifiedHW = false;
+      if (emu.cpu.realMode && emu._vcpiSavedIVT && ivtSeg !== 0xF000) {
+        const origSeg = emu._vcpiSavedIVT[intNum];
+        if (origSeg !== undefined && ivtSeg !== origSeg) pmModifiedHW = true;
+      }
+      if (ivtVec !== biosDefault && ivtSeg !== 0xF000 && !pmModifiedHW) {
         vec = ivtVec;
       } else {
         vec = emu._dosIntVectors.get(intNum);

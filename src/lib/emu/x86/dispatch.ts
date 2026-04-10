@@ -17,7 +17,53 @@ const DF = 0x400;
 const OF = 0x800;
 
 /** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode). */
-function dispatchException(cpu: CPU, intNum: number): boolean {
+export function dispatchException(cpu: CPU, intNum: number): boolean {
+  // In PM with DPMI active, check if the client installed a PM interrupt handler.
+  // Route hardware/software interrupts to it instead of our JS handler.
+  // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
+  if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
+    const dpmi = cpu.emu._dpmiState;
+    const handler = dpmi.pmExcHandlers.get(intNum + 256); // interrupt namespace (key=vec+256)
+    // Don't intercept: INT 31h (DPMI services), INT FCh/FDh (DPMI stubs),
+    // INT 20h (terminate), INT 21h AH<0xEE (standard DOS — handled in JS).
+    // Only route to PM handlers for interrupts the PM client actually needs
+    // (hardware interrupts, exceptions, and high INT 21h subfunctions).
+    // Recursion guard: track which INT handlers are currently active.
+    // When a PM handler for INT N calls INT N again (e.g. DOS4GW's PM
+    // INT 21h handler reflecting to DOS), reflect to JS/RM instead.
+    const shouldDispatchToPM = handler && handler.sel !== 0
+      && intNum !== 0x31 && intNum !== 0xFD && intNum !== 0xFC
+      && intNum !== 0xFE // DPMI reflector trap
+      && intNum !== 0xFA // VCPI PM service trap
+      && intNum !== 0x20; // INT 20h = terminate, always handle in JS
+
+    if (shouldDispatchToPM) {
+      // Recursion guard: if caller's CS matches the handler's selector or
+      // the initial code segment (0x08), this is the handler calling INT N
+      // to reflect to RM — don't re-enter the handler.
+      const callerCS = cpu.cs;
+      if (callerCS === handler.sel || callerCS === 0x08) {
+        // Handler is reflecting to RM — fall through to JS handler
+      } else {
+        // Push interrupt frame; if CS is 32-bit, use 32-bit frame
+        const csIs32 = cpu.loadGdtDescriptorIs32(callerCS);
+        const returnIP = cpu.eip - cpu.segBase(callerCS);
+        if (csIs32) {
+          cpu.push32(cpu.getFlags());
+          cpu.push32(callerCS);
+          cpu.push32(returnIP >>> 0);
+        } else {
+          cpu.push16(cpu.getFlags() & 0xFFFF);
+          cpu.push16(callerCS);
+          cpu.push16(returnIP & 0xFFFF);
+        }
+        cpu.setFlags(cpu.getFlags() & ~0x0300); // clear IF+TF
+        cpu.loadCS(handler.sel);
+        cpu.eip = (cpu.segBase(handler.sel) + handler.off) >>> 0;
+        return true;
+      }
+    }
+  }
   // Try JS-handled DOS/BIOS interrupts first
   if (cpu.emu && handleDosInt(cpu, intNum, cpu.emu)) return true;
   // Protected mode: dispatch through IDT
@@ -791,9 +837,9 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
 
-    // CALL FAR ptr16:16/32
+    // CALL FAR ptr16:16/32 — in PM use opSize, in RM use D bit
     case 0x9A: {
-      if (!cpu.use32) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
         cpu.push16(cpu.cs);
@@ -801,7 +847,7 @@ export function cpuStep(cpu: CPU): void {
         cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
       } else {
-        const offset = opSize === 16 ? cpu.fetch16() : cpu.fetch32();
+        const offset = cpu.fetch32();
         const selector = cpu.fetch16();
         const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) >>> 0;
         cpu.push32(cpu.cs);
@@ -1037,10 +1083,10 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
 
-    // RETF imm16
+    // RETF imm16 — in PM use opSize (0x66 prefix matters), in RM use D bit
     case 0xCA: {
       const imm = cpu.fetch16();
-      if (!cpu.use32) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         cpu.loadCS(cs);
@@ -1057,9 +1103,9 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // RETF
+    // RETF — in PM use opSize, in RM use D bit
     case 0xCB:
-      if (!cpu.use32) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         cpu.loadCS(cs);
@@ -1181,10 +1227,10 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // IRET (0xCF) — return from interrupt
+    // IRET (0xCF) — in PM use opSize, in RM use D bit
     case 0xCF: {
       cpu._inhibitTF = true; // IRET suppresses TF trap
-      if (!cpu.use32) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         const flags = cpu.pop16();
@@ -1195,9 +1241,33 @@ export function cpuStep(cpu: CPU): void {
         const eip2 = cpu.pop32() >>> 0;
         const cs2 = cpu.pop32() & 0xFFFF;
         const eflags = cpu.pop32() >>> 0;
-        cpu.loadCS(cs2);
-        cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
-        cpu.setFlags(eflags);
+        // VM bit (bit 17) in EFLAGS: IRET to V86 mode
+        if (!cpu.realMode && (eflags & (1 << 17))) {
+          // Switch to V86/real mode — pop additional SS:ESP + segment registers
+          const newESP = cpu.pop32() >>> 0;
+          const newSS = cpu.pop32() & 0xFFFF;
+          const newES = cpu.pop32() & 0xFFFF;
+          const newDS = cpu.pop32() & 0xFFFF;
+          const newFS = cpu.pop32() & 0xFFFF;
+          const newGS = cpu.pop32() & 0xFFFF;
+          cpu.realMode = true;
+          cpu.use32 = false;
+          cpu._addrSize16 = true;
+          cpu._unrealMode = true; // PM→V86: cache flat base for data segments
+          cpu.cs = cs2;
+          cpu.ds = newDS;
+          cpu.es = newES;
+          cpu.ss = newSS;
+          cpu.fs = newFS;
+          cpu.gs = newGS;
+          cpu.reg[ESP] = newESP;
+          cpu.eip = (cs2 * 16 + eip2) >>> 0;
+          cpu.setFlags(eflags & ~(1 << 17)); // clear VM for our RM mode
+        } else {
+          cpu.loadCS(cs2);
+          cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
+          cpu.setFlags(eflags);
+        }
       }
       break;
     }
@@ -1269,15 +1339,15 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // JMP FAR ptr16:16/32
+    // JMP FAR ptr16:16/32 — in PM use opSize, in RM use D bit
     case 0xEA: {
-      if (!cpu.use32) {
+      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
         cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
       } else {
-        const offset = opSize === 16 ? cpu.fetch16() : cpu.fetch32();
+        const offset = cpu.fetch32();
         const selector = cpu.fetch16();
         cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
@@ -1646,8 +1716,8 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 3: // CALL FAR m16:16/32 (FF /3)
-          if (!cpu.use32) {
+        case 3: { // CALL FAR m16:16/32 (FF /3) — in PM use opSize, in RM use D bit
+          if (cpu.realMode ? !cpu.use32 : opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
             cpu.push16(cpu.cs);
@@ -1664,6 +1734,7 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           }
           break;
+        }
         case 4: // JMP r/m16/32
           if (!cpu.use32 && opSize === 16) {
             const csBase = cpu.segBase(cpu.cs);
@@ -1672,8 +1743,8 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = d.val | 0;
           }
           break;
-        case 5: // JMP FAR m16:16/32 (FF /5)
-          if (!cpu.use32) {
+        case 5: { // JMP FAR m16:16/32 (FF /5) — in PM use opSize, in RM use D bit
+          if (cpu.realMode ? !cpu.use32 : opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
             cpu.loadCS(farSel);
@@ -1685,6 +1756,7 @@ export function cpuStep(cpu: CPU): void {
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           }
           break;
+        }
         case 6: // PUSH r/m32
           if (opSize === 16) cpu.push16(d.val);
           else cpu.push32(d.val);

@@ -22,7 +22,13 @@ export function exec0F(
     case 0x8C: case 0x8D: case 0x8E: case 0x8F: {
       const disp = opSize === 16 ? (cpu.fetch16() << 16 >> 16) : cpu.fetchI32();
       if (cpu.testCC(op2 - 0x80)) {
-        cpu.eip = (cpu.eip + disp) | 0;
+        if (!cpu.use32) {
+          // 16-bit mode: IP wraps within the segment
+          const base = cpu.segBase(cpu.cs);
+          cpu.eip = (base + ((cpu.eip - base + disp) & 0xFFFF)) >>> 0;
+        } else {
+          cpu.eip = (cpu.eip + disp) | 0;
+        }
       }
       break;
     }
@@ -120,7 +126,9 @@ export function exec0F(
         }
         case 2: { // LLDT r/m16
           const d = cpu.decodeModRM(16);
-          if (cpu.emu) cpu.emu._ldtr = d.val & 0xFFFF;
+          if (cpu.emu) {
+            cpu.emu._ldtr = d.val & 0xFFFF;
+          }
           break;
         }
         case 3: { // LTR r/m16
@@ -177,6 +185,11 @@ export function exec0F(
           if (!d.isReg && cpu.emu) {
             cpu.emu._gdtLimit = cpu.mem.readU16(d.addr);
             cpu.emu._gdtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+            // Update VCPI PM cache so V86→PM switch restores the correct GDT
+            if (cpu.emu._vcpiPmGdtBase !== undefined) {
+              cpu.emu._vcpiPmGdtBase = cpu.emu._gdtBase;
+              cpu.emu._vcpiPmGdtLimit = cpu.emu._gdtLimit;
+            }
           }
           break;
         }
@@ -185,6 +198,10 @@ export function exec0F(
           if (!d.isReg && cpu.emu) {
             cpu.emu._idtLimit = cpu.mem.readU16(d.addr);
             cpu.emu._idtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+            if (cpu.emu._vcpiPmIdtBase !== undefined) {
+              cpu.emu._vcpiPmIdtBase = cpu.emu._idtBase;
+              cpu.emu._vcpiPmIdtLimit = cpu.emu._idtLimit;
+            }
           }
           break;
         }
@@ -197,10 +214,13 @@ export function exec0F(
         case 6: { // LMSW r/m16 — Load Machine Status Word
           const d = cpu.decodeModRM(16);
           if (cpu.emu) {
+            const oldPE = cpu.emu._cr0 & 1;
             // LMSW can set PE but cannot clear it
             const val = d.val & 0xFFFF;
             cpu.emu._cr0 = (cpu.emu._cr0 & ~0x000E) | (val & 0x000F);
-            if (cpu.emu._cr0 & 1) cpu.realMode = false;
+            if (!oldPE && (cpu.emu._cr0 & 1)) {
+              cpu.realMode = false;
+            }
           }
           break;
         }
@@ -301,7 +321,12 @@ export function exec0F(
           cpu.realMode = false;
           console.warn(`[CR0] Enter PM: EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} gdtBase=0x${(cpu.emu?._gdtBase??0).toString(16)} idtBase=0x${(cpu.emu?._idtBase??0).toString(16)}`);
         } else if (oldPE && !newPE) {
-          // Back to real mode — force 16-bit operand/address size
+          // Back to real mode — enable "unreal mode" if data segments have flat base.
+          // DOS4GW sets base=0 for DS/ES/SS in PM, returns to RM, and expects the
+          // CPU to cache the flat base for 32-bit data access in real mode.
+          if (cpu.segBase(cpu.ds) === 0 || cpu.segBase(cpu.es) === 0) {
+            cpu._unrealMode = true;
+          }
           cpu.realMode = true;
           cpu.use32 = false;
           cpu._addrSize16 = true;

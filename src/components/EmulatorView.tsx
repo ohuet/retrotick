@@ -701,8 +701,15 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         if (childEmu.isDOS) {
           const ds = loadDosSettings();
           childEmu.wasmJitEnabled = ds.jitEnabled;
+          childEmu.dosEnableDpmi = ds.dpmi;
+          childEmu.dosEnableXms = ds.xms;
+          childEmu.dosEnableEms = ds.ems;
+          childEmu.dosEnableSoundBlaster = ds.soundBlaster;
+          childEmu.dosEnableAdlib = ds.adlib;
+          childEmu.dosEnableGus = ds.gus;
           childEmu.dosSpeedFactor = ds.speed;
           childEmu.vga.refreshHz = ds.refreshRate;
+          childEmu.traceApi = ds.traceApi;
         }
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
@@ -766,8 +773,15 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         if (emu.isDOS) {
           const ds = loadDosSettings();
           emu.wasmJitEnabled = ds.jitEnabled;
+          emu.dosEnableDpmi = ds.dpmi;
+          emu.dosEnableXms = ds.xms;
+          emu.dosEnableEms = ds.ems;
+          emu.dosEnableSoundBlaster = ds.soundBlaster;
+          emu.dosEnableAdlib = ds.adlib;
+          emu.dosEnableGus = ds.gus;
           emu.dosSpeedFactor = ds.speed;
           emu.vga.refreshHz = ds.refreshRate;
+          emu.traceApi = ds.traceApi;
         }
 
         // Assign shared AudioContext — created in App during user gesture

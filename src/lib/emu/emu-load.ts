@@ -38,6 +38,7 @@ import { registerNetapi32 } from './win32/netapi32';
 import { registerUxtheme } from './win32/uxtheme';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
+import { setupDpmiStub } from './dos/dpmi';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
 import { VGA_FONT_8X16_ROM, ROM_FONT_8X16_ADDR, ROM_FONT_8X16_SEG, ROM_FONT_8X16_OFF } from './dos/vga-font-16';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
@@ -218,7 +219,9 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     emu.initConsoleBuffer();
     emu.memory.a20Mask = 0xFFFFF; // A20 off for DOS programs
 
-    const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath);
+    const mz = loadCOM(arrayBuffer, emu.memory, emu.exePath, {
+      soundBlaster: emu.dosEnableSoundBlaster, gus: emu.dosEnableGus,
+    });
     setupDosEnvironment(emu, mz);
     emu.flatMemory = new FlatMemory();
     emu.memory.enableFlatMode(emu.flatMemory.wasmMemory.buffer, 0x08000000);
@@ -242,7 +245,9 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       emu.additionalFiles.set(exeName, arrayBuffer);
     }
 
-    const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath);
+    const mz = loadMZ(arrayBuffer, emu.memory, peInfo.mzHeader, emu.exePath, {
+      soundBlaster: emu.dosEnableSoundBlaster, gus: emu.dosEnableGus,
+    });
     setupDosEnvironment(emu, mz);
     // Enable flat memory for DOS — shares buffer with WASM JIT (zero-copy)
     emu.flatMemory = new FlatMemory();
@@ -1079,8 +1084,34 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     emu.memory.writeU8(BIOS_BASE + off + 3, 0x02);
     emu.memory.writeU8(BIOS_BASE + off + 4, 0x00);
   }
+
+  // Shared default IRET stub at F000:0500 — a single IRET (0xCF).
+  // Unused high-numbered interrupts all point here so DOS extenders like
+  // DOS/4GW can find duplicate IVT entries (their way of detecting which
+  // vectors are unhooked). Without this, every vector is unique and DOS4GW's
+  // IVT scan loops forever.
+  const SHARED_IRET_OFF = 0x0500;
+  emu.memory.writeU8(BIOS_BASE + SHARED_IRET_OFF, 0xCF); // IRET
+  const sharedVec = (IRET_SEG << 16) | SHARED_IRET_OFF;
+
+  // Interrupts that MUST keep unique stubs (actively handled by JS or hooked by programs):
+  const activeInts = new Set([
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x06, // CPU exceptions
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, // IRQ 0-7
+    0x10, 0x12, 0x13, 0x15, 0x16, 0x19, 0x1A, 0x1B, 0x1C, 0x1F, // BIOS services
+    0x20, 0x21, 0x25, 0x26, 0x27, 0x2A, 0x2F, 0x31, 0x33, // DOS
+    0x43, 0x67, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, // IRQ 8-15 + EMS
+    0x79, 0x7F, // Custom
+  ]);
+
   const defaultVec = new Map<number, number>();
-  for (let i = 0; i < 256; i++) defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
+  for (let i = 0; i < 256; i++) {
+    if (activeInts.has(i)) {
+      defaultVec.set(i, (IRET_SEG << 16) | (i * 5));
+    } else {
+      defaultVec.set(i, sharedVec);
+    }
+  }
 
   // DOS-originated interrupts get stubs in a "DOS kernel" segment (0x0050)
   // instead of F000 BIOS ROM. Programs with anti-tamper code (e.g. KeyMaker)
@@ -1126,6 +1157,18 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     emu.memory.writeU16(i * 4 + 2, (vec >>> 16) & 0xFFFF);
     emu._dosBiosDefaultVectors.set(i, vec);
     emu._dosIntVectors.set(i, vec);
+  }
+
+  // EMS device name signature at INT 67h handler + 0x0A.
+  // Programs detect EMS by checking for "EMMXXXX0" at the handler segment:000A.
+  if (emu.dosEnableEms) {
+    const int67vec = defaultVec.get(0x67)!;
+    const int67seg = (int67vec >>> 16) & 0xFFFF;
+    const int67lin = int67seg * 16;
+    const sig = 'EMMXXXX0';
+    for (let i = 0; i < sig.length; i++) {
+      emu.memory.writeU8(int67lin + 0x0A + i, sig.charCodeAt(i));
+    }
   }
 
   // BDA (BIOS Data Area) at 0040:0000
@@ -1182,7 +1225,8 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.memory.writeU8(sftBase + 0x0E, 0x00);
   emu.memory.writeU8(sftBase + 0x0F, 0x00);
 
-  setupXmsStub(emu.memory);
+  if (emu.dosEnableXms) setupXmsStub(emu.memory);
+  if (emu.dosEnableDpmi) setupDpmiStub(emu.memory);
 
   // Write VGA 8x8 ROM font to F000:1000 (2048 bytes, 256 chars × 8 bytes)
   for (let i = 0; i < VGA_FONT_8X8_ROM.length; i++) {
