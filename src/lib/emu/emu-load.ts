@@ -1098,6 +1098,27 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     defaultVec.set(intNum, (DOS_KERNEL_SEG << 16) | off);
   }
 
+  // Mouse callback return trampoline at F000:0500
+  // When the user callback does RETF, it arrives here.
+  // The stack contains all saved registers + FLAGS/CS/IP for IRET.
+  // This code restores everything and returns to the interrupted program.
+  {
+    const TRAMP = BIOS_BASE + 0x0500; // F000:0500
+    const code = [
+      0x07,       // POP ES
+      0x1F,       // POP DS
+      0x5F,       // POP DI
+      0x5E,       // POP SI
+      0x5D,       // POP BP
+      0x5A,       // POP DX
+      0x59,       // POP CX
+      0x5B,       // POP BX
+      0x58,       // POP AX
+      0xCF,       // IRET → pops IP, CS, FLAGS
+    ];
+    for (let j = 0; j < code.length; j++) emu.memory.writeU8(TRAMP + j, code[j]);
+  }
+
   for (let i = 0; i < 256; i++) {
     const vec = defaultVec.get(i)!;
     emu.memory.writeU16(i * 4, vec & 0xFFFF);
