@@ -95,6 +95,7 @@ export interface UiStrings {
   propApplication: string;
   propFileFolder: string;
   propFilesAndFolders: string;
+  propMultiObjects: string;
   // Display Properties dialog
   displayProperties: string;
   background: string;
@@ -126,6 +127,16 @@ export interface UiStrings {
   findNext: string;
   replaceBtn: string;
   replaceAll: string;
+  // General Settings window
+  generalSettings: string;
+  labelPath: string;
+  pathHint: string;
+  // Status bar
+  statusObjects: string;       // "{0} object(s)" — no selection
+  statusSelected: string;      // "{0} object(s) selected" — with selection
+  sizeKB: string;              // "KB" (French: "Ko")
+  sizeMB: string;              // "MB" (French: "Mo")
+  sizeGB: string;              // "GB" (French: "Go")
 }
 
 const en: UiStrings = {
@@ -215,6 +226,7 @@ const en: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'File Folder',
   propFilesAndFolders: '{0} files, {1} folders',
+  propMultiObjects: '{0} objects',
   displayProperties: 'Display Properties',
   background: 'Background',
   wallpaper: 'Wallpaper',
@@ -228,7 +240,7 @@ const en: UiStrings = {
   apply: 'Apply',
   bgPreview: 'Preview',
   missingDlls: 'Missing DLL modules: {0}',
-  missingDllsHint: 'The program may not work correctly.\nTry importing the required DLL files to the desktop (a separate folder is fine).',
+  missingDllsHint: 'The program may not work correctly.\nTry placing the required DLL files in the same folder as the executable, or in a PATH directory.',
   cut: 'Cut',
   copy_: 'Copy',
   paste: 'Paste',
@@ -236,6 +248,12 @@ const en: UiStrings = {
   confirmMultipleDelete: 'Confirm Multiple File Delete',
   findTitle: 'Find', replaceTitle: 'Replace', findWhat: 'Find what:', replaceWith: 'Replace with:',
   findNext: 'Find Next', replaceBtn: 'Replace', replaceAll: 'Replace All',
+  generalSettings: 'General Settings',
+  labelPath: 'PATH (one directory per line)',
+  pathHint: 'Search path for executables and DLLs',
+  statusObjects: '{0} object(s)',
+  statusSelected: '{0} object(s) selected',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const fr: UiStrings = {
@@ -325,6 +343,7 @@ const fr: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'Dossier de fichiers',
   propFilesAndFolders: '{0} fichiers, {1} dossiers',
+  propMultiObjects: '{0} objets',
   displayProperties: 'Propri\u00e9t\u00e9s d\u2019affichage',
   background: 'Arri\u00e8re-plan',
   wallpaper: 'Papier peint',
@@ -338,7 +357,7 @@ const fr: UiStrings = {
   apply: 'Appliquer',
   bgPreview: 'Aper\u00e7u',
   missingDlls: 'Modules DLL manquants\u00a0: {0}',
-  missingDllsHint: 'Le programme risque de ne pas fonctionner correctement.\nEssayez d\u2019importer les fichiers DLL requis sur le bureau (un dossier \u00e0 part convient).',
+  missingDllsHint: 'Le programme risque de ne pas fonctionner correctement.\nEssayez de placer les fichiers DLL requis dans le m\u00eame dossier que l\u2019ex\u00e9cutable, ou dans un r\u00e9pertoire du PATH.',
   cut: 'Couper',
   copy_: 'Copier',
   paste: 'Coller',
@@ -346,6 +365,12 @@ const fr: UiStrings = {
   confirmMultipleDelete: 'Confirmer la suppression',
   findTitle: 'Rechercher', replaceTitle: 'Remplacer', findWhat: 'Rechercher :', replaceWith: 'Remplacer par :',
   findNext: 'Suivant', replaceBtn: 'Remplacer', replaceAll: 'Remplacer tout',
+  generalSettings: 'Param\u00e8tres g\u00e9n\u00e9raux',
+  labelPath: 'PATH (un r\u00e9pertoire par ligne)',
+  pathHint: 'Chemin de recherche pour les ex\u00e9cutables et DLL',
+  statusObjects: '{0} objet(s)',
+  statusSelected: '{0} objet(s) s\u00e9lectionn\u00e9(s)',
+  sizeKB: 'Ko', sizeMB: 'Mo', sizeGB: 'Go',
 };
 
 const de: UiStrings = {
@@ -435,6 +460,7 @@ const de: UiStrings = {
   propApplication: 'Anwendung',
   propFileFolder: 'Dateiordner',
   propFilesAndFolders: '{0} Dateien, {1} Ordner',
+  propMultiObjects: '{0} Objekte',
   displayProperties: 'Anzeigeeigenschaften',
   background: 'Hintergrund',
   wallpaper: 'Hintergrundbild',
@@ -448,7 +474,7 @@ const de: UiStrings = {
   apply: '\u00dcbernehmen',
   bgPreview: 'Vorschau',
   missingDlls: 'Fehlende DLL-Module: {0}',
-  missingDllsHint: 'Das Programm funktioniert m\u00f6glicherweise nicht korrekt.\nVersuchen Sie, die erforderlichen DLL-Dateien auf den Desktop zu importieren (ein separater Ordner ist in Ordnung).',
+  missingDllsHint: 'Das Programm funktioniert m\u00f6glicherweise nicht korrekt.\nVersuchen Sie, die erforderlichen DLL-Dateien im selben Ordner wie die ausf\u00fchrbare Datei oder in einem PATH-Verzeichnis abzulegen.',
   cut: 'Ausschneiden',
   copy_: 'Kopieren',
   paste: 'Einf\u00fcgen',
@@ -456,6 +482,12 @@ const de: UiStrings = {
   confirmMultipleDelete: 'L\u00f6schen mehrerer Dateien best\u00e4tigen',
   findTitle: 'Suchen', replaceTitle: 'Ersetzen', findWhat: 'Suchen nach:', replaceWith: 'Ersetzen durch:',
   findNext: 'Weitersuchen', replaceBtn: 'Ersetzen', replaceAll: 'Alle ersetzen',
+  generalSettings: 'Allgemeine Einstellungen',
+  labelPath: 'PATH (ein Verzeichnis pro Zeile)',
+  pathHint: 'Suchpfad f\u00fcr ausf\u00fchrbare Dateien und DLLs',
+  statusObjects: '{0} Objekt(e)',
+  statusSelected: '{0} Objekt(e) markiert',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const es: UiStrings = {
@@ -545,6 +577,7 @@ const es: UiStrings = {
   propApplication: 'Aplicaci\u00f3n',
   propFileFolder: 'Carpeta de archivos',
   propFilesAndFolders: '{0} archivos, {1} carpetas',
+  propMultiObjects: '{0} objetos',
   displayProperties: 'Propiedades de pantalla',
   background: 'Fondo',
   wallpaper: 'Papel tapiz',
@@ -558,7 +591,7 @@ const es: UiStrings = {
   apply: 'Aplicar',
   bgPreview: 'Vista previa',
   missingDlls: 'M\u00f3dulos DLL faltantes: {0}',
-  missingDllsHint: 'Es posible que el programa no funcione correctamente.\nIntente importar los archivos DLL necesarios al escritorio (una carpeta separada est\u00e1 bien).',
+  missingDllsHint: 'Es posible que el programa no funcione correctamente.\nIntente colocar los archivos DLL necesarios en la misma carpeta que el ejecutable, o en un directorio del PATH.',
   cut: 'Cortar',
   copy_: 'Copiar',
   paste: 'Pegar',
@@ -566,6 +599,12 @@ const es: UiStrings = {
   confirmMultipleDelete: 'Confirmar eliminaci\u00f3n m\u00faltiple',
   findTitle: 'Buscar', replaceTitle: 'Reemplazar', findWhat: 'Buscar:', replaceWith: 'Reemplazar por:',
   findNext: 'Buscar siguiente', replaceBtn: 'Reemplazar', replaceAll: 'Reemplazar todo',
+  generalSettings: 'Configuraci\u00f3n general',
+  labelPath: 'PATH (un directorio por l\u00ednea)',
+  pathHint: 'Ruta de b\u00fasqueda para ejecutables y DLL',
+  statusObjects: '{0} objeto(s)',
+  statusSelected: '{0} objeto(s) seleccionado(s)',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const ja: UiStrings = {
@@ -655,6 +694,7 @@ const ja: UiStrings = {
   propApplication: '\u30a2\u30d7\u30ea\u30b1\u30fc\u30b7\u30e7\u30f3',
   propFileFolder: '\u30d5\u30a1\u30a4\u30eb \u30d5\u30a9\u30eb\u30c0',
   propFilesAndFolders: '{0} \u30d5\u30a1\u30a4\u30eb\u3001{1} \u30d5\u30a9\u30eb\u30c0',
+  propMultiObjects: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8',
   displayProperties: '\u753b\u9762\u306e\u30d7\u30ed\u30d1\u30c6\u30a3',
   background: '\u80cc\u666f',
   wallpaper: '\u58c1\u7d19',
@@ -668,7 +708,7 @@ const ja: UiStrings = {
   apply: '\u9069\u7528',
   bgPreview: '\u30d7\u30ec\u30d3\u30e5\u30fc',
   missingDlls: 'DLL\u30e2\u30b8\u30e5\u30fc\u30eb\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093: {0}',
-  missingDllsHint: '\u30d7\u30ed\u30b0\u30e9\u30e0\u304c\u6b63\u3057\u304f\u52d5\u4f5c\u3057\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002\n\u5fc5\u8981\u306aDLL\u30d5\u30a1\u30a4\u30eb\u3092\u30c7\u30b9\u30af\u30c8\u30c3\u30d7\u306b\u30a4\u30f3\u30dd\u30fc\u30c8\u3057\u3066\u304f\u3060\u3055\u3044\uff08\u5225\u306e\u30d5\u30a9\u30eb\u30c0\u3067\u3082\u69cb\u3044\u307e\u305b\u3093\uff09\u3002',
+  missingDllsHint: '\u30d7\u30ed\u30b0\u30e9\u30e0\u304c\u6b63\u3057\u304f\u52d5\u4f5c\u3057\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002\n\u5fc5\u8981\u306aDLL\u30d5\u30a1\u30a4\u30eb\u3092\u5b9f\u884c\u30d5\u30a1\u30a4\u30eb\u3068\u540c\u3058\u30d5\u30a9\u30eb\u30c0\u3001\u307e\u305f\u306fPATH\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\u306b\u914d\u7f6e\u3057\u3066\u304f\u3060\u3055\u3044\u3002',
   cut: '\u5207\u308a\u53d6\u308a',
   copy_: '\u30b3\u30d4\u30fc',
   paste: '\u8cbc\u308a\u4ed8\u3051',
@@ -676,6 +716,12 @@ const ja: UiStrings = {
   confirmMultipleDelete: '\u8907\u6570\u30d5\u30a1\u30a4\u30eb\u306e\u524a\u9664\u306e\u78ba\u8a8d',
   findTitle: '\u691c\u7d22', replaceTitle: '\u7f6e\u63db', findWhat: '\u691c\u7d22\u3059\u308b\u6587\u5b57\u5217:', replaceWith: '\u7f6e\u63db\u5f8c\u306e\u6587\u5b57\u5217:',
   findNext: '\u6b21\u3092\u691c\u7d22', replaceBtn: '\u7f6e\u63db', replaceAll: '\u3059\u3079\u3066\u7f6e\u63db',
+  generalSettings: '\u4e00\u822c\u8a2d\u5b9a',
+  labelPath: 'PATH\uff081\u884c\u306b1\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\uff09',
+  pathHint: '\u5b9f\u884c\u30d5\u30a1\u30a4\u30eb\u3068DLL\u306e\u691c\u7d22\u30d1\u30b9',
+  statusObjects: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8',
+  statusSelected: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u9078\u629e',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const zhCN: UiStrings = {
@@ -765,6 +811,7 @@ const zhCN: UiStrings = {
   propApplication: '\u5e94\u7528\u7a0b\u5e8f',
   propFileFolder: '\u6587\u4ef6\u5939',
   propFilesAndFolders: '{0} \u4e2a\u6587\u4ef6\uff0c{1} \u4e2a\u6587\u4ef6\u5939',
+  propMultiObjects: '{0} \u4e2a\u5bf9\u8c61',
   displayProperties: '\u663e\u793a\u5c5e\u6027',
   background: '\u80cc\u666f',
   wallpaper: '\u58c1\u7eb8',
@@ -778,7 +825,7 @@ const zhCN: UiStrings = {
   apply: '\u5e94\u7528',
   bgPreview: '\u9884\u89c8',
   missingDlls: '\u7f3a\u5c11DLL\u6a21\u5757: {0}',
-  missingDllsHint: '\u7a0b\u5e8f\u53ef\u80fd\u65e0\u6cd5\u6b63\u5e38\u5de5\u4f5c\u3002\n\u8bf7\u5c1d\u8bd5\u5c06\u6240\u9700\u7684DLL\u6587\u4ef6\u5bfc\u5165\u5230\u684c\u9762\uff08\u653e\u5728\u5355\u72ec\u7684\u6587\u4ef6\u5939\u4e2d\u4e5f\u53ef\u4ee5\uff09\u3002',
+  missingDllsHint: '\u7a0b\u5e8f\u53ef\u80fd\u65e0\u6cd5\u6b63\u5e38\u5de5\u4f5c\u3002\n\u8bf7\u5c1d\u8bd5\u5c06\u6240\u9700\u7684DLL\u6587\u4ef6\u653e\u5728\u4e0e\u53ef\u6267\u884c\u6587\u4ef6\u76f8\u540c\u7684\u6587\u4ef6\u5939\u4e2d\uff0c\u6216\u653e\u5728PATH\u76ee\u5f55\u4e2d\u3002',
   cut: '\u526a\u5207',
   copy_: '\u590d\u5236',
   paste: '\u7c98\u8d34',
@@ -786,6 +833,12 @@ const zhCN: UiStrings = {
   confirmMultipleDelete: '\u786e\u8ba4\u5220\u9664\u591a\u4e2a\u6587\u4ef6',
   findTitle: '\u67e5\u627e', replaceTitle: '\u66ff\u6362', findWhat: '\u67e5\u627e\u5185\u5bb9:', replaceWith: '\u66ff\u6362\u4e3a:',
   findNext: '\u67e5\u627e\u4e0b\u4e00\u4e2a', replaceBtn: '\u66ff\u6362', replaceAll: '\u5168\u90e8\u66ff\u6362',
+  generalSettings: '\u5e38\u89c4\u8bbe\u7f6e',
+  labelPath: 'PATH\uff08\u6bcf\u884c\u4e00\u4e2a\u76ee\u5f55\uff09',
+  pathHint: '\u53ef\u6267\u884c\u6587\u4ef6\u548cDLL\u7684\u641c\u7d22\u8def\u5f84',
+  statusObjects: '{0} \u4e2a\u5bf9\u8c61',
+  statusSelected: '\u9009\u62e9\u4e86 {0} \u4e2a\u5bf9\u8c61',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const ptBR: UiStrings = {
@@ -875,6 +928,7 @@ const ptBR: UiStrings = {
   propApplication: 'Aplicativo',
   propFileFolder: 'Pasta de arquivos',
   propFilesAndFolders: '{0} arquivos, {1} pastas',
+  propMultiObjects: '{0} objetos',
   displayProperties: 'Propriedades de V\u00eddeo',
   background: 'Plano de Fundo',
   wallpaper: 'Papel de Parede',
@@ -888,7 +942,7 @@ const ptBR: UiStrings = {
   apply: 'Aplicar',
   bgPreview: 'Visualiza\u00e7\u00e3o',
   missingDlls: 'M\u00f3dulos DLL ausentes: {0}',
-  missingDllsHint: 'O programa pode n\u00e3o funcionar corretamente.\nTente importar os arquivos DLL necess\u00e1rios para a \u00e1rea de trabalho (uma pasta separada serve).',
+  missingDllsHint: 'O programa pode n\u00e3o funcionar corretamente.\nTente colocar os arquivos DLL necess\u00e1rios na mesma pasta do execut\u00e1vel, ou em um diret\u00f3rio do PATH.',
   cut: 'Recortar',
   copy_: 'Copiar',
   paste: 'Colar',
@@ -896,6 +950,12 @@ const ptBR: UiStrings = {
   confirmMultipleDelete: 'Confirmar exclus\u00e3o m\u00faltipla',
   findTitle: 'Localizar', replaceTitle: 'Substituir', findWhat: 'Localizar:', replaceWith: 'Substituir por:',
   findNext: 'Localizar pr\u00f3xima', replaceBtn: 'Substituir', replaceAll: 'Substituir tudo',
+  generalSettings: 'Configura\u00e7\u00f5es gerais',
+  labelPath: 'PATH (um diret\u00f3rio por linha)',
+  pathHint: 'Caminho de pesquisa para execut\u00e1veis e DLLs',
+  statusObjects: '{0} objeto(s)',
+  statusSelected: '{0} objeto(s) selecionado(s)',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const it: UiStrings = {
@@ -985,6 +1045,7 @@ const it: UiStrings = {
   propApplication: 'Applicazione',
   propFileFolder: 'Cartella di file',
   propFilesAndFolders: '{0} file, {1} cartelle',
+  propMultiObjects: '{0} oggetti',
   displayProperties: 'Propriet\u00e0 dello schermo',
   background: 'Sfondo',
   wallpaper: 'Sfondo del desktop',
@@ -998,7 +1059,7 @@ const it: UiStrings = {
   apply: 'Applica',
   bgPreview: 'Anteprima',
   missingDlls: 'Moduli DLL mancanti: {0}',
-  missingDllsHint: 'Il programma potrebbe non funzionare correttamente.\nProvare a importare i file DLL necessari sul desktop (anche in una cartella separata va bene).',
+  missingDllsHint: 'Il programma potrebbe non funzionare correttamente.\nProvare a posizionare i file DLL necessari nella stessa cartella dell\u2019eseguibile, o in una directory del PATH.',
   cut: 'Taglia',
   copy_: 'Copia',
   paste: 'Incolla',
@@ -1006,6 +1067,12 @@ const it: UiStrings = {
   confirmMultipleDelete: 'Conferma eliminazione multipla',
   findTitle: 'Trova', replaceTitle: 'Sostituisci', findWhat: 'Trova:', replaceWith: 'Sostituisci con:',
   findNext: 'Trova successivo', replaceBtn: 'Sostituisci', replaceAll: 'Sostituisci tutto',
+  generalSettings: 'Impostazioni generali',
+  labelPath: 'PATH (una directory per riga)',
+  pathHint: 'Percorso di ricerca per eseguibili e DLL',
+  statusObjects: '{0} oggetto/i',
+  statusSelected: '{0} oggetto/i selezionato/i',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const pl: UiStrings = {
@@ -1095,6 +1162,7 @@ const pl: UiStrings = {
   propApplication: 'Aplikacja',
   propFileFolder: 'Folder plik\u00f3w',
   propFilesAndFolders: '{0} plik\u00f3w, {1} folder\u00f3w',
+  propMultiObjects: '{0} obiekt\u00f3w',
   displayProperties: 'W\u0142a\u015bciwo\u015bci ekranu',
   background: 'T\u0142o',
   wallpaper: 'Tapeta',
@@ -1108,7 +1176,7 @@ const pl: UiStrings = {
   apply: 'Zastosuj',
   bgPreview: 'Podgl\u0105d',
   missingDlls: 'Brakuj\u0105ce modu\u0142y DLL: {0}',
-  missingDllsHint: 'Program mo\u017ce nie dzia\u0142a\u0107 poprawnie.\nSpr\u00f3buj zaimportowa\u0107 wymagane pliki DLL na pulpit (oddzielny folder te\u017c wystarczy).',
+  missingDllsHint: 'Program mo\u017ce nie dzia\u0142a\u0107 poprawnie.\nSpr\u00f3buj umie\u015bci\u0107 wymagane pliki DLL w tym samym folderze co plik wykonywalny lub w katalogu PATH.',
   cut: 'Wytnij',
   copy_: 'Kopiuj',
   paste: 'Wklej',
@@ -1116,6 +1184,12 @@ const pl: UiStrings = {
   confirmMultipleDelete: 'Potwierd\u017a usuni\u0119cie wielu plik\u00f3w',
   findTitle: 'Znajd\u017a', replaceTitle: 'Zamie\u0144', findWhat: 'Znajd\u017a:', replaceWith: 'Zamie\u0144 na:',
   findNext: 'Znajd\u017a nast\u0119pny', replaceBtn: 'Zamie\u0144', replaceAll: 'Zamie\u0144 wszystko',
+  generalSettings: 'Ustawienia og\u00f3lne',
+  labelPath: 'PATH (jeden katalog na lini\u0119)',
+  pathHint: '\u015acie\u017cka wyszukiwania plik\u00f3w wykonywalnych i DLL',
+  statusObjects: 'Obiekt\u00f3w: {0}',
+  statusSelected: 'Zaznaczonych obiekt\u00f3w: {0}',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const ko: UiStrings = {
@@ -1205,6 +1279,7 @@ const ko: UiStrings = {
   propApplication: '\uc751\uc6a9 \ud504\ub85c\uadf8\ub7a8',
   propFileFolder: '\ud30c\uc77c \ud3f4\ub354',
   propFilesAndFolders: '\ud30c\uc77c {0}\uac1c, \ud3f4\ub354 {1}\uac1c',
+  propMultiObjects: '\uac1c\uccb4 {0}\uac1c',
   displayProperties: '\ub514\uc2a4\ud50c\ub808\uc774 \ub4f1\ub85d \uc815\ubcf4',
   background: '\ubc30\uacbd',
   wallpaper: '\ubc30\uacbd \ud654\uba74',
@@ -1218,7 +1293,7 @@ const ko: UiStrings = {
   apply: '\uc801\uc6a9',
   bgPreview: '\ubbf8\ub9ac \ubcf4\uae30',
   missingDlls: '\ub204\ub77d\ub41c DLL \ubaa8\ub4c8: {0}',
-  missingDllsHint: '\ud504\ub85c\uadf8\ub7a8\uc774 \uc62c\ubc14\ub974\uac8c \uc791\ub3d9\ud558\uc9c0 \uc54a\uc744 \uc218 \uc788\uc2b5\ub2c8\ub2e4.\n\ud544\uc694\ud55c DLL \ud30c\uc77c\uc744 \ubc14\ud0d5 \ud654\uba74\uc5d0 \uac00\uc838\uc624\uc2ed\uc2dc\uc624 (\ubcc4\ub3c4\uc758 \ud3f4\ub354\uc5d0 \ub123\uc5b4\ub3c4 \ub429\ub2c8\ub2e4).',
+  missingDllsHint: '\ud504\ub85c\uadf8\ub7a8\uc774 \uc62c\ubc14\ub974\uac8c \uc791\ub3d9\ud558\uc9c0 \uc54a\uc744 \uc218 \uc788\uc2b5\ub2c8\ub2e4.\n\ud544\uc694\ud55c DLL \ud30c\uc77c\uc744 \uc2e4\ud589 \ud30c\uc77c\uacfc \uac19\uc740 \ud3f4\ub354 \ub610\ub294 PATH \ub514\ub809\ud1a0\ub9ac\uc5d0 \ub123\uc5b4\ubcf4\uc2ed\uc2dc\uc624.',
   cut: '\uc798\ub77c\ub0b4\uae30',
   copy_: '\ubcf5\uc0ac',
   paste: '\ubd99\uc5ec\ub123\uae30',
@@ -1226,6 +1301,12 @@ const ko: UiStrings = {
   confirmMultipleDelete: '\uc5ec\ub7ec \ud30c\uc77c \uc0ad\uc81c \ud655\uc778',
   findTitle: '\ucc3e\uae30', replaceTitle: '\ubc14\uafb8\uae30', findWhat: '\ucc3e\uc744 \ub0b4\uc6a9:', replaceWith: '\ubc14\uafb8 \ub0b4\uc6a9:',
   findNext: '\ub2e4\uc74c \ucc3e\uae30', replaceBtn: '\ubc14\uafb8\uae30', replaceAll: '\ubaa8\ub450 \ubc14\uafb8\uae30',
+  generalSettings: '\uc77c\ubc18 \uc124\uc815',
+  labelPath: 'PATH (\ud55c \uc904\uc5d0 \ud558\ub098\uc758 \ub514\ub809\ud1a0\ub9ac)',
+  pathHint: '\uc2e4\ud589 \ud30c\uc77c \ubc0f DLL \uac80\uc0c9 \uacbd\ub85c',
+  statusObjects: '\uac1c\uccb4 {0}\uac1c',
+  statusSelected: '{0}\uac1c \uac1c\uccb4 \uc120\ud0dd',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.

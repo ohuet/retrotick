@@ -61,6 +61,17 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       onPaste('').then(() => fm.loadItems());
       return;
     }
+    if (key === 'Enter' && e.altKey && fm.selected.size >= 1) {
+      e.preventDefault();
+      if (fm.selected.size === 1) {
+        const item = fm.items.find(i => i.name === [...fm.selected][0]);
+        if (item) fm.setPropertiesItem(item);
+      } else {
+        const items = fm.items.filter(i => fm.selected.has(i.name));
+        if (items.length > 0) fm.setPropertiesItem(items);
+      }
+      return;
+    }
     if (key === 'Enter' && fm.selected.size === 1) {
       e.preventDefault();
       const name = [...fm.selected][0];
@@ -82,8 +93,8 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       e.preventDefault();
       if (fm.items.length === 0) return;
       if (fm.selected.size === 0) { fm.selectOne(fm.items[0].name); return; }
-      const anchor = fm.anchor || [...fm.selected][0];
-      const idx = fm.items.findIndex(i => i.name === anchor);
+      const current = (e.shiftKey ? fm.focus : fm.anchor) || [...fm.selected][0];
+      const idx = fm.items.findIndex(i => i.name === current);
       if (idx === -1) { fm.selectOne(fm.items[0].name); return; }
       const el = desktopRef.current;
       const cols = el ? Math.max(1, Math.floor((el.clientWidth - 12) / 79)) : 1;
@@ -97,6 +108,12 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       } else {
         fm.selectOne(fm.items[next].name);
       }
+      return;
+    }
+    // Type-ahead: press a letter/digit to jump to matching item
+    if (key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const matched = fm.selectByKey(key);
+      if (matched) e.preventDefault();
     }
   }
 
@@ -301,7 +318,7 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
           menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
         }
         menuItems.push({ ...sep });
-        menuItems.push(mi(CMD_PROPS, t().properties, { isGrayed: multi }));
+        menuItems.push(mi(CMD_PROPS, t().properties));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
@@ -316,7 +333,14 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
                 else if (id === CMD_COPY) onCopy([...fm.selected], '');
                 else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.selectOne(item.name); }
                 else if (id === CMD_DELETE) { fm.setConfirmDelete([...fm.selected]); fm.setContextMenu(null); }
-                else if (id === CMD_PROPS) fm.setPropertiesItem(item);
+                else if (id === CMD_PROPS) {
+                  if (multi) {
+                    const items = fm.items.filter(i => fm.selected.has(i.name));
+                    fm.setPropertiesItem(items);
+                  } else {
+                    fm.setPropertiesItem(item);
+                  }
+                }
               }}
               onClose={() => fm.setContextMenu(null)}
             />
@@ -337,16 +361,25 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       {fm.propertiesItem && (
         <div onPointerDown={() => fm.setPropsFlash(c => c + 1)}>
           <PropertiesDialog
-            info={{
-              displayName: fm.propertiesItem.displayName,
-              isFolder: fm.propertiesItem.isFolder,
-              isExe: fm.propertiesItem.isExe,
-              iconUrl: fm.propertiesItem.iconUrl,
-              size: fm.propertiesItem.size,
-              addedAt: fm.propertiesItem.addedAt,
-              location: 'D:\\',
-              folderContents: fm.folderContents,
-            }}
+            info={Array.isArray(fm.propertiesItem)
+              ? {
+                  displayName: t().propMultiObjects.replace('{0}', String(fm.propertiesItem.length)),
+                  isFolder: false, isExe: false, iconUrl: null,
+                  size: fm.propertiesItem.reduce((s, i) => s + i.size, 0),
+                  addedAt: 0, location: 'D:\\',
+                  multiCount: fm.propertiesItem.length,
+                }
+              : {
+                  displayName: fm.propertiesItem.displayName,
+                  isFolder: fm.propertiesItem.isFolder,
+                  isExe: fm.propertiesItem.isExe,
+                  iconUrl: fm.propertiesItem.iconUrl,
+                  size: fm.propertiesItem.size,
+                  addedAt: fm.propertiesItem.addedAt,
+                  location: 'D:\\',
+                  folderContents: fm.folderContents,
+                }
+            }
             flashTrigger={fm.propsFlash}
             onClose={() => fm.setPropertiesItem(null)}
           />

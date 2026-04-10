@@ -13,6 +13,7 @@ import type { PEInfo, MenuItem } from '../pe/types';
 import type { GL1Context } from './win32/gl-context';
 import type { RegistryStore } from '../registry-store';
 import type { ProfileStore } from '../profile-store';
+import { loadGeneralSettings } from '../general-settings';
 import { DefaultFileManager } from './file-manager';
 import { VGAState, isVGAPort, syncGraphics } from './dos/vga';
 import { DosAudio } from './dos/audio';
@@ -510,7 +511,7 @@ export class Emulator {
   /** Environment variable store (uppercase key → value), shared by kernel32 and msvcrt */
   envVars = new Map<string, string>([
     ['COMSPEC',                  'C:\\WINDOWS\\SYSTEM32\\CMD.EXE'],
-    ['PATH',                     'D:\\DOS;C:\\DOS;D:\\WINDOWS;C:\\WINDOWS;D:\\WINDOWS\\SYSTEM;C:\\WINDOWS\\SYSTEM;D:\\WINDOWS\\SYSTEM32;C:\\WINDOWS\\SYSTEM32;D:\\WINDOWS\\SYSTEM32\\WBEM;C:\\WINDOWS\\SYSTEM32\\WBEM'],
+    ['PATH',                     loadGeneralSettings().path],
     ['PATHEXT',                  '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC'],
     ['SYSTEMROOT',               'C:\\WINDOWS'],
     ['SYSTEMDRIVE',              'C:'],

@@ -510,7 +510,7 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
         if (key.startsWith(prefix)) { hasStubs = true; break; }
       }
       if (!hasStubs) {
-        emu.missingDlls.push(dllLower);
+        emu.missingDlls.push(dllLower.includes('.') ? dllLower : dllLower + '.dll');
       }
     }
     if (emu.missingDlls.length > 0) {
