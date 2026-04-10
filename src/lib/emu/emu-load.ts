@@ -1137,6 +1137,18 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     emu._dosIntVectors.set(i, vec);
   }
 
+  // EMS device name signature at INT 67h handler + 0x0A.
+  // Programs detect EMS by checking for "EMMXXXX0" at the handler segment:000A.
+  if (emu.dosEnableEms) {
+    const int67vec = defaultVec.get(0x67)!;
+    const int67seg = (int67vec >>> 16) & 0xFFFF;
+    const int67lin = int67seg * 16;
+    const sig = 'EMMXXXX0';
+    for (let i = 0; i < sig.length; i++) {
+      emu.memory.writeU8(int67lin + 0x0A + i, sig.charCodeAt(i));
+    }
+  }
+
   // BDA (BIOS Data Area) at 0040:0000
   emu.memory.writeU8(0x0449, 0x03);
   emu.memory.writeU16(0x044A, 80);

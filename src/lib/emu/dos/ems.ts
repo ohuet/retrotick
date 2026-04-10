@@ -622,7 +622,11 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
         const tb = cpu.mem.readU8(tssDescAddr);
         cpu.mem.writeU8(tssDescAddr, tb & 0xFD);
       }
-      // Switch to V86/real mode
+      // Switch to V86/real mode — cache flat bases for "unreal mode".
+      // DOS4GW uses PM flat segments (base=0), then returns to V86 and
+      // accesses data via the cached 32-bit bases. We cache base=0 for
+      // all V86 segment registers so segBase() returns 0 (flat) instead
+      // of seg*16 when VCPI is active.
       cpu.realMode = true;
       cpu.use32 = false;
       cpu._addrSize16 = true;
@@ -632,8 +636,15 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       cpu.ss = newSS;
       cpu.fs = newFS;
       cpu.gs = newGS;
+      // Cache flat bases for V86 segment registers
+      cpu.segBases.set(newCS, 0);
+      cpu.segBases.set(newDS, 0);
+      cpu.segBases.set(newES, 0);
+      cpu.segBases.set(newSS, 0);
+      if (newFS) cpu.segBases.set(newFS, 0);
+      if (newGS) cpu.segBases.set(newGS, 0);
       cpu.reg[ESP] = newESP;
-      cpu.eip = (newCS * 16 + newEIP) >>> 0;
+      cpu.eip = newEIP; // flat base=0, so EIP = offset directly
       cpu.setFlags(newEFLAGS);
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
       return true;

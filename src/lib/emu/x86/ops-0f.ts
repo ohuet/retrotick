@@ -214,10 +214,13 @@ export function exec0F(
         case 6: { // LMSW r/m16 — Load Machine Status Word
           const d = cpu.decodeModRM(16);
           if (cpu.emu) {
+            const oldPE = cpu.emu._cr0 & 1;
             // LMSW can set PE but cannot clear it
             const val = d.val & 0xFFFF;
             cpu.emu._cr0 = (cpu.emu._cr0 & ~0x000E) | (val & 0x000F);
-            if (cpu.emu._cr0 & 1) cpu.realMode = false;
+            if (!oldPE && (cpu.emu._cr0 & 1)) {
+              cpu.realMode = false;
+            }
           }
           break;
         }
@@ -318,7 +321,12 @@ export function exec0F(
           cpu.realMode = false;
           console.warn(`[CR0] Enter PM: EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} gdtBase=0x${(cpu.emu?._gdtBase??0).toString(16)} idtBase=0x${(cpu.emu?._idtBase??0).toString(16)}`);
         } else if (oldPE && !newPE) {
-          // Back to real mode — force 16-bit operand/address size
+          // Back to real mode — enable "unreal mode" if data segments have flat base.
+          // DOS4GW sets base=0 for DS/ES/SS in PM, returns to RM, and expects the
+          // CPU to cache the flat base for 32-bit data access in real mode.
+          if (cpu.segBase(cpu.ds) === 0 || cpu.segBase(cpu.es) === 0) {
+            cpu._unrealMode = true;
+          }
           cpu.realMode = true;
           cpu.use32 = false;
           cpu._addrSize16 = true;

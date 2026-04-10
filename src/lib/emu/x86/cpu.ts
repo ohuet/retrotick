@@ -83,6 +83,7 @@ export class CPU {
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
   _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
   _inhibitIRQ = false; // true after MOV SS/POP SS (suppresses HW IRQ for 1 instruction)
+  _unrealMode = false; // true after PM→RM transition with flat segments (data base=0)
 
   constructor(mem: Memory) {
     this.mem = mem;
@@ -107,7 +108,13 @@ export class CPU {
 
   /** Get linear base address for a segment selector */
   segBase(sel: number): number {
-    if (this.realMode) return (sel * 16) >>> 0;
+    if (this.realMode) {
+      // "Unreal mode": after PM→V86 transition, data accesses use flat base (0).
+      // Instruction fetch uses cpu.eip directly (not segBase), so returning 0
+      // for all segments is safe. CS:override data accesses also get flat base.
+      if (this._unrealMode) return 0;
+      return (sel * 16) >>> 0;
+    }
     const cached = this.segBases.get(sel);
     if (cached !== undefined) return cached;
     // Look up in GDT if available (PMODEW protected mode)

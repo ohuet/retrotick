@@ -1253,6 +1253,7 @@ export function cpuStep(cpu: CPU): void {
           cpu.realMode = true;
           cpu.use32 = false;
           cpu._addrSize16 = true;
+          cpu._unrealMode = true; // PM→V86: cache flat base for data segments
           cpu.cs = cs2;
           cpu.ds = newDS;
           cpu.es = newES;
