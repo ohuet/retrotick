@@ -21,6 +21,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   const [items, setItems] = useState<FileItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
+  const [focus, setFocus] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FileItem } | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -35,6 +36,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   function selectOne(name: string) {
     setSelected(new Set([name]));
     setAnchor(name);
+    setFocus(name);
   }
 
   const setSelection = useCallback((names: Set<string>) => {
@@ -48,6 +50,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
       return next;
     });
     setAnchor(name);
+    setFocus(name);
   }
 
   function selectRange(name: string) {
@@ -60,6 +63,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     const next = new Set<string>();
     for (let i = lo; i <= hi; i++) next.add(items[i].name);
     setSelected(next);
+    setFocus(name);
   }
 
   function selectAll() {
@@ -196,6 +200,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     items, setItems,
     selected, setSelection, selectOne, selectToggle, selectRange, selectAll, clearSelection,
     anchor, setAnchor,
+    focus,
     editingName, setEditingName,
     contextMenu, setContextMenu,
     bgContextMenu, setBgContextMenu,

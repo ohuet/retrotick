@@ -159,8 +159,8 @@ export function FolderWindow({
       e.preventDefault();
       if (fm.items.length === 0) return;
       if (fm.selected.size === 0) { fm.selectOne(fm.items[0].name); return; }
-      const anchor = fm.anchor || [...fm.selected][0];
-      const idx = fm.items.findIndex(i => i.name === anchor);
+      const current = (e.shiftKey ? fm.focus : fm.anchor) || [...fm.selected][0];
+      const idx = fm.items.findIndex(i => i.name === current);
       if (idx === -1) { fm.selectOne(fm.items[0].name); return; }
       const el = contentRef.current;
       const cols = el ? Math.max(1, Math.floor((el.clientWidth - 12) / 79)) : 1;
