@@ -345,9 +345,6 @@ export class Emulator {
   isDOS = false;
   dosMouse = createDosMouseState();
   _mouseCallbackSavedSP = -1;
-  _mouseCallbackSavedRegs?: {
-    regs: Int32Array; ds: number; es: number; flags: number;
-  };
   dosKeyBuffer: { ascii: number; scan: number }[] = [];
   _dosWaitingForKey: false | 'read' | 'peek' = false;
   _dosExtKeyPending?: number; // scan code pending for second getch() call on extended keys

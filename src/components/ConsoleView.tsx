@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'preac
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
-import { injectDosMouseEvent } from '../lib/emu/dos/mouse';
+import { injectDosMouseEvent, drawGfxMouseCursor } from '../lib/emu/dos/mouse';
 
 // Default Windows console 16-color palette (fallback for Win32 programs)
 const DEFAULT_CONSOLE_COLORS = [
@@ -223,7 +223,10 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
       const fb = emu.vga.framebuffer;
       if (canvas && fb) {
         const ctx = canvas.getContext('2d');
-        if (ctx) ctx.putImageData(fb, 0, 0);
+        if (ctx) {
+          ctx.putImageData(fb, 0, 0);
+          drawGfxMouseCursor(ctx, emu);
+        }
       } else {
         // Canvas not mounted yet (mode just switched) — trigger re-render
         render();
@@ -705,6 +708,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const fb = emu.vga.framebuffer;
   const gfxWidth = fb ? fb.width : emu.vga.currentMode.width;
   const gfxHeight = fb ? fb.height : emu.vga.currentMode.height;
+  const dosMouseVisible = isGfx && emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0;
 
   return (
     <div
@@ -724,6 +728,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             width: '640px',
             height: '480px',
             imageRendering: 'pixelated',
+            cursor: dosMouseVisible ? 'none' : 'default',
           }}
         />
       ) : useCanvas ? (
