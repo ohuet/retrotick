@@ -22,6 +22,8 @@ export interface DosSettings {
   speed: number;
   /** VGA refresh rate in Hz (standard CRT = 70). */
   refreshRate: number;
+  /** Log all DOS INT calls to the browser console. */
+  traceApi: boolean;
 }
 
 const STORAGE_KEY = 'retrotick-dos';
@@ -37,6 +39,7 @@ const DEFAULTS: DosSettings = {
   gus: true,
   speed: 1,
   refreshRate: 70,
+  traceApi: false,
 };
 
 export function loadDosSettings(): DosSettings {

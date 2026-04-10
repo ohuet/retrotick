@@ -107,7 +107,7 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
 
   memory.writeU16(pspLinear + 0x2C, ENV_SEG);
 
-  // Command tail at offset 0x80 (empty)
+  // Command tail at offset 0x80 (empty — no command-line arguments)
   memory.writeU8(pspLinear + 0x80, 0x00);
   memory.writeU8(pspLinear + 0x81, 0x0D);
 
@@ -223,7 +223,7 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
 
   memory.writeU16(pspLinear + 0x2C, ENV_SEG);
 
-  // Command tail at offset 0x80 (empty)
+  // Command tail at offset 0x80 (empty — no command-line arguments)
   memory.writeU8(pspLinear + 0x80, 0x00);
   memory.writeU8(pspLinear + 0x81, 0x0D);
 

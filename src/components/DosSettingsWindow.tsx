@@ -149,6 +149,19 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
               </label>
             </div>
 
+            {/* Debug */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>Debug</div>
+              <label style={{ ...radioStyle, marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.traceApi}
+                  onChange={() => setSettings(s => ({ ...s, traceApi: !s.traceApi }))}
+                />
+                Trace INT calls (console)
+              </label>
+            </div>
+
             <div style={{ borderTop: '1px solid #808080', borderBottom: '1px solid #FFF', margin: '0 0 8px' }} />
 
             {/* Buttons */}
