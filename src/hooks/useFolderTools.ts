@@ -27,7 +27,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const [confirmFlash, setConfirmFlash] = useState(0);
-  const [propertiesItem, setPropertiesItem] = useState<FileItem | null>(null);
+  const [propertiesItem, setPropertiesItem] = useState<FileItem | FileItem[] | null>(null);
   const [propsFlash, setPropsFlash] = useState(0);
   const [folderContents, setFolderContents] = useState<{ files: number; folders: number; totalSize: number } | null>(null);
   const iconUrls = useRef<string[]>([]);
@@ -128,7 +128,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
 
   // Compute folder contents for properties dialog
   useEffect(() => {
-    if (!propertiesItem?.isFolder) { setFolderContents(null); return; }
+    if (Array.isArray(propertiesItem) || !propertiesItem?.isFolder) { setFolderContents(null); return; }
     const folderPrefix = propertiesItem.name.endsWith('/') ? propertiesItem.name : propertiesItem.name + '/';
     getAllFiles().then(all => {
       let files = 0, folders = 0, totalSize = 0;

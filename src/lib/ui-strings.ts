@@ -95,6 +95,7 @@ export interface UiStrings {
   propApplication: string;
   propFileFolder: string;
   propFilesAndFolders: string;
+  propMultiObjects: string;
   // Display Properties dialog
   displayProperties: string;
   background: string;
@@ -225,6 +226,7 @@ const en: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'File Folder',
   propFilesAndFolders: '{0} files, {1} folders',
+  propMultiObjects: '{0} objects',
   displayProperties: 'Display Properties',
   background: 'Background',
   wallpaper: 'Wallpaper',
@@ -341,6 +343,7 @@ const fr: UiStrings = {
   propApplication: 'Application',
   propFileFolder: 'Dossier de fichiers',
   propFilesAndFolders: '{0} fichiers, {1} dossiers',
+  propMultiObjects: '{0} objets',
   displayProperties: 'Propri\u00e9t\u00e9s d\u2019affichage',
   background: 'Arri\u00e8re-plan',
   wallpaper: 'Papier peint',
@@ -457,6 +460,7 @@ const de: UiStrings = {
   propApplication: 'Anwendung',
   propFileFolder: 'Dateiordner',
   propFilesAndFolders: '{0} Dateien, {1} Ordner',
+  propMultiObjects: '{0} Objekte',
   displayProperties: 'Anzeigeeigenschaften',
   background: 'Hintergrund',
   wallpaper: 'Hintergrundbild',
@@ -573,6 +577,7 @@ const es: UiStrings = {
   propApplication: 'Aplicaci\u00f3n',
   propFileFolder: 'Carpeta de archivos',
   propFilesAndFolders: '{0} archivos, {1} carpetas',
+  propMultiObjects: '{0} objetos',
   displayProperties: 'Propiedades de pantalla',
   background: 'Fondo',
   wallpaper: 'Papel tapiz',
@@ -689,6 +694,7 @@ const ja: UiStrings = {
   propApplication: '\u30a2\u30d7\u30ea\u30b1\u30fc\u30b7\u30e7\u30f3',
   propFileFolder: '\u30d5\u30a1\u30a4\u30eb \u30d5\u30a9\u30eb\u30c0',
   propFilesAndFolders: '{0} \u30d5\u30a1\u30a4\u30eb\u3001{1} \u30d5\u30a9\u30eb\u30c0',
+  propMultiObjects: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8',
   displayProperties: '\u753b\u9762\u306e\u30d7\u30ed\u30d1\u30c6\u30a3',
   background: '\u80cc\u666f',
   wallpaper: '\u58c1\u7d19',
@@ -805,6 +811,7 @@ const zhCN: UiStrings = {
   propApplication: '\u5e94\u7528\u7a0b\u5e8f',
   propFileFolder: '\u6587\u4ef6\u5939',
   propFilesAndFolders: '{0} \u4e2a\u6587\u4ef6\uff0c{1} \u4e2a\u6587\u4ef6\u5939',
+  propMultiObjects: '{0} \u4e2a\u5bf9\u8c61',
   displayProperties: '\u663e\u793a\u5c5e\u6027',
   background: '\u80cc\u666f',
   wallpaper: '\u58c1\u7eb8',
@@ -921,6 +928,7 @@ const ptBR: UiStrings = {
   propApplication: 'Aplicativo',
   propFileFolder: 'Pasta de arquivos',
   propFilesAndFolders: '{0} arquivos, {1} pastas',
+  propMultiObjects: '{0} objetos',
   displayProperties: 'Propriedades de V\u00eddeo',
   background: 'Plano de Fundo',
   wallpaper: 'Papel de Parede',
@@ -1037,6 +1045,7 @@ const it: UiStrings = {
   propApplication: 'Applicazione',
   propFileFolder: 'Cartella di file',
   propFilesAndFolders: '{0} file, {1} cartelle',
+  propMultiObjects: '{0} oggetti',
   displayProperties: 'Propriet\u00e0 dello schermo',
   background: 'Sfondo',
   wallpaper: 'Sfondo del desktop',
@@ -1153,6 +1162,7 @@ const pl: UiStrings = {
   propApplication: 'Aplikacja',
   propFileFolder: 'Folder plik\u00f3w',
   propFilesAndFolders: '{0} plik\u00f3w, {1} folder\u00f3w',
+  propMultiObjects: '{0} obiekt\u00f3w',
   displayProperties: 'W\u0142a\u015bciwo\u015bci ekranu',
   background: 'T\u0142o',
   wallpaper: 'Tapeta',
@@ -1269,6 +1279,7 @@ const ko: UiStrings = {
   propApplication: '\uc751\uc6a9 \ud504\ub85c\uadf8\ub7a8',
   propFileFolder: '\ud30c\uc77c \ud3f4\ub354',
   propFilesAndFolders: '\ud30c\uc77c {0}\uac1c, \ud3f4\ub354 {1}\uac1c',
+  propMultiObjects: '\uac1c\uccb4 {0}\uac1c',
   displayProperties: '\ub514\uc2a4\ud50c\ub808\uc774 \ub4f1\ub85d \uc815\ubcf4',
   background: '\ubc30\uacbd',
   wallpaper: '\ubc30\uacbd \ud654\uba74',
