@@ -133,6 +133,9 @@ export interface UiStrings {
   // Status bar
   statusObjects: string;       // "{0} object(s)" — no selection
   statusSelected: string;      // "{0} object(s) selected" — with selection
+  sizeKB: string;              // "KB" (French: "Ko")
+  sizeMB: string;              // "MB" (French: "Mo")
+  sizeGB: string;              // "GB" (French: "Go")
 }
 
 const en: UiStrings = {
@@ -248,6 +251,7 @@ const en: UiStrings = {
   pathHint: 'Search path for executables and DLLs',
   statusObjects: '{0} object(s)',
   statusSelected: '{0} object(s) selected',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const fr: UiStrings = {
@@ -363,6 +367,7 @@ const fr: UiStrings = {
   pathHint: 'Chemin de recherche pour les ex\u00e9cutables et DLL',
   statusObjects: '{0} objet(s)',
   statusSelected: '{0} objet(s) s\u00e9lectionn\u00e9(s)',
+  sizeKB: 'Ko', sizeMB: 'Mo', sizeGB: 'Go',
 };
 
 const de: UiStrings = {
@@ -478,6 +483,7 @@ const de: UiStrings = {
   pathHint: 'Suchpfad f\u00fcr ausf\u00fchrbare Dateien und DLLs',
   statusObjects: '{0} Objekt(e)',
   statusSelected: '{0} Objekt(e) markiert',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const es: UiStrings = {
@@ -593,6 +599,7 @@ const es: UiStrings = {
   pathHint: 'Ruta de b\u00fasqueda para ejecutables y DLL',
   statusObjects: '{0} objeto(s)',
   statusSelected: '{0} objeto(s) seleccionado(s)',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const ja: UiStrings = {
@@ -708,6 +715,7 @@ const ja: UiStrings = {
   pathHint: '\u5b9f\u884c\u30d5\u30a1\u30a4\u30eb\u3068DLL\u306e\u691c\u7d22\u30d1\u30b9',
   statusObjects: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8',
   statusSelected: '{0} \u500b\u306e\u30aa\u30d6\u30b8\u30a7\u30af\u30c8\u3092\u9078\u629e',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const zhCN: UiStrings = {
@@ -823,6 +831,7 @@ const zhCN: UiStrings = {
   pathHint: '\u53ef\u6267\u884c\u6587\u4ef6\u548cDLL\u7684\u641c\u7d22\u8def\u5f84',
   statusObjects: '{0} \u4e2a\u5bf9\u8c61',
   statusSelected: '\u9009\u62e9\u4e86 {0} \u4e2a\u5bf9\u8c61',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const ptBR: UiStrings = {
@@ -938,6 +947,7 @@ const ptBR: UiStrings = {
   pathHint: 'Caminho de pesquisa para execut\u00e1veis e DLLs',
   statusObjects: '{0} objeto(s)',
   statusSelected: '{0} objeto(s) selecionado(s)',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const it: UiStrings = {
@@ -1053,6 +1063,7 @@ const it: UiStrings = {
   pathHint: 'Percorso di ricerca per eseguibili e DLL',
   statusObjects: '{0} oggetto/i',
   statusSelected: '{0} oggetto/i selezionato/i',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const pl: UiStrings = {
@@ -1168,6 +1179,7 @@ const pl: UiStrings = {
   pathHint: '\u015acie\u017cka wyszukiwania plik\u00f3w wykonywalnych i DLL',
   statusObjects: 'Obiekt\u00f3w: {0}',
   statusSelected: 'Zaznaczonych obiekt\u00f3w: {0}',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 const ko: UiStrings = {
@@ -1283,6 +1295,7 @@ const ko: UiStrings = {
   pathHint: '\uc2e4\ud589 \ud30c\uc77c \ubc0f DLL \uac80\uc0c9 \uacbd\ub85c',
   statusObjects: '\uac1c\uccb4 {0}\uac1c',
   statusSelected: '{0}\uac1c \uac1c\uccb4 \uc120\ud0dd',
+  sizeKB: 'KB', sizeMB: 'MB', sizeGB: 'GB',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.

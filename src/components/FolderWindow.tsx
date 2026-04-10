@@ -19,11 +19,11 @@ import type { FileItem } from '../hooks/useFolderTools';
 
 const WINDOW_STYLE = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
 
-function formatSizeShort(bytes: number): string {
+function formatSizeShort(bytes: number, strings: { sizeKB: string; sizeMB: string; sizeGB: string }): string {
   if (bytes < 1024) return `${bytes} bytes`;
-  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024).toLocaleString()} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024).toLocaleString()} ${strings.sizeKB}`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} ${strings.sizeMB}`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} ${strings.sizeGB}`;
 }
 
 function statusBar(items: FileItem[], selected: Set<string>) {
@@ -64,7 +64,7 @@ function statusBar(items: FileItem[], selected: Set<string>) {
           boxShadow: 'inset 1px 1px 0 #808080, inset -1px -1px 0 #fff',
           lineHeight: '18px', marginLeft: '2px',
         }}>
-          {formatSizeShort(size)}
+          {formatSizeShort(size, strings)}
         </div>
       )}
     </div>
