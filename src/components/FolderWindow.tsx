@@ -123,6 +123,16 @@ export function FolderWindow({
       }
       const icon = contentRef.current?.querySelector(`[data-store-path="${CSS.escape(fm.items[next].name)}"]`);
       icon?.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    // Type-ahead: press a letter/digit to jump to matching item
+    if (key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const matched = fm.selectByKey(key);
+      if (matched) {
+        e.preventDefault();
+        const icon = contentRef.current?.querySelector(`[data-store-path="${CSS.escape(matched)}"]`);
+        icon?.scrollIntoView({ block: 'nearest' });
+      }
     }
   }
 

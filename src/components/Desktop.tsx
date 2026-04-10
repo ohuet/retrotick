@@ -97,6 +97,12 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       } else {
         fm.selectOne(fm.items[next].name);
       }
+      return;
+    }
+    // Type-ahead: press a letter/digit to jump to matching item
+    if (key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const matched = fm.selectByKey(key);
+      if (matched) e.preventDefault();
     }
   }
 
