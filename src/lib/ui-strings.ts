@@ -126,6 +126,10 @@ export interface UiStrings {
   findNext: string;
   replaceBtn: string;
   replaceAll: string;
+  // General Settings window
+  generalSettings: string;
+  labelPath: string;
+  pathHint: string;
 }
 
 const en: UiStrings = {
@@ -236,6 +240,9 @@ const en: UiStrings = {
   confirmMultipleDelete: 'Confirm Multiple File Delete',
   findTitle: 'Find', replaceTitle: 'Replace', findWhat: 'Find what:', replaceWith: 'Replace with:',
   findNext: 'Find Next', replaceBtn: 'Replace', replaceAll: 'Replace All',
+  generalSettings: 'General Settings',
+  labelPath: 'PATH (one directory per line)',
+  pathHint: 'Search path for executables and DLLs',
 };
 
 const fr: UiStrings = {
@@ -346,6 +353,9 @@ const fr: UiStrings = {
   confirmMultipleDelete: 'Confirmer la suppression',
   findTitle: 'Rechercher', replaceTitle: 'Remplacer', findWhat: 'Rechercher :', replaceWith: 'Remplacer par :',
   findNext: 'Suivant', replaceBtn: 'Remplacer', replaceAll: 'Remplacer tout',
+  generalSettings: 'Param\u00e8tres g\u00e9n\u00e9raux',
+  labelPath: 'PATH (un r\u00e9pertoire par ligne)',
+  pathHint: 'Chemin de recherche pour les ex\u00e9cutables et DLL',
 };
 
 const de: UiStrings = {
@@ -456,6 +466,9 @@ const de: UiStrings = {
   confirmMultipleDelete: 'L\u00f6schen mehrerer Dateien best\u00e4tigen',
   findTitle: 'Suchen', replaceTitle: 'Ersetzen', findWhat: 'Suchen nach:', replaceWith: 'Ersetzen durch:',
   findNext: 'Weitersuchen', replaceBtn: 'Ersetzen', replaceAll: 'Alle ersetzen',
+  generalSettings: 'Allgemeine Einstellungen',
+  labelPath: 'PATH (ein Verzeichnis pro Zeile)',
+  pathHint: 'Suchpfad f\u00fcr ausf\u00fchrbare Dateien und DLLs',
 };
 
 const es: UiStrings = {
@@ -566,6 +579,9 @@ const es: UiStrings = {
   confirmMultipleDelete: 'Confirmar eliminaci\u00f3n m\u00faltiple',
   findTitle: 'Buscar', replaceTitle: 'Reemplazar', findWhat: 'Buscar:', replaceWith: 'Reemplazar por:',
   findNext: 'Buscar siguiente', replaceBtn: 'Reemplazar', replaceAll: 'Reemplazar todo',
+  generalSettings: 'Configuraci\u00f3n general',
+  labelPath: 'PATH (un directorio por l\u00ednea)',
+  pathHint: 'Ruta de b\u00fasqueda para ejecutables y DLL',
 };
 
 const ja: UiStrings = {
@@ -676,6 +692,9 @@ const ja: UiStrings = {
   confirmMultipleDelete: '\u8907\u6570\u30d5\u30a1\u30a4\u30eb\u306e\u524a\u9664\u306e\u78ba\u8a8d',
   findTitle: '\u691c\u7d22', replaceTitle: '\u7f6e\u63db', findWhat: '\u691c\u7d22\u3059\u308b\u6587\u5b57\u5217:', replaceWith: '\u7f6e\u63db\u5f8c\u306e\u6587\u5b57\u5217:',
   findNext: '\u6b21\u3092\u691c\u7d22', replaceBtn: '\u7f6e\u63db', replaceAll: '\u3059\u3079\u3066\u7f6e\u63db',
+  generalSettings: '\u4e00\u822c\u8a2d\u5b9a',
+  labelPath: 'PATH\uff081\u884c\u306b1\u30c7\u30a3\u30ec\u30af\u30c8\u30ea\uff09',
+  pathHint: '\u5b9f\u884c\u30d5\u30a1\u30a4\u30eb\u3068DLL\u306e\u691c\u7d22\u30d1\u30b9',
 };
 
 const zhCN: UiStrings = {
@@ -786,6 +805,9 @@ const zhCN: UiStrings = {
   confirmMultipleDelete: '\u786e\u8ba4\u5220\u9664\u591a\u4e2a\u6587\u4ef6',
   findTitle: '\u67e5\u627e', replaceTitle: '\u66ff\u6362', findWhat: '\u67e5\u627e\u5185\u5bb9:', replaceWith: '\u66ff\u6362\u4e3a:',
   findNext: '\u67e5\u627e\u4e0b\u4e00\u4e2a', replaceBtn: '\u66ff\u6362', replaceAll: '\u5168\u90e8\u66ff\u6362',
+  generalSettings: '\u5e38\u89c4\u8bbe\u7f6e',
+  labelPath: 'PATH\uff08\u6bcf\u884c\u4e00\u4e2a\u76ee\u5f55\uff09',
+  pathHint: '\u53ef\u6267\u884c\u6587\u4ef6\u548cDLL\u7684\u641c\u7d22\u8def\u5f84',
 };
 
 const ptBR: UiStrings = {
@@ -896,6 +918,9 @@ const ptBR: UiStrings = {
   confirmMultipleDelete: 'Confirmar exclus\u00e3o m\u00faltipla',
   findTitle: 'Localizar', replaceTitle: 'Substituir', findWhat: 'Localizar:', replaceWith: 'Substituir por:',
   findNext: 'Localizar pr\u00f3xima', replaceBtn: 'Substituir', replaceAll: 'Substituir tudo',
+  generalSettings: 'Configura\u00e7\u00f5es gerais',
+  labelPath: 'PATH (um diret\u00f3rio por linha)',
+  pathHint: 'Caminho de pesquisa para execut\u00e1veis e DLLs',
 };
 
 const it: UiStrings = {
@@ -1006,6 +1031,9 @@ const it: UiStrings = {
   confirmMultipleDelete: 'Conferma eliminazione multipla',
   findTitle: 'Trova', replaceTitle: 'Sostituisci', findWhat: 'Trova:', replaceWith: 'Sostituisci con:',
   findNext: 'Trova successivo', replaceBtn: 'Sostituisci', replaceAll: 'Sostituisci tutto',
+  generalSettings: 'Impostazioni generali',
+  labelPath: 'PATH (una directory per riga)',
+  pathHint: 'Percorso di ricerca per eseguibili e DLL',
 };
 
 const pl: UiStrings = {
@@ -1116,6 +1144,9 @@ const pl: UiStrings = {
   confirmMultipleDelete: 'Potwierd\u017a usuni\u0119cie wielu plik\u00f3w',
   findTitle: 'Znajd\u017a', replaceTitle: 'Zamie\u0144', findWhat: 'Znajd\u017a:', replaceWith: 'Zamie\u0144 na:',
   findNext: 'Znajd\u017a nast\u0119pny', replaceBtn: 'Zamie\u0144', replaceAll: 'Zamie\u0144 wszystko',
+  generalSettings: 'Ustawienia og\u00f3lne',
+  labelPath: 'PATH (jeden katalog na lini\u0119)',
+  pathHint: '\u015acie\u017cka wyszukiwania plik\u00f3w wykonywalnych i DLL',
 };
 
 const ko: UiStrings = {
@@ -1226,6 +1257,9 @@ const ko: UiStrings = {
   confirmMultipleDelete: '\uc5ec\ub7ec \ud30c\uc77c \uc0ad\uc81c \ud655\uc778',
   findTitle: '\ucc3e\uae30', replaceTitle: '\ubc14\uafb8\uae30', findWhat: '\ucc3e\uc744 \ub0b4\uc6a9:', replaceWith: '\ubc14\uafb8 \ub0b4\uc6a9:',
   findNext: '\ub2e4\uc74c \ucc3e\uae30', replaceBtn: '\ubc14\uafb8\uae30', replaceAll: '\ubaa8\ub450 \ubc14\uafb8\uae30',
+  generalSettings: '\uc77c\ubc18 \uc124\uc815',
+  labelPath: 'PATH (\ud55c \uc904\uc5d0 \ud558\ub098\uc758 \ub514\ub809\ud1a0\ub9ac)',
+  pathHint: '\uc2e4\ud589 \ud30c\uc77c \ubc0f DLL \uac80\uc0c9 \uacbd\ub85c',
 };
 
 // Map LCID → strings. Lookup uses exact match then primary language fallback.
