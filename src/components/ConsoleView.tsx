@@ -3,6 +3,8 @@ import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
 import { injectDosMouseEvent, drawGfxMouseCursor } from '../lib/emu/dos/mouse';
+import { VGA_FONT_8X8_ROM } from '../lib/emu/dos/vga-font-data';
+import { VGA_FONT_8X16_ROM } from '../lib/emu/dos/vga-font-16';
 
 // Default Windows console 16-color palette (fallback for Win32 programs)
 const DEFAULT_CONSOLE_COLORS = [
@@ -28,13 +30,108 @@ function getVgaConsoleColors(emu: Emulator): string[] {
 
 const TEXT_FONT = '"Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace';
 
-/** Render text mode console buffer to a canvas (artifact-free alternative to DOM). */
-function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, ROWS: number) {
+/** Parse VGA palette into [r,g,b] tuples for ImageData rendering. */
+function getVgaConsoleColorsRGB(emu: Emulator): number[][] {
+  const vga = emu.vga;
+  const colors: number[][] = [];
+  for (let i = 0; i < 16; i++) {
+    const dacIndex = vga.atcRegs[i] & 0xFF;
+    colors.push([
+      Math.round(vga.palette[dacIndex * 3 + 0] * 255 / 63),
+      Math.round(vga.palette[dacIndex * 3 + 1] * 255 / 63),
+      Math.round(vga.palette[dacIndex * 3 + 2] * 255 / 63),
+    ]);
+  }
+  return colors;
+}
+
+const DEFAULT_CONSOLE_COLORS_RGB = [
+  [0,0,0], [0,0,128], [0,128,0], [0,128,128],
+  [128,0,0], [128,0,128], [128,128,0], [192,192,192],
+  [128,128,128], [0,0,255], [0,255,0], [0,255,255],
+  [255,0,0], [255,0,255], [255,255,0], [255,255,255],
+];
+
+/** Render DOS text mode using VGA bitmap fonts (pixel-perfect). */
+function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, ROWS: number) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  const COLORS = emu.isDOS ? getVgaConsoleColors(emu) : DEFAULT_CONSOLE_COLORS;
-  const lineH = emu.charHeight === 8 ? 8 : 16;
+  const charH = emu.charHeight === 8 ? 8 : 16;
+  const fontData = charH === 8 ? VGA_FONT_8X8_ROM : VGA_FONT_8X16_ROM;
+  const COLORS = getVgaConsoleColorsRGB(emu);
+  const CHAR_W = 8;
+  const w = COLS * CHAR_W;
+  const h = ROWS * charH;
+
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+
+  const imgData = ctx.createImageData(w, h);
+  const pixels = imgData.data;
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const idx = row * COLS + col;
+      const cell = emu.consoleBuffer[idx];
+      const ch = cell ? cell.char : 0x20;
+      const fg = cell ? (cell.attr & 0x0F) : 7;
+      const bg = cell ? ((cell.attr >> 4) & 0x0F) : 0;
+      const fgColor = COLORS[fg];
+      const bgColor = COLORS[bg];
+      const fontOffset = (ch & 0xFF) * charH;
+      const px = col * CHAR_W;
+      const py = row * charH;
+
+      for (let y = 0; y < charH; y++) {
+        const bits = fontData[fontOffset + y];
+        const rowBase = ((py + y) * w + px) * 4;
+        for (let x = 0; x < 8; x++) {
+          const isSet = (bits >> (7 - x)) & 1;
+          const color = isSet ? fgColor : bgColor;
+          const pixIdx = rowBase + x * 4;
+          pixels[pixIdx] = color[0];
+          pixels[pixIdx + 1] = color[1];
+          pixels[pixIdx + 2] = color[2];
+          pixels[pixIdx + 3] = 255;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+
+  // Cursor
+  const cursorStart = emu.vga.crtcRegs[0x0A] & 0x1F;
+  const cursorEnd = emu.vga.crtcRegs[0x0B] & 0x1F;
+  const cursorOff = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
+  const blink = Math.floor(Date.now() / 500) % 2 === 0;
+  if (blink && !cursorOff && cursorStart <= cursorEnd) {
+    const cx = emu.consoleCursorX * CHAR_W;
+    const cy = emu.consoleCursorY * charH;
+    const curCell = emu.consoleBuffer[emu.consoleCursorY * COLS + emu.consoleCursorX];
+    const curFg = curCell ? (curCell.attr & 0x0F) : 7;
+    const c = COLORS[curFg === 0 ? 7 : curFg];
+    ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+    ctx.fillRect(cx, cy + cursorStart, CHAR_W, cursorEnd - cursorStart + 1);
+  }
+}
+
+/** Render Win32 console text mode using browser fonts. */
+function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, ROWS: number) {
+  // DOS mode: use pixel-perfect bitmap font rendering
+  if (emu.isDOS) {
+    drawTextModeBitmap(canvas, emu, COLS, ROWS);
+    return;
+  }
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const COLORS = DEFAULT_CONSOLE_COLORS;
+  const lineH = 16;
   const font = `${lineH}px ${TEXT_FONT}`;
   ctx.font = font;
   const charW = ctx.measureText('0').width;
@@ -71,7 +168,7 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
 
       // Character
       const c = (cell && cell.char > 0x20)
-        ? (emu.isDOS && cell.char <= 0xFF ? cp437ToChar(cell.char) : String.fromCharCode(cell.char))
+        ? String.fromCharCode(cell.char)
         : '';
       if (c) {
         ctx.fillStyle = COLORS[fg];
@@ -695,7 +792,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
     const chWidth = span.getBoundingClientRect().width;
     document.body.removeChild(span);
     if (chWidth > 0) setScaleX(640 / (COLS * chWidth));
-  }, [COLS, emu.isGraphicsMode]);
+  }, [COLS, emu.isGraphicsMode, lineHeight]);
 
   // Canvas text mode: draw after each render
   useLayoutEffect(() => {
@@ -750,7 +847,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             padding: 0,
             background: '#000',
             color: '#C0C0C0',
-            font: `14px/${lineHeight}px "Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace`,
+            font: `${lineHeight}px/${lineHeight}px "Cascadia Mono", "Menlo", "Consolas", "Courier New", monospace`,
             cursor: 'text',
             overflow: 'hidden',
             userSelect: 'text',
