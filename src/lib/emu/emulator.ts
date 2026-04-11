@@ -352,9 +352,10 @@ export class Emulator {
   // EMS state
   _emsHandles?: Map<number, { pages: number; baseAddr: number }>;
   _emsNextHandle = 1;
-  _emsNextAddr = 0x200000; // 2MB start
+  _emsNextAddr = 0x1200000; // 18MB start (above XMS max of ~17MB)
   _emsMapping?: number[];  // 4 physical page mappings
   _emsSavedMaps?: Map<number, number[]>;  // saved page map states (AH=47/48)
+  _emsHandleNames?: Map<number, string>; // EMS 4.0 handle names (AH=53)
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;
   _dosHwKeyReadThisTick = false;
