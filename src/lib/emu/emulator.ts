@@ -1532,6 +1532,16 @@ export class Emulator {
       }
       case 0x64: // Keyboard controller status
         return this._ioPorts.get(0x64) ?? 0;
+      case 0x71: { // CMOS data register — read selected register
+        const reg = this._cmosAddr;
+        // CMOS 0x17/0x18 (and compat 0x30/0x31): extended memory between 1MB and 16MB, max 15360 KB
+        const extKB = Math.min(this._xmsTotalKB, 15360);
+        if (reg === 0x17 || reg === 0x30) return extKB & 0xFF;
+        if (reg === 0x18 || reg === 0x31) return (extKB >> 8) & 0xFF;
+        return this._cmosRegs[reg] ?? 0;
+      }
+      case 0x92: // System Control Port A — bit 1 = A20 state
+        return this.memory.a20Mask === 0xFFFFFFFF ? 0x02 : 0x00;
       default:
         return this._ioPorts.get(port) ?? 0xFF;
     }
@@ -1673,6 +1683,40 @@ export class Emulator {
         }
         break;
       }
+      case 0x60: // Keyboard controller data port
+        // Check if 8042 is expecting data for a "write output port" command (0xD1)
+        if (this._kbdCmd === 0xD1) {
+          // Bit 1 of the 8042 output port controls A20
+          this.memory.a20Mask = (value & 0x02) ? 0xFFFFFFFF : 0xFFFFF;
+          this._kbdCmd = 0;
+          break;
+        }
+        this._ioPorts.set(port, value);
+        break;
+      case 0x64: // Keyboard controller command port (write = command, read = status)
+        // Do NOT store the command in _ioPorts — port 0x64 read returns STATUS, not command
+        if (value === 0xD1) {
+          // "Write Output Port" — next byte to port 0x60 sets A20
+          this._kbdCmd = 0xD1;
+        } else if (value === 0xDF) {
+          // Enable A20 (shortcut used by some programs)
+          this.memory.a20Mask = 0xFFFFFFFF;
+        } else if (value === 0xDD) {
+          // Disable A20 (shortcut)
+          this.memory.a20Mask = 0xFFFFF;
+        }
+        break;
+      case 0x70: // CMOS address register
+        this._cmosAddr = value & 0x7F; // Bit 7 = NMI mask (ignore)
+        break;
+      case 0x71: // CMOS data register — write selected register
+        this._cmosRegs[this._cmosAddr] = value;
+        break;
+      case 0x92: // System Control Port A (Fast A20 gate)
+        if (value & 0x02) this.memory.a20Mask = 0xFFFFFFFF;
+        else this.memory.a20Mask = 0xFFFFF;
+        this._ioPorts.set(port, value & ~0x01); // Bit 0 is "fast reset" — ignore it
+        break;
       default:
         this._ioPorts.set(port, value);
         // Update PC speaker when port 0x61 changes
@@ -1761,6 +1805,9 @@ export class Emulator {
   _kbdDataReadsLeft = 0;
   _kbdReplayPending = false;
   _kbdReplayValue = 0xFF;
+  _kbdCmd = 0; // pending 8042 command (0xD1 = write output port for A20 control)
+  _cmosAddr = 0;                  // CMOS selected register (written via port 0x70)
+  _cmosRegs: number[] = new Array(128).fill(0); // CMOS RAM (128 registers)
   _int09ReturnCS = -1; // CS of return address for active INT 09h; -1 = not active
   _int09ReturnIP = 0;
 
