@@ -15,6 +15,11 @@ export const VCPI_PM_INT = 0xFA;
 // Layout matches DOSBox's EMM386 implementation.
 const VCPI_PRIVATE_AREA = 0x3E0000; // 16KB area in extended memory
 
+// VCPI page allocator range — 4KB pages between 1.0625 MB and 16 MB.
+// Stays below `_emsNextAddr` (18 MB) so VCPI pages cannot collide with EMS storage.
+const VCPI_FIRST_PAGE = 0x110;  // 1.0625 MB
+const VCPI_LAST_PAGE = 0xFFF;   // 16 MB - 1 page
+
 /** Set up the VCPI private area (GDT, LDT, IDT, TSS) like DOSBox. */
 function setupVcpiPrivateArea(mem: { writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): void {
   const P = VCPI_PRIVATE_AREA;
@@ -516,8 +521,8 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.mem.writeU8(vcpiPmLinear, 0xCD);
           cpu.mem.writeU8(vcpiPmLinear + 1, VCPI_PM_INT);
           cpu.mem.writeU8(vcpiPmLinear + 2, 0xCB); // RETF
-          // EBX = offset within the VCPI code segment (16-bit)
-          cpu.reg[EBX] = VCPI_PM_OFF & 0xFFFF;
+          // BX = offset within the VCPI code segment (16-bit), preserve upper EBX
+          cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | (VCPI_PM_OFF & 0xFFFF);
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
         }
@@ -525,14 +530,21 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.reg[EDX] = 0x00FFFFFF; // 16MB
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
-        case 0x03: // VCPI Get Number of Free Pages
-          cpu.reg[EDX] = 4096; // 16MB of free pages
+        case 0x03: { // VCPI Get Number of Free Pages
+          const next = emu._vcpiNextPage ?? VCPI_FIRST_PAGE;
+          const free = next > VCPI_LAST_PAGE ? 0 : (VCPI_LAST_PAGE + 1 - next);
+          cpu.reg[EDX] = free >>> 0;
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
+        }
         case 0x04: { // VCPI Allocate one Page
-          if (!emu._vcpiNextPage) emu._vcpiNextPage = 0x110; // start at 1.1MB
+          if (!emu._vcpiNextPage) emu._vcpiNextPage = VCPI_FIRST_PAGE;
+          if (emu._vcpiNextPage > VCPI_LAST_PAGE) {
+            cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8800; // no free pages
+            break;
+          }
           const page = emu._vcpiNextPage++;
-          cpu.reg[EDX] = page << 12; // physical address
+          cpu.reg[EDX] = (page << 12) >>> 0; // physical address
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
         }
@@ -544,6 +556,26 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.reg[EDX] = (cpu.getReg16(ECX) << 12) >>> 0;
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
+        case 0x07: // VCPI Read CR0 → EBX = current CR0
+          cpu.reg[EBX] = (emu._cr0 ?? 0) >>> 0;
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        case 0x08: { // VCPI Read Debug Registers → ES:DI gets 8 DWORDs (DR0-3, DR6, DR7, 0, 0)
+          const esBase = cpu.segBase(cpu.es);
+          const di = cpu.getReg16(EDI);
+          const drs = emu._vcpiDebugRegs ?? [0, 0, 0, 0, 0, 0, 0, 0];
+          for (let i = 0; i < 8; i++) cpu.mem.writeU32(esBase + di + i * 4, drs[i] >>> 0);
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
+        case 0x09: { // VCPI Set Debug Registers → ES:DI provides 8 DWORDs
+          const esBase = cpu.segBase(cpu.es);
+          const di = cpu.getReg16(EDI);
+          if (!emu._vcpiDebugRegs) emu._vcpiDebugRegs = [0, 0, 0, 0, 0, 0, 0, 0];
+          for (let i = 0; i < 8; i++) emu._vcpiDebugRegs[i] = cpu.mem.readU32(esBase + di + i * 4) >>> 0;
+          cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+          break;
+        }
         case 0x0A: // VCPI Get PIC Vector Mappings
           cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x08; // primary PIC base
           cpu.reg[ECX] = (cpu.reg[ECX] & 0xFFFF0000) | 0x70; // secondary PIC base
