@@ -211,8 +211,8 @@ export class Memory {
   /** Check if flat mode is active */
   get isFlat(): boolean { return this._flat !== null; }
 
-  // A20 gate: when disabled (default for DOS), bit 20 of addresses is masked to 0,
-  // wrapping addresses above 1MB back to 0. EXEPACK and other 8086-era programs rely on this.
+  // A20 gate: when disabled (default for DOS), addresses wrap at 1MB.
+  // EXEPACK and other 8086-era programs rely on this wrap behavior.
   a20Mask = 0xFFFFFFFF; // 0xFFFFF = A20 off (20-bit wrap), 0xFFFFFFFF = A20 on
 
   // VGA planar memory hook: when set, intercepts reads/writes to A0000-AFFFF

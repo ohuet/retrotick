@@ -39,6 +39,7 @@ import { registerUxtheme } from './win32/uxtheme';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
 import { setupDpmiStub } from './dos/dpmi';
+import { setupEmsDeviceHeader, EMS_DEVICE_SEG } from './dos/ems';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
 import { Thread } from './thread';
@@ -1226,6 +1227,16 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
 
   if (emu.dosEnableXms) setupXmsStub(emu.memory);
   if (emu.dosEnableDpmi) setupDpmiStub(emu.memory);
+
+  // EMS device driver header at E000:0000 so programs can detect EMS
+  // by checking the device name "EMMXXXX0" at INT 67h segment:000Ah.
+  setupEmsDeviceHeader(emu.memory);
+  // Override INT 67h vector to point to E000 segment (after the IVT loop)
+  const emsVec = (EMS_DEVICE_SEG << 16) | 0x0000;
+  emu.memory.writeU16(0x67 * 4, 0x0000);
+  emu.memory.writeU16(0x67 * 4 + 2, EMS_DEVICE_SEG);
+  emu._dosBiosDefaultVectors.set(0x67, emsVec);
+  emu._dosIntVectors.set(0x67, emsVec);
 
   // Write VGA 8x8 ROM font to F000:1000 (2048 bytes, 256 chars × 8 bytes)
   for (let i = 0; i < VGA_FONT_8X8_ROM.length; i++) {

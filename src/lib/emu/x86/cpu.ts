@@ -115,14 +115,16 @@ export class CPU {
       if (this._unrealMode) return 0;
       return (sel * 16) >>> 0;
     }
+    // Protected mode with a real GDT (DOS extenders): always re-read the descriptor.
+    // Programs can update GDT entries and reload the segment register to switch windows
+    // (e.g. memory testers scanning extended memory 64KB at a time), so caching is unsafe.
+    if (this.emu?._gdtBase) {
+      const base = this.loadGdtDescriptorBase(sel);
+      if (base !== undefined) return base;
+    }
+    // No GDT (Win16): use the pre-populated selector→base map.
     const cached = this.segBases.get(sel);
     if (cached !== undefined) return cached;
-    // Look up in GDT if available (PMODEW protected mode)
-    const base = this.loadGdtDescriptorBase(sel);
-    if (base !== undefined) {
-      this.segBases.set(sel, base);
-      return base;
-    }
     // LDT-style selector: strip RPL/TI bits (low 3 bits = __AHSHIFT)
     // to find the canonical selector assigned by the NE loader
     const canonical = sel >>> 3;
