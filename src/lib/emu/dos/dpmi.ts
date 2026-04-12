@@ -236,8 +236,10 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
   const ax = cpu.getReg16(EAX);
 
   if (!emu._dpmiState) {
-    cpu.setFlag(0x001, true); // CF=1 error
-    return true;
+    // VCPI mode (DOS4GW is itself the DPMI host) — don't claim INT 31h.
+    // Returning false lets dispatchException fall through to the PM IDT,
+    // so DOS4GW's own INT 31h handler runs.
+    return false;
   }
 
   const st = emu._dpmiState;
