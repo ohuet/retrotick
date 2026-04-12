@@ -56,6 +56,28 @@ export function exec0F(
       break;
     }
 
+    // LSS (0F B2) / LFS (0F B4) / LGS (0F B5) — load far pointer
+    // mem16:16 (opSize=16) or mem16:32 (opSize=32) → SS/FS/GS:reg
+    case 0xB2: case 0xB4: case 0xB5: {
+      const d = cpu.decodeModRM(opSize);
+      if (d.isReg) break; // invalid encoding
+      let offset: number;
+      let selector: number;
+      if (opSize === 16) {
+        offset = d.val & 0xFFFF;
+        selector = cpu.mem.readU16((d.addr + 2) >>> 0);
+        cpu.setReg16(d.regField, offset);
+      } else {
+        offset = d.val | 0;
+        selector = cpu.mem.readU16((d.addr + 4) >>> 0);
+        cpu.reg[d.regField] = offset;
+      }
+      if (op2 === 0xB2) cpu.ss = selector;
+      else if (op2 === 0xB4) cpu.fs = selector;
+      else cpu.gs = selector;
+      break;
+    }
+
     // MOVZX r32, r/m8
     case 0xB6: {
       const d = cpu.decodeModRM(8);

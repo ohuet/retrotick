@@ -873,10 +873,20 @@ export function cpuStep(cpu: CPU): void {
       break;
 
     // POPF/POPFD
-    case 0x9D:
-      if (opSize === 16) cpu.setFlags(cpu.pop16() | 0x0002);
-      else cpu.setFlags(cpu.pop32() | 0x0002);
+    // In real mode we simulate V86 behavior (EMM386/VCPI has put DOS programs
+    // in V86): IOPL (bits 12-13), NT (bit 14) and VM (bit 17) are preserved —
+    // POPF cannot write them. DOS4GW's VCPI init uses this to distinguish pure
+    // real mode (POPF modifies IOPL → fail) from V86 mode (IOPL stays → OK).
+    case 0x9D: {
+      let popped = opSize === 16 ? cpu.pop16() : cpu.pop32();
+      if (cpu.realMode) {
+        const preserve = 0x27000; // IOPL (0x3000) | NT (0x4000) | VM (0x20000)
+        const cur = cpu.getFlags();
+        popped = (popped & ~preserve) | (cur & preserve);
+      }
+      cpu.setFlags(popped | 0x0002);
       break;
+    }
 
     // SAHF
     case 0x9E:

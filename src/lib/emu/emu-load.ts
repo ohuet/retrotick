@@ -1062,7 +1062,10 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.cpu.ss = mz.entrySS;
   emu.cpu.eip = (emu.cpu.segBase(mz.entryCS)) + mz.entryIP;
   emu.cpu.reg[4] = mz.entrySP; // SP
-  emu.cpu.setFlags(emu.cpu.getFlags() | 0x0200); // IF=1: enable hardware interrupts
+  // IF=1: enable hardware interrupts; IOPL=3: simulate V86 privilege level so DOS
+  // programs run with I/O access (matching real DOS+EMM386/VCPI environment where
+  // the program runs as a V86 task with IOPL=3).
+  emu.cpu.setFlags(emu.cpu.getFlags() | 0x0200 | 0x3000);
 
   // Set up video memory area (B800:0000)
   for (let i = 0; i < emu.screenCols * emu.screenRows; i++) {
