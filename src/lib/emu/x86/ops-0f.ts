@@ -176,7 +176,10 @@ export function exec0F(
           const d = cpu.decodeModRM(opSize);
           if (!d.isReg && cpu.emu) {
             cpu.emu._gdtLimit = cpu.mem.readU16(d.addr);
-            cpu.emu._gdtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+            // 16-bit operand size: base is 24 bits (high byte reserved on 286)
+            // 32-bit operand size: base is 32 bits
+            const baseMask = opSize === 16 ? 0x00FFFFFF : 0xFFFFFFFF;
+            cpu.emu._gdtBase = cpu.mem.readU32((d.addr + 2) >>> 0) & baseMask;
           }
           break;
         }
@@ -184,7 +187,8 @@ export function exec0F(
           const d = cpu.decodeModRM(opSize);
           if (!d.isReg && cpu.emu) {
             cpu.emu._idtLimit = cpu.mem.readU16(d.addr);
-            cpu.emu._idtBase = cpu.mem.readU32((d.addr + 2) >>> 0);
+            const baseMask = opSize === 16 ? 0x00FFFFFF : 0xFFFFFFFF;
+            cpu.emu._idtBase = cpu.mem.readU32((d.addr + 2) >>> 0) & baseMask;
           }
           break;
         }

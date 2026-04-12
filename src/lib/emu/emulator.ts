@@ -1534,10 +1534,14 @@ export class Emulator {
         return this._ioPorts.get(0x64) ?? 0;
       case 0x71: { // CMOS data register — read selected register
         const reg = this._cmosAddr;
-        // CMOS 0x17/0x18 (and compat 0x30/0x31): extended memory between 1MB and 16MB, max 15360 KB
-        const extKB = Math.min(this._xmsTotalKB, 15360);
+        // CMOS 0x17/0x18 (and compat 0x30/0x31): extended memory in KB above 1MB.
+        // Cap at 0x3C00 (15 MB) — max addressable via these 16-bit registers in AT BIOS.
+        const extKB = Math.min(this._xmsTotalKB, 0x3C00);
         if (reg === 0x17 || reg === 0x30) return extKB & 0xFF;
         if (reg === 0x18 || reg === 0x31) return (extKB >> 8) & 0xFF;
+        // CMOS 0x15/0x16: base memory size in KB (typically 640 KB = 0x280)
+        if (reg === 0x15) return 640 & 0xFF;
+        if (reg === 0x16) return (640 >> 8) & 0xFF;
         return this._cmosRegs[reg] ?? 0;
       }
       case 0x92: // System Control Port A — bit 1 = A20 state
