@@ -123,6 +123,14 @@ let _instrRingIdx = 0;
 let _instrRingDumped = false;
 
 export function cpuStep(cpu: CPU): void {
+  // Wrap IP within the current 16-bit code segment (real mode + 16-bit PM segments).
+  // Sequential fetches (and many opcodes) update EIP without wrapping; without this
+  // step, a long linear code stretch in 16-bit mode walks past the segment limit
+  // and starts executing whatever is at the next paragraph.
+  if (!cpu.use32) {
+    const csBase16 = cpu.realMode ? (cpu.cs * 16) >>> 0 : cpu.segBase(cpu.cs);
+    cpu.eip = (csBase16 + ((cpu.eip - csBase16) & 0xFFFF)) >>> 0;
+  }
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
   // Per-instruction trace ring buffer (disabled for perf)
   if (false && cpu.emu && cpu.emu.cpuSteps > 90000000) {

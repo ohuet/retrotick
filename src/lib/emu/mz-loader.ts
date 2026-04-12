@@ -48,9 +48,18 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   const progSeg = LOAD_SEG + 0x10;
   const progLinear = progSeg * 16;
 
-  // Total program paragraphs
+  // Total program paragraphs.
+  // Real DOS gives the program min(maxalloc, available) — NOT minalloc.
+  // The Watcom DOS extender stub (DOS4GW etc.) relies on receiving all
+  // conventional memory, then shrinks itself with AH=4Ah before EXEC'ing
+  // its child via AH=4Bh. If we only allocate minalloc, the stub has no
+  // memory left to alloc the child and crashes (panic loop at INT 3).
   const imageParas = Math.ceil(imageSize / 16);
-  const totalParas = 0x10 + imageParas + mzHeader.e_minalloc;
+  const baseParas = 0x10 + imageParas; // PSP (16 paras) + image
+  const maxAvailable = topSeg - LOAD_SEG - 1; // leave 1 para for trailing free MCB
+  const minNeeded = baseParas + mzHeader.e_minalloc;
+  const desired = baseParas + mzHeader.e_maxalloc; // may be huge if maxalloc=0xFFFF
+  const totalParas = Math.max(minNeeded, Math.min(desired, maxAvailable));
 
   // --- MCB chain ---
   // MCB 1: environment block

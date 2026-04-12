@@ -286,6 +286,12 @@ export function exec0F(
       break;
     }
 
+    // CLTS (0F 06) — Clear Task-Switched flag in CR0 (privileged)
+    // PM init code uses this before touching the FPU so #NM doesn't fire.
+    case 0x06:
+      if (cpu.emu) cpu.emu._cr0 = (cpu.emu._cr0 & ~0x08) >>> 0;
+      break;
+
     // INVD (0F 08) — Invalidate caches (privileged, NOP in emulator)
     case 0x08:
       break;

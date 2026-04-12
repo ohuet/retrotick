@@ -491,26 +491,50 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       }
       const oldParas = cpu.mem.readU16(mcbLinear + 3);
 
-      // Check bounds
-      if (blockSeg + newParas > topOfMem) {
+      // Compute the maximum size we can grow to: walk forward absorbing
+      // adjacent FREE blocks (real DOS merges contiguous free space).
+      // Track whether the chain we absorbed ends at the very last MCB:
+      // if so, our resized block (or its trailing free remainder) inherits 'Z'.
+      let maxParas = oldParas;
+      let chainEndedAtLast = mcbType === 0x5A;
+      if (mcbType === 0x4D) {
+        let scanSeg = blockSeg + oldParas;
+        for (let it = 0; it < 1000; it++) {
+          if (scanSeg >= topOfMem) break;
+          const sl = scanSeg * 16;
+          const st = cpu.mem.readU8(sl);
+          const so = cpu.mem.readU16(sl + 1);
+          const ss = cpu.mem.readU16(sl + 3);
+          if (st !== 0x4D && st !== 0x5A) break;
+          if (so !== 0) break; // next block is owned — can't grow into it
+          maxParas += ss + 1; // absorb this free block + its MCB header
+          if (st === 0x5A) { chainEndedAtLast = true; break; }
+          scanSeg += ss + 1;
+        }
+      }
+
+      if (newParas > maxParas) {
         cpu.setFlag(CF, true);
         cpu.setReg16(EAX, 8); // insufficient memory
-        cpu.setReg16(EBX, topOfMem - blockSeg);
+        cpu.setReg16(EBX, maxParas);
         break;
       }
-      // Update MCB size
+
       cpu.mem.writeU16(mcbLinear + 3, newParas);
-      // Create or update the free block after the resized block
-      const freeSeg = blockSeg + newParas;
-      const freeLinear = freeSeg * 16;
-      const freeParas = topOfMem - freeSeg - 1;
-      if (freeParas > 0) {
-        cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow
-        cpu.mem.writeU8(freeLinear, 0x5A); // last block
+
+      if (newParas < maxParas) {
+        // Shrunk (or absorbed less than the max) — create a free MCB after.
+        // The new free block inherits 'Z' if the absorbed chain ended with 'Z'.
+        const freeSeg = blockSeg + newParas;
+        const freeLinear = freeSeg * 16;
+        const freeParas = maxParas - newParas - 1;
+        cpu.mem.writeU8(mcbLinear, 0x4D); // more blocks follow our resized block
+        cpu.mem.writeU8(freeLinear, chainEndedAtLast ? 0x5A : 0x4D);
         cpu.mem.writeU16(freeLinear + 1, 0x0000); // free
         cpu.mem.writeU16(freeLinear + 3, freeParas);
       } else {
-        cpu.mem.writeU8(mcbLinear, 0x5A); // this is now last block
+        // Block exactly fills the absorbed chain.
+        cpu.mem.writeU8(mcbLinear, chainEndedAtLast ? 0x5A : 0x4D);
       }
 
       cpu.setFlag(CF, false);
