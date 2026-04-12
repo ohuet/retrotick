@@ -7,7 +7,7 @@ const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6, EDI = 7;
 const CF = 0x001;
 
 // --- INT 15h: System Services ---
-export function handleInt15(cpu: CPU, _emu: Emulator): boolean {
+export function handleInt15(cpu: CPU, emu: Emulator): boolean {
   const ah = (cpu.reg[EAX] >> 8) & 0xFF;
   switch (ah) {
     case 0xC0: { // Get system configuration table
@@ -22,6 +22,40 @@ export function handleInt15(cpu: CPU, _emu: Emulator): boolean {
     case 0x4F: { // Keyboard intercept (called by BIOS INT 09h on AT-class machines)
       // Default BIOS behavior with no installed filter: continue (CF=0).
       // Custom INT 15h handlers are dispatched by vector chaining in handleDosInt.
+      cpu.setFlag(CF, false);
+      break;
+    }
+    case 0x87: { // Block Move (extended memory copy via 286+ protected mode)
+      // CX = number of WORDS to move
+      // ES:SI -> GDT with 6 descriptors (8 bytes each):
+      //   [0..7]   dummy (zeros)
+      //   [8..15]  dummy (zeros, used as GDT entry for itself)
+      //   [16..23] source descriptor
+      //   [24..31] destination descriptor
+      //   [32..39] BIOS code segment (dummy)
+      //   [40..47] BIOS stack segment (dummy)
+      // Each descriptor (8 bytes):
+      //   +0  WORD  segment limit (low 16 bits)
+      //   +2  3 bytes  base address (24 bits)
+      //   +5  BYTE  access rights
+      //   +6  BYTE  reserved (286) / attr+limit high (386)
+      //   +7  BYTE  base address [31:24] (386 only)
+      const esBase = cpu.segBase(cpu.es);
+      const si = cpu.getReg16(ESI);
+      const gdt = esBase + si;
+      const readDescBase = (off: number): number => {
+        const low24 = cpu.mem.readU8(gdt + off + 2)
+                    | (cpu.mem.readU8(gdt + off + 3) << 8)
+                    | (cpu.mem.readU8(gdt + off + 4) << 16);
+        const high8 = cpu.mem.readU8(gdt + off + 7);
+        return (low24 | (high8 << 24)) >>> 0;
+      };
+      const srcBase = readDescBase(0x10); // src descriptor at offset 0x10
+      const dstBase = readDescBase(0x18); // dst descriptor at offset 0x18
+      const words = cpu.getReg16(ECX);
+      const bytes = words * 2;
+      cpu.mem.copyBlock(dstBase, srcBase, bytes);
+      cpu.setReg8(EAX + 4, 0x00); // AH = 0 (success)
       cpu.setFlag(CF, false);
       break;
     }

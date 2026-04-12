@@ -1235,10 +1235,11 @@ export function cpuStep(cpu: CPU): void {
       break;
     }
 
-    // IRET (0xCF) — in PM use opSize, in RM use D bit
+    // IRET (0xCF) — operand size selects IRET vs IRETD in both real and protected mode.
+    // The 66h prefix on real-mode/16-bit IRET turns it into IRETD (DOS extenders rely on this).
     case 0xCF: {
       cpu._inhibitTF = true; // IRET suppresses TF trap
-      if (cpu.realMode ? !cpu.use32 : opSize === 16) {
+      if (opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         const flags = cpu.pop16();
@@ -1246,9 +1247,14 @@ export function cpuStep(cpu: CPU): void {
         cpu.eip = cpu.segBase(cs) + ip;
         cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
       } else {
-        const eip2 = cpu.pop32() >>> 0;
+        let eip2 = cpu.pop32() >>> 0;
         const cs2 = cpu.pop32() & 0xFFFF;
         const eflags = cpu.pop32() >>> 0;
+        // Per Intel: real-mode IRETD requires EIP[31:16]==0 (otherwise #GP).
+        // Some DOS extenders push 16-bit IRET frames and execute IRETD with the
+        // 66 prefix; the high 16 bits of the popped EIP are then garbage from
+        // adjacent stack data. Mask to 16 bits in real mode to recover the IP.
+        if (cpu.realMode) eip2 = eip2 & 0xFFFF;
         // VM bit (bit 17) in EFLAGS: IRET to V86 mode
         if (!cpu.realMode && (eflags & (1 << 17))) {
           // Switch to V86/real mode — pop additional SS:ESP + segment registers

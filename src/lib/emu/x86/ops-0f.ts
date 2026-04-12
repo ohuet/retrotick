@@ -329,7 +329,6 @@ export function exec0F(
         if (!oldPE && newPE) {
           // Transition to protected mode — set up segment bases from GDT
           cpu.realMode = false;
-          console.warn(`[CR0] Enter PM: EIP=0x${(cpu.eip>>>0).toString(16)} CS=0x${cpu.cs.toString(16)} gdtBase=0x${(cpu.emu?._gdtBase??0).toString(16)} idtBase=0x${(cpu.emu?._idtBase??0).toString(16)}`);
         } else if (oldPE && !newPE) {
           // Back to real mode — enable "unreal mode" if data segments have flat base.
           // DOS4GW sets base=0 for DS/ES/SS in PM, returns to RM, and expects the
