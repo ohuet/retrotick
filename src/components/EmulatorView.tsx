@@ -503,6 +503,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       // Populate virtual filesystem before load() so NE DLL PATH search can find files
       await syncVirtualFiles(emu);
 
+      // Apply DOS settings BEFORE load() so setupDosEnvironment sees the correct flags
+      // (EMS device header, XMS/DPMI stubs, etc. are set up during load for MZ files).
+      const dsPre = loadDosSettings();
+      emu.wasmJitEnabled = dsPre.jitEnabled;
+      emu.dosEnableDpmi = dsPre.dpmi;
+      emu.dosEnableXms = dsPre.xms;
+      emu.dosEnableEms = dsPre.ems;
+      emu.dosEnableSoundBlaster = dsPre.soundBlaster;
+      emu.dosEnableAdlib = dsPre.adlib;
+      emu.dosEnableGus = dsPre.gus;
+      emu.dosSpeedFactor = dsPre.speed;
+      emu.traceApi = dsPre.traceApi;
+
       await emu.load(arrayBuffer, peInfo, canvas);
     };
 
@@ -689,9 +702,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           procData.childExitCode = 0;
         }
 
-        // Load child (this creates its own consoleBuffer via initConsoleBuffer)
-        await childEmu.load(childData, childPeInfo, canvas);
-        if (childEmu.isDOS) {
+        // Apply DOS settings BEFORE load() — setupDosEnvironment in load() reads these flags
+        {
           const ds = loadDosSettings();
           childEmu.wasmJitEnabled = ds.jitEnabled;
           childEmu.dosEnableDpmi = ds.dpmi;
@@ -701,8 +713,13 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           childEmu.dosEnableAdlib = ds.adlib;
           childEmu.dosEnableGus = ds.gus;
           childEmu.dosSpeedFactor = ds.speed;
-          childEmu.vga.refreshHz = ds.refreshRate;
           childEmu.traceApi = ds.traceApi;
+        }
+
+        // Load child (this creates its own consoleBuffer via initConsoleBuffer)
+        await childEmu.load(childData, childPeInfo, canvas);
+        if (childEmu.isDOS) {
+          childEmu.vga.refreshHz = loadDosSettings().refreshRate;
         }
 
         // Share console state AFTER load() so initConsoleBuffer doesn't overwrite
@@ -762,19 +779,10 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Load registry from IndexedDB then start
       initAndRun().then(() => {
-        // Apply DOS Settings
+        // Apply post-load DOS settings that depend on objects created during load()
         if (emu.isDOS) {
           const ds = loadDosSettings();
-          emu.wasmJitEnabled = ds.jitEnabled;
-          emu.dosEnableDpmi = ds.dpmi;
-          emu.dosEnableXms = ds.xms;
-          emu.dosEnableEms = ds.ems;
-          emu.dosEnableSoundBlaster = ds.soundBlaster;
-          emu.dosEnableAdlib = ds.adlib;
-          emu.dosEnableGus = ds.gus;
-          emu.dosSpeedFactor = ds.speed;
           emu.vga.refreshHz = ds.refreshRate;
-          emu.traceApi = ds.traceApi;
         }
 
         // Assign shared AudioContext — created in App during user gesture
