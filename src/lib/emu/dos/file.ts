@@ -182,7 +182,7 @@ export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   console.log(`[OPEN] "${name}"`);
   // DOS device driver detection: EMMXXXX0 (EMS), NUL, CON, etc.
   const baseName = name.replace(/^[*\\\/]*/, '').toUpperCase();
-  if (baseName === 'EMMXXXX0') {
+  if (baseName === 'EMMXXXX0' && emu.dosEnableEms) {
     // EMS driver present — return a dummy handle
     const handle = allocDosHandle(emu);
     emu._dosFiles.set(handle, { data: new Uint8Array(0), pos: 0, name: 'EMMXXXX0', isDevice: true });

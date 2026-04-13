@@ -1231,15 +1231,17 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   if (emu.dosEnableXms) setupXmsStub(emu.memory);
   if (emu.dosEnableDpmi) setupDpmiStub(emu.memory);
 
-  // EMS device driver header at E000:0000 so programs can detect EMS
-  // by checking the device name "EMMXXXX0" at INT 67h segment:000Ah.
-  setupEmsDeviceHeader(emu.memory);
-  // Override INT 67h vector to point to E000 segment (after the IVT loop)
-  const emsVec = (EMS_DEVICE_SEG << 16) | 0x0000;
-  emu.memory.writeU16(0x67 * 4, 0x0000);
-  emu.memory.writeU16(0x67 * 4 + 2, EMS_DEVICE_SEG);
-  emu._dosBiosDefaultVectors.set(0x67, emsVec);
-  emu._dosIntVectors.set(0x67, emsVec);
+  if (emu.dosEnableEms) {
+    // EMS device driver header at E000:0000 so programs can detect EMS
+    // by checking the device name "EMMXXXX0" at INT 67h segment:000Ah.
+    setupEmsDeviceHeader(emu.memory);
+    // Override INT 67h vector to point to E000 segment (after the IVT loop)
+    const emsVec = (EMS_DEVICE_SEG << 16) | 0x0000;
+    emu.memory.writeU16(0x67 * 4, 0x0000);
+    emu.memory.writeU16(0x67 * 4 + 2, EMS_DEVICE_SEG);
+    emu._dosBiosDefaultVectors.set(0x67, emsVec);
+    emu._dosIntVectors.set(0x67, emsVec);
+  }
 
   // Write VGA 8x8 ROM font to F000:1000 (2048 bytes, 256 chars × 8 bytes)
   for (let i = 0; i < VGA_FONT_8X8_ROM.length; i++) {
