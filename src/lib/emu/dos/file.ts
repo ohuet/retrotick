@@ -308,7 +308,8 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
       cpu.setReg16(EDX, 0x80D3); // character device
       cpu.setFlag(CF, false);
     } else if (emu._dosFiles.has(handle) || emu.handles.getType(handle) === 'file') {
-      cpu.setReg16(EDX, 0x0000); // disk file
+      const f = emu._dosFiles.get(handle);
+      cpu.setReg16(EDX, f?.name === 'EMMXXXX0' ? 0x80C0 : 0x0000);
       cpu.setFlag(CF, false);
     } else {
       cpu.setFlag(CF, true);

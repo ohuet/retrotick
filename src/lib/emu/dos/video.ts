@@ -7,8 +7,13 @@ import { updateMouseRangeForMode } from './mouse';
 
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
 
-// Video memory base (B800:0000 in real mode)
-const VIDEO_MEM_BASE = 0xB8000;
+// Video memory base depends on the current text mode:
+//   modes 0-3 (CGA color text): 0xB8000
+//   mode 7 (MDA/VGA monochrome text): 0xB0000
+// Must be resolved dynamically because programs can switch modes at runtime.
+function textMemBase(emu: Emulator): number {
+  return emu.vga.currentMode.memBase;
+}
 
 /** Sync CRTC cursor registers (0x0E/0x0F) from emu cursor state */
 function updateCrtcCursor(emu: Emulator): void {
@@ -17,14 +22,15 @@ function updateCrtcCursor(emu: Emulator): void {
   emu.vga.crtcRegs[0x0F] = cursorPos & 0xFF;
 }
 
-/** Sync video memory (B800:0000) to emu.consoleBuffer */
+/** Sync video memory (text mode base) to emu.consoleBuffer */
 export function syncVideoMemory(emu: Emulator): void {
   const cols = emu.screenCols;
   const rows = emu.screenRows;
   const mem = emu.memory;
+  const base = textMemBase(emu);
   for (let i = 0; i < cols * rows; i++) {
-    const ch = mem.readU8(VIDEO_MEM_BASE + i * 2);
-    const attr = mem.readU8(VIDEO_MEM_BASE + i * 2 + 1);
+    const ch = mem.readU8(base + i * 2);
+    const attr = mem.readU8(base + i * 2 + 1);
     emu.consoleBuffer[i] = { char: ch, attr };
   }
   // Sync cursor position from CRTC registers (programs like QBasic write
@@ -38,9 +44,10 @@ export function syncVideoMemory(emu: Emulator): void {
 function clearVideoMem(cpu: CPU, emu: Emulator, attr: number): void {
   const cols = emu.screenCols;
   const rows = emu.screenRows;
+  const base = textMemBase(emu);
   for (let i = 0; i < cols * rows; i++) {
-    cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2, 0x20);
-    cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2 + 1, attr);
+    cpu.mem.writeU8(base + i * 2, 0x20);
+    cpu.mem.writeU8(base + i * 2 + 1, attr);
   }
   syncVideoMemory(emu);
 }
@@ -48,12 +55,13 @@ function clearVideoMem(cpu: CPU, emu: Emulator, attr: number): void {
 export function scrollUp(_cpu: CPU, emu: Emulator, lines: number, attr: number, top: number, left: number, bottom: number, right: number): void {
   const cols = emu.screenCols;
   const mem = emu.memory;
+  const base = textMemBase(emu);
   if (lines >= (bottom - top + 1)) {
     for (let row = top; row <= bottom; row++) {
       for (let col = left; col <= right; col++) {
         const off = (row * cols + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
+        mem.writeU8(base + off, 0x20);
+        mem.writeU8(base + off + 1, attr);
       }
     }
   } else {
@@ -61,15 +69,15 @@ export function scrollUp(_cpu: CPU, emu: Emulator, lines: number, attr: number, 
       for (let col = left; col <= right; col++) {
         const dst = (row * cols + col) * 2;
         const src = ((row + lines) * cols + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + dst, mem.readU8(VIDEO_MEM_BASE + src));
-        mem.writeU8(VIDEO_MEM_BASE + dst + 1, mem.readU8(VIDEO_MEM_BASE + src + 1));
+        mem.writeU8(base + dst, mem.readU8(base + src));
+        mem.writeU8(base + dst + 1, mem.readU8(base + src + 1));
       }
     }
     for (let row = bottom - lines + 1; row <= bottom; row++) {
       for (let col = left; col <= right; col++) {
         const off = (row * cols + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
+        mem.writeU8(base + off, 0x20);
+        mem.writeU8(base + off + 1, attr);
       }
     }
   }
@@ -79,12 +87,13 @@ export function scrollUp(_cpu: CPU, emu: Emulator, lines: number, attr: number, 
 function scrollDown(_cpu: CPU, emu: Emulator, lines: number, attr: number, top: number, left: number, bottom: number, right: number): void {
   const cols = emu.screenCols;
   const mem = emu.memory;
+  const base = textMemBase(emu);
   if (lines >= (bottom - top + 1)) {
     for (let row = top; row <= bottom; row++) {
       for (let col = left; col <= right; col++) {
         const off = (row * cols + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
+        mem.writeU8(base + off, 0x20);
+        mem.writeU8(base + off + 1, attr);
       }
     }
   } else {
@@ -92,15 +101,15 @@ function scrollDown(_cpu: CPU, emu: Emulator, lines: number, attr: number, top: 
       for (let col = left; col <= right; col++) {
         const dst = (row * cols + col) * 2;
         const src = ((row - lines) * cols + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + dst, mem.readU8(VIDEO_MEM_BASE + src));
-        mem.writeU8(VIDEO_MEM_BASE + dst + 1, mem.readU8(VIDEO_MEM_BASE + src + 1));
+        mem.writeU8(base + dst, mem.readU8(base + src));
+        mem.writeU8(base + dst + 1, mem.readU8(base + src + 1));
       }
     }
     for (let row = top; row < top + lines; row++) {
       for (let col = left; col <= right; col++) {
         const off = (row * cols + col) * 2;
-        mem.writeU8(VIDEO_MEM_BASE + off, 0x20);
-        mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
+        mem.writeU8(base + off, 0x20);
+        mem.writeU8(base + off + 1, attr);
       }
     }
   }
@@ -147,9 +156,10 @@ export function teletypeOutput(cpu: CPU, emu: Emulator, ch: number): void {
     return; // skip text-mode write
   }
 
+  const base = textMemBase(emu);
   const off = (emu.consoleCursorY * cols + emu.consoleCursorX) * 2;
-  cpu.mem.writeU8(VIDEO_MEM_BASE + off, ch);
-  cpu.mem.writeU8(VIDEO_MEM_BASE + off + 1, emu.consoleAttr);
+  cpu.mem.writeU8(base + off, ch);
+  cpu.mem.writeU8(base + off + 1, emu.consoleAttr);
 
   emu.consoleCursorX++;
   if (emu.consoleCursorX >= cols) {
@@ -265,8 +275,10 @@ function setVideoMode(cpu: CPU, emu: Emulator, modeNum: number): void {
         // Mode 13h: linear at A0000, 64000 bytes
         for (let i = 0; i < 64000; i++) cpu.mem.writeU8(0xA0000 + i, 0);
       } else {
-        // CGA modes (4/5/6): interleaved at B8000, 16KB
-        for (let i = 0; i < 16384; i++) cpu.mem.writeU8(0xB8000 + i, 0);
+        // Text modes (0/1/2/3 at B8000, 7 at B0000) and CGA graphics (4/5/6 at B8000).
+        // Clear 16KB at the mode's memory base.
+        const clearBase = vgaMode.memBase;
+        for (let i = 0; i < 16384; i++) cpu.mem.writeU8(clearBase + i, 0);
       }
     }
   }
@@ -506,9 +518,10 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
     }
 
     case 0x08: { // Read char+attr at cursor
+      const base = textMemBase(emu);
       const off = (emu.consoleCursorY * cols + emu.consoleCursorX) * 2;
-      const ch = cpu.mem.readU8(VIDEO_MEM_BASE + off);
-      const attr = cpu.mem.readU8(VIDEO_MEM_BASE + off + 1);
+      const ch = cpu.mem.readU8(base + off);
+      const attr = cpu.mem.readU8(base + off + 1);
       cpu.setReg16(EAX, (attr << 8) | ch);
       break;
     }
@@ -529,12 +542,13 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
         }
       } else {
         // Text mode
+        const base = textMemBase(emu);
         let cx = emu.consoleCursorX;
         let cy = emu.consoleCursorY;
         for (let i = 0; i < count; i++) {
           const off = (cy * cols + cx) * 2;
-          cpu.mem.writeU8(VIDEO_MEM_BASE + off, ch);
-          cpu.mem.writeU8(VIDEO_MEM_BASE + off + 1, attr);
+          cpu.mem.writeU8(base + off, ch);
+          cpu.mem.writeU8(base + off + 1, attr);
           cx++;
           if (cx >= cols) { cx = 0; cy++; }
           if (cy >= rows) break;
@@ -558,11 +572,12 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
           if (cy >= rows) break;
         }
       } else {
+        const base = textMemBase(emu);
         let cx = emu.consoleCursorX;
         let cy = emu.consoleCursorY;
         for (let i = 0; i < count; i++) {
           const off = (cy * cols + cx) * 2;
-          cpu.mem.writeU8(VIDEO_MEM_BASE + off, ch);
+          cpu.mem.writeU8(base + off, ch);
           cx++;
           if (cx >= cols) { cx = 0; cy++; }
           if (cy >= rows) break;
@@ -756,9 +771,11 @@ export function handleInt10(cpu: CPU, emu: Emulator): boolean {
         emu.screenRows = 50;
         emu.charHeight = 8;
         emu.initConsoleBuffer();
+        // Reinit video memory for 80x50
+        const base80x50 = textMemBase(emu);
         for (let i = 0; i < cols * 50; i++) {
-          cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2, 0x20);
-          cpu.mem.writeU8(VIDEO_MEM_BASE + i * 2 + 1, 0x07);
+          cpu.mem.writeU8(base80x50 + i * 2, 0x20);
+          cpu.mem.writeU8(base80x50 + i * 2 + 1, 0x07);
         }
         cpu.mem.writeU8(0x0484, 49); // rows - 1
         cpu.mem.writeU16(0x0485, 8); // char height

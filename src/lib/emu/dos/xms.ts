@@ -1,7 +1,13 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 
-const EAX = 0, EBX = 3, EDX = 2, ESI = 6;
+const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESI = 6;
+
+// A20 gate off: truncate to 20-bit addresses (8086-compatible 1MB wrap).
+// Ideally only bit 20 should be masked (0xFFEFFFFF), but the emulator doesn't
+// handle port 0x92 (fast A20), so some DOS extenders run with A20 "off".
+// Using 0xFFFFF keeps backwards compatibility until port 0x92 is implemented.
+const A20_OFF_MASK = 0xFFFFF;
 
 // XMS entry point stub location: F000:0800
 export const XMS_STUB_SEG = 0xF000;
@@ -47,7 +53,7 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
       return true;
     case 0x04: // Global Disable A20
     case 0x06: { // Local Disable A20
-      emu.memory.a20Mask = 0xFFFFF;
+      emu.memory.a20Mask = A20_OFF_MASK;
       cpu.setReg16(EAX, 1);
       cpu.setReg8(EBX, 0x00);
       return true;
@@ -80,6 +86,11 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
       }
       const sizeBytes = sizeKB * 1024;
       const base = xmsAlloc(emu, sizeBytes);
+      if (base < 0) {
+        cpu.setReg16(EAX, 0);
+        cpu.setReg8(EBX, 0xA0); // BL = all XMS allocated (fragmented)
+        return true;
+      }
       const handle = emu._xmsNextHandle++;
       emu._xmsHandles.set(handle, { base, size: sizeKB, lockCount: 0 });
       // Track handle by current PSP for auto-free on program exit
@@ -213,14 +224,126 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
         }
         const newSizeBytes = newSizeKB * 1024;
         const newBase = xmsAlloc(emu, newSizeBytes);
-        const copyLen = emb.size * 1024;
-        for (let i = 0; i < copyLen; i++) {
-          emu.memory.writeU8(newBase + i, emu.memory.readU8(emb.base + i));
+        if (newBase < 0) {
+          cpu.setReg16(EAX, 0);
+          cpu.setReg8(EBX, 0xA0); // BL = all XMS allocated (fragmented)
+          return true;
         }
+        const copyLen = emb.size * 1024;
+        emu.memory.copyBlock(newBase, emb.base, copyLen);
         xmsFree(emu, emb.base, emb.size * 1024);
         emb.base = newBase;
       }
       // If shrinking, free the tail portion
+      if (newSizeKB < emb.size) {
+        const shrinkBytes = (emb.size - newSizeKB) * 1024;
+        xmsFree(emu, emb.base + newSizeKB * 1024, shrinkBytes);
+      }
+      emb.size = newSizeKB;
+      cpu.setReg16(EAX, 1);
+      return true;
+    }
+
+    case 0x10: { // Request UMB — BX = size in paragraphs
+      cpu.setReg16(EAX, 0);
+      cpu.setReg8(EBX, 0xB1); // BL = no UMBs available
+      cpu.setReg16(EDX, 0);   // DX = largest available UMB (0)
+      return true;
+    }
+
+    case 0x11: { // Release UMB — DX = segment
+      cpu.setReg16(EAX, 0);
+      cpu.setReg8(EBX, 0xB2); // BL = invalid UMB segment
+      return true;
+    }
+
+    // --- XMS 3.0 super-extended functions (32-bit) ---
+
+    case 0x88: { // Query Any Free Extended Memory (32-bit)
+      let usedKB = 0;
+      for (const h of emu._xmsHandles.values()) usedKB += h.size;
+      const freeKB = Math.max(0, emu._xmsTotalKB - usedKB);
+      cpu.reg[EAX] = freeKB;               // largest free block (KB) — full 32-bit
+      cpu.reg[EDX] = freeKB;               // total free (KB) — full 32-bit
+      cpu.reg[ECX] = (emu._xmsBaseAddr + emu._xmsTotalKB * 1024) >>> 0; // highest ending address
+      cpu.setReg8(EBX, 0x00);
+      return true;
+    }
+
+    case 0x89: { // Allocate Any EMB (32-bit) — EDX = size in KB
+      const sizeKB = cpu.reg[EDX] >>> 0;
+      let usedKB = 0;
+      for (const h of emu._xmsHandles.values()) usedKB += h.size;
+      if (sizeKB > emu._xmsTotalKB - usedKB) {
+        cpu.setReg16(EAX, 0);
+        cpu.setReg8(EBX, 0xA0);
+        return true;
+      }
+      const sizeBytes = sizeKB * 1024;
+      const base = xmsAlloc(emu, sizeBytes);
+      if (base < 0) {
+        cpu.setReg16(EAX, 0);
+        cpu.setReg8(EBX, 0xA0);
+        return true;
+      }
+      const handle = emu._xmsNextHandle++;
+      emu._xmsHandles.set(handle, { base, size: sizeKB, lockCount: 0 });
+      const psp = emu._dosPSP ?? 0;
+      if (!emu._xmsPspHandles.has(psp)) emu._xmsPspHandles.set(psp, new Set());
+      emu._xmsPspHandles.get(psp)!.add(handle);
+      cpu.setReg16(EAX, 1);
+      cpu.setReg16(EDX, handle);
+      return true;
+    }
+
+    case 0x8E: { // Get Extended EMB Handle Info (32-bit) — DX = handle
+      const handle = cpu.getReg16(EDX);
+      const emb = emu._xmsHandles.get(handle);
+      if (!emb) {
+        cpu.setReg16(EAX, 0);
+        cpu.setReg8(EBX, 0xA2);
+        return true;
+      }
+      cpu.setReg16(EAX, 1);
+      cpu.setReg8(EBX + 4, emb.lockCount & 0xFF);                        // BH = lock count
+      cpu.setReg8(EBX, Math.max(0, 128 - emu._xmsHandles.size) & 0xFF); // BL = free handles
+      cpu.reg[EDX] = emb.size;  // EDX = size in KB (full 32-bit)
+      return true;
+    }
+
+    case 0x8F: { // Reallocate Any EMB (32-bit) — DX = handle, EBX = new size in KB
+      const handle = cpu.getReg16(EDX);
+      const newSizeKB = cpu.reg[EBX] >>> 0;
+      const emb = emu._xmsHandles.get(handle);
+      if (!emb) {
+        cpu.setReg16(EAX, 0);
+        cpu.setReg8(EBX, 0xA2);
+        return true;
+      }
+      if (emb.lockCount > 0) {
+        cpu.setReg16(EAX, 0);
+        cpu.setReg8(EBX, 0xAB);
+        return true;
+      }
+      if (newSizeKB > emb.size) {
+        let usedKB = 0;
+        for (const h of emu._xmsHandles.values()) usedKB += h.size;
+        if (newSizeKB - emb.size > emu._xmsTotalKB - usedKB) {
+          cpu.setReg16(EAX, 0);
+          cpu.setReg8(EBX, 0xA0);
+          return true;
+        }
+        const newSizeBytes = newSizeKB * 1024;
+        const newBase = xmsAlloc(emu, newSizeBytes);
+        if (newBase < 0) {
+          cpu.setReg16(EAX, 0);
+          cpu.setReg8(EBX, 0xA0);
+          return true;
+        }
+        emu.memory.copyBlock(newBase, emb.base, emb.size * 1024);
+        xmsFree(emu, emb.base, emb.size * 1024);
+        emb.base = newBase;
+      }
       if (newSizeKB < emb.size) {
         const shrinkBytes = (emb.size - newSizeKB) * 1024;
         xmsFree(emu, emb.base + newSizeKB * 1024, shrinkBytes);
@@ -238,7 +361,8 @@ export function handleXms(cpu: CPU, emu: Emulator): boolean {
   }
 }
 
-/** Allocate bytes from XMS pool — try free list first, then bump. */
+/** Allocate bytes from XMS pool — try free list first, then bump.
+ *  Returns -1 if the pool is exhausted (fragmentation edge case). */
 function xmsAlloc(emu: Emulator, sizeBytes: number): number {
   const freeBlocks = emu._xmsFreeBlocks;
   // First-fit from free list
@@ -255,7 +379,9 @@ function xmsAlloc(emu: Emulator, sizeBytes: number): number {
       return base;
     }
   }
-  // Bump allocate
+  // Bump allocate — enforce upper bound
+  const poolEnd = emu._xmsBaseAddr + emu._xmsTotalKB * 1024;
+  if (emu._xmsNextAddr + sizeBytes > poolEnd) return -1;
   const base = emu._xmsNextAddr;
   emu._xmsNextAddr += sizeBytes;
   return base;
