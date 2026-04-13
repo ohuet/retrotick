@@ -1739,6 +1739,16 @@ export class Emulator {
           if (this.dosKeyBuffer.length < 16) {
             this.dosKeyBuffer.push({ ascii, scan: scancode });
           }
+          // Remove this scancode (and E0 prefix if present) from _pendingHwKeys
+          // so that INT 09h does not fire and write a duplicate to BDA.
+          if (this._injectE0Pending) {
+            // E0 was the previous entry — remove both E0 and this scancode
+            const e0Idx = this._pendingHwKeys.lastIndexOf(0xE0);
+            if (e0Idx >= 0) this._pendingHwKeys.splice(e0Idx, 1);
+          }
+          const scIdx = this._pendingHwKeys.lastIndexOf(scancode);
+          if (scIdx >= 0) this._pendingHwKeys.splice(scIdx, 1);
+          this._pendingHwKeyChars.delete(scancode);
           this._injectE0Pending = false;
         }
       }
@@ -1864,10 +1874,6 @@ export class Emulator {
       if (this.running && !this.halted) {
         requestAnimationFrame(this.tick);
       }
-    }
-    // Also write remaining keys to BDA buffer for programs that read it directly
-    for (const key of this.dosKeyBuffer) {
-      this.writeBdaKey(key.ascii, key.scan);
     }
   }
 

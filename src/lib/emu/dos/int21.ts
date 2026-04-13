@@ -148,14 +148,29 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
     case 0x06: { // Direct console I/O
       const dl = cpu.reg[EDX] & 0xFF;
       if (dl === 0xFF) {
-        // Input: check for keystroke
+        // Input: check for keystroke — check dosKeyBuffer first, then BDA
         if (emu.dosKeyBuffer.length > 0) {
           const key = emu.dosKeyBuffer.shift()!;
           cpu.setReg8(EAX, key.ascii);
           cpu.setFlag(ZF, false);
         } else {
-          cpu.setReg8(EAX, 0);
-          cpu.setFlag(ZF, true);
+          const BDA = 0x400;
+          const head = cpu.mem.readU16(BDA + 0x1A);
+          const tail = cpu.mem.readU16(BDA + 0x1C);
+          if (head !== tail) {
+            const keyWord = cpu.mem.readU16(BDA + head);
+            const ascii2 = keyWord & 0xFF;
+            const bufStart = cpu.mem.readU16(BDA + 0x80);
+            const bufEnd = cpu.mem.readU16(BDA + 0x82);
+            let newHead = head + 2;
+            if (newHead >= bufEnd) newHead = bufStart;
+            cpu.mem.writeU16(BDA + 0x1A, newHead);
+            cpu.setReg8(EAX, ascii2);
+            cpu.setFlag(ZF, false);
+          } else {
+            cpu.setReg8(EAX, 0);
+            cpu.setFlag(ZF, true);
+          }
         }
       } else {
         // Output
@@ -184,9 +199,15 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
       break;
     }
 
-    case 0x0B: // Check stdin status → AL=0xFF if char available, 0x00 if not
-      cpu.setReg8(EAX, emu.dosKeyBuffer.length > 0 ? 0xFF : 0x00);
+    case 0x0B: { // Check stdin status → AL=0xFF if char available, 0x00 if not
+      let hasKey = emu.dosKeyBuffer.length > 0;
+      if (!hasKey) {
+        const BDA = 0x400;
+        hasKey = cpu.mem.readU16(BDA + 0x1A) !== cpu.mem.readU16(BDA + 0x1C);
+      }
+      cpu.setReg8(EAX, hasKey ? 0xFF : 0x00);
       break;
+    }
 
     case 0x0E: { // Select default drive (DL=drive number 0=A,1=B,2=C...)
       const dl = cpu.reg[EDX] & 0xFF;
@@ -738,6 +759,10 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x0C: { // Clear keyboard buffer, invoke keyboard function
       emu.dosKeyBuffer.length = 0;
+      // Also clear BDA keyboard buffer
+      const BDA_0C = 0x400;
+      const bdaTail = cpu.mem.readU16(BDA_0C + 0x1C);
+      cpu.mem.writeU16(BDA_0C + 0x1A, bdaTail); // head = tail → empty
       const subFunc = al;
       if (subFunc === 0x01 || subFunc === 0x06 || subFunc === 0x07 || subFunc === 0x08 || subFunc === 0x0A) {
         // Re-dispatch with AH=subfunc
