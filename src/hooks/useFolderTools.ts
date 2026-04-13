@@ -21,19 +21,22 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   const [items, setItems] = useState<FileItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
+  const [focus, setFocus] = useState<string | null>(null);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FileItem } | null>(null);
   const [bgContextMenu, setBgContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const [confirmFlash, setConfirmFlash] = useState(0);
-  const [propertiesItem, setPropertiesItem] = useState<FileItem | null>(null);
+  const [propertiesItem, setPropertiesItem] = useState<FileItem | FileItem[] | null>(null);
   const [propsFlash, setPropsFlash] = useState(0);
   const [folderContents, setFolderContents] = useState<{ files: number; folders: number; totalSize: number } | null>(null);
   const iconUrls = useRef<string[]>([]);
+  const typeAhead = useRef<{ key: string; matchIdx: number; time: number }>({ key: '', matchIdx: -1, time: 0 });
 
   function selectOne(name: string) {
     setSelected(new Set([name]));
     setAnchor(name);
+    setFocus(name);
   }
 
   const setSelection = useCallback((names: Set<string>) => {
@@ -47,6 +50,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
       return next;
     });
     setAnchor(name);
+    setFocus(name);
   }
 
   function selectRange(name: string) {
@@ -59,6 +63,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     const next = new Set<string>();
     for (let i = lo; i <= hi; i++) next.add(items[i].name);
     setSelected(next);
+    setFocus(name);
   }
 
   function selectAll() {
@@ -67,6 +72,27 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
 
   function clearSelection() {
     setSelected(new Set());
+  }
+
+  /** Select the next item whose displayName starts with the typed key (cycles on repeat). */
+  function selectByKey(key: string): string | null {
+    if (key.length !== 1) return null;
+    const lower = key.toLowerCase();
+    const matches = items.filter(i => i.displayName.toLowerCase().startsWith(lower));
+    if (matches.length === 0) return null;
+
+    const now = Date.now();
+    const ta = typeAhead.current;
+    let idx = 0;
+    if (ta.key === lower && now - ta.time < 1500) {
+      idx = (ta.matchIdx + 1) % matches.length;
+    }
+    ta.key = lower;
+    ta.matchIdx = idx;
+    ta.time = now;
+
+    selectOne(matches[idx].name);
+    return matches[idx].name;
   }
 
   const loadItems = useCallback(async () => {
@@ -102,7 +128,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
 
   // Compute folder contents for properties dialog
   useEffect(() => {
-    if (!propertiesItem?.isFolder) { setFolderContents(null); return; }
+    if (Array.isArray(propertiesItem) || !propertiesItem?.isFolder) { setFolderContents(null); return; }
     const folderPrefix = propertiesItem.name.endsWith('/') ? propertiesItem.name : propertiesItem.name + '/';
     getAllFiles().then(all => {
       let files = 0, folders = 0, totalSize = 0;
@@ -174,6 +200,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     items, setItems,
     selected, setSelection, selectOne, selectToggle, selectRange, selectAll, clearSelection,
     anchor, setAnchor,
+    focus,
     editingName, setEditingName,
     contextMenu, setContextMenu,
     bgContextMenu, setBgContextMenu,
@@ -183,5 +210,6 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     loadItems,
     handleDelete, handleRename, handleNewFolder,
     handleDropOnFolder, handleExternalDropOnFolder,
+    selectByKey,
   };
 }

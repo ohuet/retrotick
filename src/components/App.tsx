@@ -20,6 +20,7 @@ import { FolderWindow } from './FolderWindow';
 import { WelcomeWindow } from './WelcomeWindow';
 import { RegionalSettingsWindow } from './RegionalSettingsWindow';
 import { DosSettingsWindow } from './DosSettingsWindow';
+import { GeneralSettingsWindow } from './GeneralSettingsWindow';
 import { Desktop } from './Desktop';
 import { Taskbar } from './win2k/Taskbar';
 import { FOLDER_ICON_16, EXE_ICON_16 } from './DesktopIcon';
@@ -95,6 +96,7 @@ export function App() {
   const [showWelcome, setShowWelcome] = useState(() => !localStorage.getItem('welcome-dismissed'));
   const [showRegionalSettings, setShowRegionalSettings] = useState(false);
   const [showDosSettings, setShowDosSettings] = useState(false);
+  const [showGeneralSettings, setShowGeneralSettings] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ text: string; onYes: () => void } | null>(null);
   const [showDisplayProperties, setShowDisplayProperties] = useState(false);
   const [bgSettings, setBgSettings] = useState<BackgroundSettings>(() => {
@@ -107,6 +109,7 @@ export function App() {
   const welcomeId = useRef(-1);
   const regionalSettingsId = useRef(-2);
   const dosSettingsId = useRef(-3);
+  const generalSettingsId = useRef(-4);
   const nextAppId = useRef(1);
   const processRegistry = useRef(new ProcessRegistry()).current;
   const closeHandlers = useRef(new Map<number, () => void>());
@@ -336,6 +339,12 @@ export function App() {
       iconUrl: null as string | null | undefined,
       minimized: minimizedApps.has(dosSettingsId.current),
     }] : []),
+    ...(showGeneralSettings ? [{
+      id: generalSettingsId.current,
+      title: t().generalSettings,
+      iconUrl: null as string | null | undefined,
+      minimized: minimizedApps.has(generalSettingsId.current),
+    }] : []),
   ];
 
   useEffect(() => {
@@ -445,6 +454,16 @@ export function App() {
             minimized={minimizedApps.has(dosSettingsId.current)}
           />
         )}
+        {showGeneralSettings && (
+          <GeneralSettingsWindow
+            onClose={() => { setShowGeneralSettings(false); setMinimizedApps(prev => { const s = new Set(prev); s.delete(generalSettingsId.current); return s; }); setFocusedAppId(prev => prev === generalSettingsId.current ? null : prev); }}
+            onFocus={() => focusApp(generalSettingsId.current)}
+            onMinimize={() => handleTaskbarMinimize(generalSettingsId.current)}
+            zIndex={getZIndex(generalSettingsId.current)}
+            focused={focusedAppId === generalSettingsId.current}
+            minimized={minimizedApps.has(generalSettingsId.current)}
+          />
+        )}
         {showDisplayProperties && (
           <DisplayPropertiesDialog
             current={bgSettings}
@@ -462,6 +481,7 @@ export function App() {
         onShowWelcome={() => { setShowWelcome(true); focusApp(welcomeId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(welcomeId.current); return s; }); }}
         onShowRegionalSettings={() => { setShowRegionalSettings(true); focusApp(regionalSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(regionalSettingsId.current); return s; }); }}
         onShowDosSettings={() => { setShowDosSettings(true); focusApp(dosSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(dosSettingsId.current); return s; }); }}
+        onShowGeneralSettings={() => { setShowGeneralSettings(true); focusApp(generalSettingsId.current); setMinimizedApps(prev => { const s = new Set(prev); s.delete(generalSettingsId.current); return s; }); }}
         onMinimizeAll={() => {
           const ids = new Set([
             ...runningApps.map(a => a.id),
@@ -470,6 +490,7 @@ export function App() {
             ...(showWelcome ? [welcomeId.current] : []),
             ...(showRegionalSettings ? [regionalSettingsId.current] : []),
             ...(showDosSettings ? [dosSettingsId.current] : []),
+            ...(showGeneralSettings ? [generalSettingsId.current] : []),
           ]);
           setMinimizedApps(ids);
           setFocusedAppId(null);

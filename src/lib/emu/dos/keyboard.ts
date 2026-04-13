@@ -173,10 +173,6 @@ export function handleInt09(cpu: CPU, emu: Emulator, scancodeOverride?: number):
     ascii = (scancode < SCAN_TO_ASCII.length ? SCAN_TO_ASCII[scancode] : undefined) ?? 0;
   }
 
-  // Cap software key buffer to prevent overflow from key repeat
-  if (emu.dosKeyBuffer.length < 16) {
-    emu.dosKeyBuffer.push({ ascii, scan: scancode });
-  }
   emu.writeBdaKey(ascii, scancode);
 
   // Restore all registers — BIOS INT 09h is transparent to caller
@@ -220,7 +216,6 @@ export function handleInt16(cpu: CPU, emu: Emulator, fromBiosStub = false): bool
       // Read keystroke (blocking on real hardware).
       const key = bdaPopKey(emu);
       if (key) {
-        if (emu.dosKeyBuffer.length > 0) emu.dosKeyBuffer.shift();
         const ascii = (ah === 0x00 && key.ascii === 0xE0) ? 0 : key.ascii;
         cpu.setReg16(EAX, (key.scan << 8) | ascii);
       } else if (emu.isDOS) {
