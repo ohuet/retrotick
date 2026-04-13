@@ -71,6 +71,14 @@ export function handleInt15(cpu: CPU, emu: Emulator): boolean {
       cpu.setReg8(EAX + 4, 0x04); // AH = error: interface error
       break;
     }
+    case 0xBF: { // Phar Lap DOS/16M Background DOS Run-Time API
+      // AL=02 → install check; AL=DC → similar variant.
+      // Not installed → return CF=1 (caller ignores, falls back to its own loader).
+      // DX is preserved 0 by caller (`xor dx, dx` before the call), so default
+      // CF=1 + DX=0 is what we return.
+      cpu.setFlag(CF, true);
+      break;
+    }
     default:
       cpu.setFlag(CF, true);
       break;
