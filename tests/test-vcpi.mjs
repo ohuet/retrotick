@@ -395,13 +395,14 @@ function makeEmu() {
   assertEq(emu._cr0 & 1, 1, 'DE0C sets CR0.PE');
   // CS should be loaded with 0x08
   assertEq(emu.cpu.cs, 0x08, 'DE0C loads CS');
-  // GDT should be relocated to private area (HOST_GDT)
-  assertEq(emu._gdtBase, emu._vcpiPrivateArea, 'DE0C GDT relocated to private area');
-  assertEq(emu._gdtLimit, 128 * 8 - 1, 'DE0C GDT limit = 128 entries');
+  // GDT base should be the client GDT (no relocation — DOS4GW modifies its
+  // GDT directly via DS:[offset] in V86 mode, so we must read live entries).
+  assertEq(emu._gdtBase, clientGdt, 'DE0C GDT base = client GDT');
+  assertEq(emu._gdtLimit, 15, 'DE0C GDT limit preserved');
   // IDT base should match client IDT
   assertEq(emu._idtBase, clientIdt, 'DE0C IDT base = client IDT');
   // _vcpiPmGdtBase should be cached
-  assertEq(emu._vcpiPmGdtBase, emu._vcpiPrivateArea, 'DE0C caches PM GDT base');
+  assertEq(emu._vcpiPmGdtBase, clientGdt, 'DE0C caches PM GDT base');
   // Flags: IF=0, VM=0, IOPL=3
   const f = emu.cpu.getFlags();
   assertEq(f & 0x200, 0, 'DE0C IF=0');
@@ -415,10 +416,10 @@ function makeEmu() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Test 10: DE0C — Second switch reuses cached PM GDT/IDT
+// Test 10: DE0C — Second switch re-reads client GDTR each time
 // ────────────────────────────────────────────────────────────────────────────
 {
-  console.log('\n=== Test 10: DE0C Second switch reuses cached state ===');
+  console.log('\n=== Test 10: DE0C Second switch re-reads client GDTR ===');
   const emu = makeEmu();
   emu.cpu.reg[EAX] = 0xDE00;
   handleInt67(emu.cpu, emu);
@@ -446,21 +447,25 @@ function makeEmu() {
   emu.cpu.reg[EAX] = 0xDE0C;
   handleInt67(emu.cpu, emu);
 
-  // Now simulate that PM code modified GDT base via LGDT
-  emu._gdtBase = 0xABCDE000;
-  emu._gdtLimit = 0x123;
-  emu._vcpiPmGdtBase = 0xABCDE000;
-  emu._vcpiPmGdtLimit = 0x123;
+  // Simulate V86 code updating its GDTR pseudo-descriptor (e.g. after relocation)
+  const newGdt = 0xABCDE000;
+  // The new GDT entry must be readable for loadCS to work — write a code seg
+  emu.memory.writeU32(newGdt + 0, 0);
+  emu.memory.writeU32(newGdt + 4, 0);
+  emu.memory.writeU32(newGdt + 8, 0x0000FFFF);
+  emu.memory.writeU32(newGdt + 12, 0x00CF9A00);
+  emu.memory.writeU16(0x70000, 0x123);
+  emu.memory.writeU32(0x70002, newGdt);
 
   // Reset for second switch — switch back to V86 first via direct flag
   emu.cpu.realMode = true;
 
-  // The second switch should reuse cached _vcpiPmGdt* values rather than reread the GDTR
+  // The second switch should re-read the client GDTR (not use a cached copy)
   emu.cpu.reg[ESI] = struct;
   emu.cpu.reg[EAX] = 0xDE0C;
   handleInt67(emu.cpu, emu);
-  assertEq(emu._gdtBase, 0xABCDE000, 'DE0C 2nd switch restores cached GDT base');
-  assertEq(emu._gdtLimit, 0x123, 'DE0C 2nd switch restores cached GDT limit');
+  assertEq(emu._gdtBase, newGdt, 'DE0C 2nd switch re-reads client GDTR base');
+  assertEq(emu._gdtLimit, 0x123, 'DE0C 2nd switch re-reads client GDTR limit');
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -571,19 +576,11 @@ function makeEmu() {
   assertEq(emu.cpu.ss, 0x2000, 'PM 0x0C SS = V86 SS');
   assertEq(emu.cpu.fs, 0x5000, 'PM 0x0C FS = V86 FS');
   assertEq(emu.cpu.gs, 0x6000, 'PM 0x0C GS = V86 GS');
-  assertEq(emu.cpu.eip, 0x1234, 'PM 0x0C EIP = V86 EIP');
+  // V86 EIP is stored as linear (segBase + offset). With CS=0x1000, base=0x10000.
+  assertEq(emu.cpu.eip, 0x10000 + 0x1234, 'PM 0x0C EIP = V86 segBase + offset');
   assertEq(emu.cpu.reg[ESP] & 0xFFFF, 0xFFEE, 'PM 0x0C ESP = V86 ESP');
   assertEq(emu.cpu.use32, false, 'PM 0x0C use32=false (16-bit V86)');
   assertEq(emu.cpu.reg[EAX] & 0xFF00, 0x0000, 'PM 0x0C AH=0 success');
-
-  // Should have loaded the host GDT/IDT (so SGDT in V86 returns 32 entries)
-  assertEq(emu._gdtBase, emu._vcpiPrivateArea, 'PM 0x0C GDT base = private area');
-  assertEq(emu._gdtLimit, 0xFF, 'PM 0x0C GDT limit = 0xFF');
-
-  // Cached flat bases for unreal-mode access
-  assertEq(emu.cpu.segBases.get(0x1000), 0, 'PM 0x0C CS flat base = 0');
-  assertEq(emu.cpu.segBases.get(0x4000), 0, 'PM 0x0C DS flat base = 0');
-  assertEq(emu.cpu.segBases.get(0x2000), 0, 'PM 0x0C SS flat base = 0');
 }
 
 // ────────────────────────────────────────────────────────────────────────────

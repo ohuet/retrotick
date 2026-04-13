@@ -600,58 +600,21 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           // code may have modified them (via LGDT/LIDT or direct writes), and the
           // client's V86 save code may have overwritten the GDTR pseudo-descriptor
           // in the data structure with unrelated PM state data.
-          if (!emu._vcpiPmGdtBase) {
-            // First switch — read client's GDTR/IDTR
+          // Read client's GDTR/IDTR on every switch. DOS4GW modifies its GDT
+          // directly via DS:[offset] in V86 mode (treating the GDT as data in
+          // its own DS), so we must always use the client's own GDT — never a
+          // relocated copy — to see the live entries.
+          {
             const gdtrAddr = cpu.mem.readU32(esi + 4);
             const idtrAddr = cpu.mem.readU32(esi + 8);
-            const clientGdtBase = cpu.mem.readU32(gdtrAddr + 2);
-            const clientGdtLimit = cpu.mem.readU16(gdtrAddr);
+            emu._gdtBase = cpu.mem.readU32(gdtrAddr + 2);
+            emu._gdtLimit = cpu.mem.readU16(gdtrAddr);
             emu._idtBase = cpu.mem.readU32(idtrAddr + 2);
             emu._idtLimit = cpu.mem.readU16(idtrAddr);
-            // Relocate GDT to extended memory with more entries for passup stacks.
-            // DOS4GW uses GDT[1] (sel 0x08) as a self-alias — its limit controls
-            // the perceived GDT size. We copy the GDT, extend it, and update the
-            // self-alias base+limit to point to the relocated copy.
-            const HOST_GDT = VCPI_PRIVATE_AREA;
-            const TARGET_ENTRIES = 128;
-            const targetLimit = TARGET_ENTRIES * 8 - 1;
-            // Copy existing entries
-            for (let i = 0; i <= clientGdtLimit; i++) {
-              cpu.mem.writeU8(HOST_GDT + i, cpu.mem.readU8(clientGdtBase + i));
-            }
-            // Zero-fill extra entries
-            for (let i = clientGdtLimit + 1; i <= targetLimit; i++) {
-              cpu.mem.writeU8(HOST_GDT + i, 0);
-            }
-            // Update GDT[1] self-alias: new base=HOST_GDT, new limit=targetLimit
-            const selfLo = cpu.mem.readU32(HOST_GDT + 0x08);
-            const selfHi = cpu.mem.readU32(HOST_GDT + 0x0C);
-            const newSelfLo = ((HOST_GDT & 0xFFFF) << 16) | (targetLimit & 0xFFFF);
-            const newSelfHi = (HOST_GDT & 0xFF000000)
-              | (selfHi & 0x00F0FF00)  // keep flags + access
-              | ((targetLimit >>> 16) & 0xF) << 16
-              | ((HOST_GDT >>> 16) & 0xFF);
-            cpu.mem.writeU32(HOST_GDT + 0x08, newSelfLo);
-            cpu.mem.writeU32(HOST_GDT + 0x0C, newSelfHi);
-            // ALSO update the original GDT's self-alias to point to HOST_GDT.
-            // DOS4GW might access GDT[1] via the original GDT address too.
-            cpu.mem.writeU32(clientGdtBase + 0x08, newSelfLo);
-            cpu.mem.writeU32(clientGdtBase + 0x0C, newSelfHi);
-            // Update GDTR in structure
-            cpu.mem.writeU32(gdtrAddr + 2, HOST_GDT);
-            cpu.mem.writeU16(gdtrAddr, targetLimit);
-            emu._gdtBase = HOST_GDT;
-            emu._gdtLimit = targetLimit;
-            emu._vcpiPmGdtBase = HOST_GDT;
-            emu._vcpiPmGdtLimit = targetLimit;
+            emu._vcpiPmGdtBase = emu._gdtBase;
+            emu._vcpiPmGdtLimit = emu._gdtLimit;
             emu._vcpiPmIdtBase = emu._idtBase;
             emu._vcpiPmIdtLimit = emu._idtLimit;
-          } else {
-            // Subsequent switches — restore saved PM state
-            emu._gdtBase = emu._vcpiPmGdtBase;
-            emu._gdtLimit = emu._vcpiPmGdtLimit!;
-            emu._idtBase = emu._vcpiPmIdtBase!;
-            emu._idtLimit = emu._vcpiPmIdtLimit!;
           }
           // Store LDTR/TR
           emu._ldtr = newLDTR;
@@ -791,11 +754,8 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
         const tb = cpu.mem.readU8(tssDescAddr);
         cpu.mem.writeU8(tssDescAddr, tb & 0xFD);
       }
-      // Switch to V86/real mode — cache flat bases for "unreal mode".
-      // DOS4GW uses PM flat segments (base=0), then returns to V86 and
-      // accesses data via the cached 32-bit bases. We cache base=0 for
-      // all V86 segment registers so segBase() returns 0 (flat) instead
-      // of seg*16 when VCPI is active.
+      // Switch to V86/real mode. V86 addressing is seg*16 (not flat),
+      // so EIP must be stored as linear = segBase + offset.
       cpu.realMode = true;
       cpu.use32 = false;
       cpu._addrSize16 = true;
@@ -805,15 +765,8 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       cpu.ss = newSS;
       cpu.fs = newFS;
       cpu.gs = newGS;
-      // Cache flat bases for V86 segment registers
-      cpu.segBases.set(newCS, 0);
-      cpu.segBases.set(newDS, 0);
-      cpu.segBases.set(newES, 0);
-      cpu.segBases.set(newSS, 0);
-      if (newFS) cpu.segBases.set(newFS, 0);
-      if (newGS) cpu.segBases.set(newGS, 0);
       cpu.reg[ESP] = newESP;
-      cpu.eip = newEIP; // flat base=0, so EIP = offset directly
+      cpu.eip = ((newCS * 16) + (newEIP & 0xFFFF)) >>> 0;
       cpu.setFlags(newEFLAGS);
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
       return true;
