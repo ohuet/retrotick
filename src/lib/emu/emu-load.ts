@@ -1062,10 +1062,12 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.cpu.ss = mz.entrySS;
   emu.cpu.eip = (emu.cpu.segBase(mz.entryCS)) + mz.entryIP;
   emu.cpu.reg[4] = mz.entrySP; // SP
-  // IF=1: enable hardware interrupts; IOPL=3: simulate V86 privilege level so DOS
-  // programs run with I/O access (matching real DOS+EMM386/VCPI environment where
-  // the program runs as a V86 task with IOPL=3).
-  emu.cpu.setFlags(emu.cpu.getFlags() | 0x0200 | 0x3000);
+  // IF=1: enable hardware interrupts. Real-mode programs start with IOPL=0 —
+  // the previous IOPL=3 hack made DOS4GW's V86-detection trick (sub_82A4 in
+  // dos4gw.exe) believe we were already in V86, leading to the wrong code path.
+  // IOPL=0 + the matching DOSBox-style "DE00 fails from real mode" lets DOS4GW
+  // take its raw mode-switch path (sub_8087) which works without VCPI.
+  emu.cpu.setFlags(emu.cpu.getFlags() | 0x0200);
 
   // Set up video memory area (B800:0000)
   for (let i = 0; i < emu.screenCols * emu.screenRows; i++) {
