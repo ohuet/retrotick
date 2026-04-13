@@ -15,8 +15,61 @@ import { PropertiesDialog } from './PropertiesDialog';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
 import { t } from '../lib/regional-settings';
+import type { FileItem } from '../hooks/useFolderTools';
 
 const WINDOW_STYLE = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME;
+
+function formatSizeShort(bytes: number, strings: { sizeKB: string; sizeMB: string; sizeGB: string }): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024).toLocaleString()} ${strings.sizeKB}`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} ${strings.sizeMB}`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} ${strings.sizeGB}`;
+}
+
+function statusBar(items: FileItem[], selected: Set<string>) {
+  const strings = t();
+  let text: string;
+  let size: number;
+  if (selected.size > 0) {
+    text = strings.statusSelected.replace('{0}', String(selected.size));
+    size = 0;
+    for (const item of items) {
+      if (selected.has(item.name) && !item.isFolder) size += item.size;
+    }
+  } else {
+    text = strings.statusObjects.replace('{0}', String(items.length));
+    size = 0;
+    for (const item of items) {
+      if (!item.isFolder) size += item.size;
+    }
+  }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      height: '20px', padding: '0 4px', background: '#D4D0C8', flexShrink: 0,
+      borderTop: '1px solid #808080',
+      font: '11px "Tahoma", "MS Sans Serif", sans-serif',
+    }}>
+      <div style={{
+        flex: 1, padding: '0 2px', overflow: 'hidden', whiteSpace: 'nowrap',
+        borderRight: '1px solid #fff',
+        boxShadow: 'inset 1px 1px 0 #808080, inset -1px -1px 0 #fff',
+        lineHeight: '18px', paddingLeft: '4px',
+      }}>
+        {text}
+      </div>
+      {size > 0 && (
+        <div style={{
+          padding: '0 6px', whiteSpace: 'nowrap',
+          boxShadow: 'inset 1px 1px 0 #808080, inset -1px -1px 0 #fff',
+          lineHeight: '18px', marginLeft: '2px',
+        }}>
+          {formatSizeShort(size, strings)}
+        </div>
+      )}
+    </div>
+  );
+}
 const CLIENT_W = 500;
 const CLIENT_H = 350;
 
@@ -85,6 +138,17 @@ export function FolderWindow({
       onPaste(prefix).then(() => fm.loadItems());
       return;
     }
+    if (key === 'Enter' && e.altKey && fm.selected.size >= 1) {
+      e.preventDefault();
+      if (fm.selected.size === 1) {
+        const item = fm.items.find(i => i.name === [...fm.selected][0]);
+        if (item) fm.setPropertiesItem(item);
+      } else {
+        const items = fm.items.filter(i => fm.selected.has(i.name));
+        if (items.length > 0) fm.setPropertiesItem(items);
+      }
+      return;
+    }
     if (key === 'Enter' && fm.selected.size === 1) {
       e.preventDefault();
       const name = [...fm.selected][0];
@@ -106,8 +170,8 @@ export function FolderWindow({
       e.preventDefault();
       if (fm.items.length === 0) return;
       if (fm.selected.size === 0) { fm.selectOne(fm.items[0].name); return; }
-      const anchor = fm.anchor || [...fm.selected][0];
-      const idx = fm.items.findIndex(i => i.name === anchor);
+      const current = (e.shiftKey ? fm.focus : fm.anchor) || [...fm.selected][0];
+      const idx = fm.items.findIndex(i => i.name === current);
       if (idx === -1) { fm.selectOne(fm.items[0].name); return; }
       const el = contentRef.current;
       const cols = el ? Math.max(1, Math.floor((el.clientWidth - 12) / 79)) : 1;
@@ -123,6 +187,16 @@ export function FolderWindow({
       }
       const icon = contentRef.current?.querySelector(`[data-store-path="${CSS.escape(fm.items[next].name)}"]`);
       icon?.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    // Type-ahead: press a letter/digit to jump to matching item
+    if (key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const matched = fm.selectByKey(key);
+      if (matched) {
+        e.preventDefault();
+        const icon = contentRef.current?.querySelector(`[data-store-path="${CSS.escape(matched)}"]`);
+        icon?.scrollIntoView({ block: 'nearest' });
+      }
     }
   }
 
@@ -259,63 +333,66 @@ export function FolderWindow({
         iconUrl={null}
         iconElement={FOLDER_ICON_16}
       >
-        <div
-          ref={contentRef}
-          tabIndex={-1}
-          style={{ width: '100%', height: '100%', overflow: 'auto', background: 'white', outline: 'none', position: 'relative' }}
-          onClick={() => { if (consumeDrag()) return; fm.clearSelection(); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
-          onPointerDown={onRubberBandDown}
-          onKeyDown={handleKeyDown}
-          onContextMenu={(e: MouseEvent) => {
-            if (!(e.target as HTMLElement).closest('[data-desktop-icon]')) {
-              e.preventDefault();
-              fm.setContextMenu(null);
-              fm.setBgContextMenu({ x: e.clientX, y: e.clientY });
-            }
-          }}
-          onDragOver={(e: DragEvent) => e.preventDefault()}
-          onDrop={handleBackgroundDrop}
-        >
-          {rubberRect && (
-            <div class="pointer-events-none" style={{ position: 'absolute', left: rubberRect.x, top: rubberRect.y, width: rubberRect.w, height: rubberRect.h, border: '1px dotted #000', background: 'rgba(0,0,128,0.15)', zIndex: 40 }} />
-          )}
-          <div class="flex flex-wrap content-start gap-1 p-2" style={{ minHeight: '100%' }}>
-            {fm.items.map(item => (
-              <DesktopIcon
-                key={item.name}
-                name={item.displayName}
-                storePath={item.name}
-                iconUrl={item.iconUrl}
-                isFolder={item.isFolder}
-                isExe={item.isExe}
-                darkText
-                selected={fm.selected.has(item.name)}
-                editing={fm.editingName === item.name}
-                isCut={cutSet?.has(item.name)}
-                selectedPaths={selectedArray}
-                onSelect={(e) => {
-                  if (e.ctrlKey) fm.selectToggle(item.name);
-                  else if (e.shiftKey) fm.selectRange(item.name);
-                  else fm.selectOne(item.name);
-                  contentRef.current?.focus();
-                }}
-                onOpen={() => handleOpen(item)}
-                onRename={(newName) => fm.handleRename(item.name, newName)}
-                onContextMenu={(e: MouseEvent) => {
-                  fm.setBgContextMenu(null);
-                  if (!fm.selected.has(item.name)) fm.selectOne(item.name);
-                  fm.setContextMenu({ x: e.clientX, y: e.clientY, item });
-                }}
-                onDropOnIcon={(paths) => fm.handleDropOnFolder(item.name, paths)}
-                onDropExternalOnIcon={(e) => fm.handleExternalDropOnFolder(item.name, e)}
-              />
-            ))}
-            {fm.items.length === 0 && (
-              <div class="flex items-center justify-center w-full text-gray-400 text-sm" style={{ minHeight: '200px' }}>
-                {t().folderEmpty}
-              </div>
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+          <div
+            ref={contentRef}
+            tabIndex={-1}
+            style={{ flex: 1, overflow: 'auto', background: 'white', outline: 'none', position: 'relative' }}
+            onClick={() => { if (consumeDrag()) return; fm.clearSelection(); fm.setContextMenu(null); fm.setBgContextMenu(null); }}
+            onPointerDown={onRubberBandDown}
+            onKeyDown={handleKeyDown}
+            onContextMenu={(e: MouseEvent) => {
+              if (!(e.target as HTMLElement).closest('[data-desktop-icon]')) {
+                e.preventDefault();
+                fm.setContextMenu(null);
+                fm.setBgContextMenu({ x: e.clientX, y: e.clientY });
+              }
+            }}
+            onDragOver={(e: DragEvent) => e.preventDefault()}
+            onDrop={handleBackgroundDrop}
+          >
+            {rubberRect && (
+              <div class="pointer-events-none" style={{ position: 'absolute', left: rubberRect.x, top: rubberRect.y, width: rubberRect.w, height: rubberRect.h, border: '1px dotted #000', background: 'rgba(0,0,128,0.15)', zIndex: 40 }} />
             )}
+            <div class="flex flex-wrap content-start gap-1 p-2" style={{ minHeight: '100%' }}>
+              {fm.items.map(item => (
+                <DesktopIcon
+                  key={item.name}
+                  name={item.displayName}
+                  storePath={item.name}
+                  iconUrl={item.iconUrl}
+                  isFolder={item.isFolder}
+                  isExe={item.isExe}
+                  darkText
+                  selected={fm.selected.has(item.name)}
+                  editing={fm.editingName === item.name}
+                  isCut={cutSet?.has(item.name)}
+                  selectedPaths={selectedArray}
+                  onSelect={(e) => {
+                    if (e.ctrlKey) fm.selectToggle(item.name);
+                    else if (e.shiftKey) fm.selectRange(item.name);
+                    else fm.selectOne(item.name);
+                    contentRef.current?.focus();
+                  }}
+                  onOpen={() => handleOpen(item)}
+                  onRename={(newName) => fm.handleRename(item.name, newName)}
+                  onContextMenu={(e: MouseEvent) => {
+                    fm.setBgContextMenu(null);
+                    if (!fm.selected.has(item.name)) fm.selectOne(item.name);
+                    fm.setContextMenu({ x: e.clientX, y: e.clientY, item });
+                  }}
+                  onDropOnIcon={(paths) => fm.handleDropOnFolder(item.name, paths)}
+                  onDropExternalOnIcon={(e) => fm.handleExternalDropOnFolder(item.name, e)}
+                />
+              ))}
+              {fm.items.length === 0 && (
+                <div class="flex items-center justify-center w-full text-gray-400 text-sm" style={{ minHeight: '200px' }}>
+                  {t().folderEmpty}
+                </div>
+              )}
+            </div>
           </div>
+          {statusBar(fm.items, fm.selected)}
         </div>
       </Window>
 
@@ -361,7 +438,7 @@ export function FolderWindow({
         menuItems.push(mi(CMD_DELETE, t().delete_));
         menuItems.push(mi(CMD_RENAME, t().rename, { isGrayed: multi }));
         menuItems.push({ ...sep });
-        menuItems.push(mi(CMD_PROPS, t().properties, { isGrayed: multi }));
+        menuItems.push(mi(CMD_PROPS, t().properties));
         return (
           <div onClick={(e: Event) => e.stopPropagation()}>
             <MenuDropdown
@@ -380,7 +457,14 @@ export function FolderWindow({
                   });
                 }
                 else if (id === CMD_DELETE) fm.setConfirmDelete([...fm.selected]);
-                else if (id === CMD_PROPS) fm.setPropertiesItem(item);
+                else if (id === CMD_PROPS) {
+                  if (multi) {
+                    const items = fm.items.filter(i => fm.selected.has(i.name));
+                    fm.setPropertiesItem(items);
+                  } else {
+                    fm.setPropertiesItem(item);
+                  }
+                }
               }}
               onClose={() => fm.setContextMenu(null)}
             />
@@ -401,16 +485,25 @@ export function FolderWindow({
       {fm.propertiesItem && (
         <div onPointerDown={() => fm.setPropsFlash(c => c + 1)}>
           <PropertiesDialog
-            info={{
-              displayName: fm.propertiesItem.displayName,
-              isFolder: fm.propertiesItem.isFolder,
-              isExe: fm.propertiesItem.isExe,
-              iconUrl: fm.propertiesItem.iconUrl,
-              size: fm.propertiesItem.size,
-              addedAt: fm.propertiesItem.addedAt,
-              location: folderPath,
-              folderContents: fm.folderContents,
-            }}
+            info={Array.isArray(fm.propertiesItem)
+              ? {
+                  displayName: t().propMultiObjects.replace('{0}', String(fm.propertiesItem.length)),
+                  isFolder: false, isExe: false, iconUrl: null,
+                  size: fm.propertiesItem.reduce((s, i) => s + i.size, 0),
+                  addedAt: 0, location: folderPath,
+                  multiCount: fm.propertiesItem.length,
+                }
+              : {
+                  displayName: fm.propertiesItem.displayName,
+                  isFolder: fm.propertiesItem.isFolder,
+                  isExe: fm.propertiesItem.isExe,
+                  iconUrl: fm.propertiesItem.iconUrl,
+                  size: fm.propertiesItem.size,
+                  addedAt: fm.propertiesItem.addedAt,
+                  location: folderPath,
+                  folderContents: fm.folderContents,
+                }
+            }
             flashTrigger={fm.propsFlash}
             onClose={() => fm.setPropertiesItem(null)}
           />

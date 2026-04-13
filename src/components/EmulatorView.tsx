@@ -615,9 +615,16 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         setWindowReady(prev => { if (!prev) onReady?.(); return true; });
       };
       emu.onCrash = (eip: string, description: string) => { setCrashInfo({ eip, description }); onReady?.(); };
+      let initialLoadDone = false;
       emu.onMissingDll = (dllName: string) => {
+        if (!initialLoadDone) return; // will be listed in the post-run batch
         const s = t();
-        setTimeout(() => alert(`${s.missingDlls.replace('{0}', dllName)}\n\n${s.missingDllsHint}`), 0);
+        setMessageBoxes(prev => [...prev, {
+          id: Date.now(),
+          caption: exeBaseName,
+          text: `${s.missingDlls.replace('{0}', dllName)}\n\n${s.missingDllsHint}`,
+          type: 0x30, /* MB_ICONWARNING */
+        }]);
       };
       emu.onReboot = () => { location.reload(); };
       emu.onExit = () => {
@@ -782,6 +789,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }
 
         emu.run();
+        initialLoadDone = true;
         if (emu.missingDlls.length > 0) {
           const s = t();
           const dlls = emu.missingDlls.join(', ');

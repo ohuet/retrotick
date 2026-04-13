@@ -97,7 +97,7 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
   }
 
   const iconFilter = (selected || folderDragOver)
-    ? { filter: 'brightness(0.7) saturate(0.3) contrast(0.8)' }
+    ? { filter: 'brightness(0.7) saturate(0.3) contrast(0.8)', ...(isCut ? { opacity: 0.5 } : {}) }
     : isCut ? { opacity: 0.5 } : undefined;
 
   return (
@@ -137,7 +137,7 @@ export function DesktopIcon({ name, storePath, iconUrl, isFolder, isExe, selecte
           style={{
             color: darkText ? '#000' : '#FFF',
             textShadow: darkText ? 'none' : '1px 1px 0 #000',
-            ...(isCut && !selected ? { opacity: 0.5 } : {}),
+            ...(isCut ? { opacity: 0.5 } : {}),
             ...(selected ? { background: '#0A246A', color: '#FFF', textShadow: 'none', outline: '1px dotted #FFF', outlineOffset: '0px', margin: '0 -1px', padding: '0 1px' } : {}),
           }}
         >
