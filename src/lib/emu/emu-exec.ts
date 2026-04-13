@@ -1146,8 +1146,13 @@ export function emuTick(emu: Emulator): void {
           inImage = true;
         }
       } else if (emu.isDOS) {
-        // DOS mode: any address in conventional memory (0-0xFFFFF) or heap is valid
-        inImage = newEip < 0x100000 || (newEip >= emu.heapBase && newEip < emu.virtualPtr + 0x100000);
+        // DOS mode: any address in conventional memory (0-0xFFFFF) or heap is valid.
+        // In protected mode (DOS extender code), allow any address — DOS extenders
+        // run code at high linear addresses via VCPI/DPMI page tables, and the
+        // conventional-memory bound doesn't apply once we're past the V86 layer.
+        inImage = !emu.cpu.realMode
+          || newEip < 0x100000
+          || (newEip >= emu.heapBase && newEip < emu.virtualPtr + 0x100000);
       } else {
         inImage = emu.pe && newEip >= emu.pe.imageBase && newEip < emu.pe.imageBase + emu.pe.sizeOfImage;
         if (!inImage) {
