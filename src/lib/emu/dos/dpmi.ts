@@ -141,10 +141,8 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // For 32-bit clients (AX bit 0 = 1): D=1, for 16-bit: D=0.
   const rmDS = cpu.ds;
   const rmSS = cpu.ss;
-  const rmES = cpu.es;
   const dsBase = (rmDS * 16) >>> 0;
   const ssBase = (rmSS * 16) >>> 0;
-  const esBase = (rmES * 16) >>> 0;
   // Initial descriptors are always 16-bit (D=0). The bootstrap code at the
   // return address is 16-bit MZ code. The 32-bit flag (AX bit 0) only affects
   // how DPMI services handle register parameters (32-bit offsets vs 16-bit).
@@ -154,11 +152,11 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   writeGdtEntry(emu.memory, gdtBase, 2, dsBase, 0xFFFF, 0x92, 0x00);
   // idx 3 (0x18): stack — base=RM SS*16, limit=64KB, read/write
   writeGdtEntry(emu.memory, gdtBase, 3, ssBase, 0xFFFF, 0x92, 0x00);
-  // idx 4 (0x20): PSP — base=PSP*16, limit=0xFF
+  // idx 4 (0x20): PSP — base=PSP*16, limit=0xFF (DPMI 0.9: ES starts as PSP)
   const pspBase = (emu._dosPSP || 0) * 16;
   writeGdtEntry(emu.memory, gdtBase, 4, pspBase, 0xFF, 0x92, 0x00);
-  // idx 5 (0x28): ES — base=RM ES*16, limit=64KB, read/write
-  writeGdtEntry(emu.memory, gdtBase, 5, esBase, 0xFFFF, 0x92, 0x00);
+  // idx 5 (0x28): environment selector — base=PSP env seg*16, limit=64KB (rarely used)
+  writeGdtEntry(emu.memory, gdtBase, 5, 0, 0xFFFF, 0x92, 0x00);
   // idx 6 (0x30): flat code — base=0, limit=4GB, for raw mode switch stubs
   writeGdtEntry(emu.memory, gdtBase, 6, 0, 0xFFFFF, 0x9A, 0x08); // G=1
 
@@ -196,13 +194,18 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // Switch to protected mode
   cpu.realMode = false;
 
-  // Load segment registers — each maps the caller's corresponding RM segment
+  // Load segment registers. Per DPMI 0.9 spec:
+  //   CS = 16-bit code selector for caller's RM CS
+  //   DS = 16-bit data selector for caller's RM DS
+  //   ES = PSP selector (0x100 bytes)
+  //   SS = 16-bit stack selector for caller's RM SS
+  //   FS, GS = undefined (we leave them as 0)
   cpu.loadCS(0x08);
   cpu.ds = 0x10;
-  cpu.es = 0x28;      // ES gets its own selector (idx 5)
+  cpu.es = 0x20;      // PSP selector (idx 4)
   cpu.ss = 0x18;
-  cpu.fs = 0x10;
-  cpu.gs = 0x10;
+  cpu.fs = 0;
+  cpu.gs = 0;
 
   // ESP stays as the 16-bit SP (initial code is always 16-bit)
   cpu.reg[ESP] = (cpu.reg[ESP] & ~0xFFFF) | ((flatSP - ssBase) & 0xFFFF);
@@ -215,7 +218,7 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.segBases.set(0x10, dsBase);
   cpu.segBases.set(0x18, ssBase);
   cpu.segBases.set(0x20, pspBase);
-  cpu.segBases.set(0x28, esBase);
+  cpu.segBases.set(0x28, 0);
   cpu.segBases.set(0x30, 0); // flat code for stubs
   cpu.segBases.set(0x38, DPMI_REFLECTOR_BASE); // PM reflector stubs
 
@@ -697,9 +700,10 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator): boolean {
 function dpmiGetVersion(cpu: CPU): boolean {
   cpu.setReg8(EAX + 4, 0x00); // AH = major version 0
   cpu.setReg8(EAX, 0x5A);     // AL = minor version 90 (0.9)
-  cpu.setReg16(EBX, 0x0005);  // BX = flags: 32-bit, no virtual memory
+  cpu.setReg16(EBX, 0x0005);  // BX = flags: 32-bit supported, virtual memory
   cpu.setReg8(ECX, 0x03);     // CL = processor type (386)
-  cpu.setReg8(EDX, 0x00);     // DH:DL = master/slave PIC base (08h/70h already default)
+  cpu.setReg8(EDX + 4, 0x08); // DH = master PIC base interrupt (real-mode 08h)
+  cpu.setReg8(EDX, 0x70);     // DL = slave PIC base interrupt (real-mode 70h)
   cpu.setFlag(0x001, false);
   return true;
 }
