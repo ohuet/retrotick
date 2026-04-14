@@ -141,8 +141,10 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // For 32-bit clients (AX bit 0 = 1): D=1, for 16-bit: D=0.
   const rmDS = cpu.ds;
   const rmSS = cpu.ss;
+  const rmES = cpu.es;
   const dsBase = (rmDS * 16) >>> 0;
   const ssBase = (rmSS * 16) >>> 0;
+  const esBase = (rmES * 16) >>> 0;
   // Initial descriptors are always 16-bit (D=0). The bootstrap code at the
   // return address is 16-bit MZ code. The 32-bit flag (AX bit 0) only affects
   // how DPMI services handle register parameters (32-bit offsets vs 16-bit).
@@ -152,11 +154,16 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   writeGdtEntry(emu.memory, gdtBase, 2, dsBase, 0xFFFF, 0x92, 0x00);
   // idx 3 (0x18): stack — base=RM SS*16, limit=64KB, read/write
   writeGdtEntry(emu.memory, gdtBase, 3, ssBase, 0xFFFF, 0x92, 0x00);
-  // idx 4 (0x20): PSP — base=PSP*16, limit=0xFF (DPMI 0.9: ES starts as PSP)
+  // idx 4 (0x20): PSP selector — base=PSP*16, limit=0xFF
   const pspBase = (emu._dosPSP || 0) * 16;
   writeGdtEntry(emu.memory, gdtBase, 4, pspBase, 0xFF, 0x92, 0x00);
-  // idx 5 (0x28): environment selector — base=PSP env seg*16, limit=64KB (rarely used)
-  writeGdtEntry(emu.memory, gdtBase, 5, 0, 0xFFFF, 0x92, 0x00);
+  // idx 5 (0x28): ES shadow — base=RM ES*16, limit=64KB, read/write.
+  // Note: DPMI 0.9 spec says the initial ES should be a PSP selector, but in
+  // practice DOS4GW reads ES right after entry expecting to find the same
+  // data its real-mode ES was pointing at (typically its own data segment).
+  // Mirroring rmES into a dedicated selector lets both conformant and
+  // DOS4GW-style clients work.
+  writeGdtEntry(emu.memory, gdtBase, 5, esBase, 0xFFFF, 0x92, 0x00);
   // idx 6 (0x30): flat code — base=0, limit=4GB, for raw mode switch stubs
   writeGdtEntry(emu.memory, gdtBase, 6, 0, 0xFFFFF, 0x9A, 0x08); // G=1
 
@@ -199,15 +206,14 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // Switch to protected mode
   cpu.realMode = false;
 
-  // Load segment registers. Per DPMI 0.9 spec:
-  //   CS = 16-bit code selector for caller's RM CS
-  //   DS = 16-bit data selector for caller's RM DS
-  //   ES = PSP selector (0x100 bytes)
-  //   SS = 16-bit stack selector for caller's RM SS
-  //   FS, GS = undefined (we leave them as 0)
+  // Load segment registers.
+  // Spec says ES should be a PSP selector; DOS4GW-family loaders read ES as if
+  // it were their original real-mode ES. We shadow rmES into GDT[5] (0x28) and
+  // load ES=0x28 so the client sees the same data under the same offset.
+  // The PSP selector is still available at 0x20 for clients that want it.
   cpu.loadCS(0x08);
   cpu.ds = 0x10;
-  cpu.es = 0x20;      // PSP selector (idx 4)
+  cpu.es = 0x28;      // shadow of RM ES (base = rmES * 16)
   cpu.ss = 0x18;
   cpu.fs = 0;
   cpu.gs = 0;
@@ -223,7 +229,7 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.segBases.set(0x10, dsBase);
   cpu.segBases.set(0x18, ssBase);
   cpu.segBases.set(0x20, pspBase);
-  cpu.segBases.set(0x28, 0);
+  cpu.segBases.set(0x28, esBase);
   cpu.segBases.set(0x30, 0); // flat code for stubs
   cpu.segBases.set(0x38, DPMI_REFLECTOR_BASE); // PM reflector stubs
 
@@ -257,6 +263,17 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
   }
 
   const st = emu._dpmiState;
+
+  // TEMP DPMI trace — log everything except high-frequency 0x204 polls
+  if (ax !== 0x0204 && ax !== 0x0203 && ax !== 0x0202 && ax !== 0x0201) {
+    const bx = cpu.getReg16(EBX);
+    const cx = cpu.getReg16(ECX);
+    const dx = cpu.getReg16(EDX);
+    const si = cpu.getReg16(ESI);
+    const di = cpu.getReg16(EDI);
+    const ipOff = (cpu.eip - cpu.segBase(cpu.cs)) >>> 0;
+    console.log(`[INT31] AX=${ax.toString(16).padStart(4,'0')} BX=${bx.toString(16)} CX=${cx.toString(16)} DX=${dx.toString(16)} SI=${si.toString(16)} DI=${di.toString(16)} DS=${cpu.ds.toString(16)} ES=${cpu.es.toString(16)} @${cpu.cs.toString(16)}:${ipOff.toString(16)}`);
+  }
 
   switch (ax) {
     // ── Descriptor management ──────────────────────────────────────
@@ -427,7 +444,17 @@ function dpmiGetSelectorIncrement(cpu: CPU): boolean {
 function dpmiGetSegmentBase(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
   const sel = cpu.getReg16(EBX);
   const idx = (sel & 0xFFF8) >>> 3;
-  const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
+  let base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
+  // Same uninitialized-descriptor fallback as cpu.segBase: if the GDT slot
+  // is wholly zero, synthesize base = sel * 16 (treat the selector value as
+  // a real-mode segment shadow — what DOS/4GW assumes).
+  if (base === 0 && sel >= 8) {
+    const addr = emu._gdtBase + idx * 8;
+    const lo = emu.memory.readU32(addr);
+    const hi = emu.memory.readU32(addr + 4);
+    if (lo === 0 && hi === 0) base = (sel * 16) >>> 0;
+  }
+  console.log(`[GetBase] sel=${sel.toString(16)} idx=${idx} base=0x${base.toString(16)}`);
   cpu.setReg16(ECX, (base >>> 16) & 0xFFFF);
   cpu.setReg16(EDX, base & 0xFFFF);
   cpu.setFlag(0x001, false);
@@ -544,12 +571,16 @@ function dpmiSetDescriptor(cpu: CPU, emu: Emulator): boolean {
   const descAddr = emu._gdtBase + idx * 8;
   const bufAddr = (cpu.segBase(cpu.es) + (cpu.use32 ? cpu.reg[EDI] : (cpu.reg[EDI] & 0xFFFF))) >>> 0;
 
+  let descDump = '';
   for (let i = 0; i < 8; i++) {
-    emu.memory.writeU8(descAddr + i, emu.memory.readU8(bufAddr + i));
+    const b = emu.memory.readU8(bufAddr + i);
+    descDump += b.toString(16).padStart(2, '0') + ' ';
+    emu.memory.writeU8(descAddr + i, b);
   }
   // Update segBases cache
   const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
   cpu.segBases.set(sel, base);
+  console.log(`[SetDesc] sel=${sel.toString(16)} bufLin=0x${bufAddr.toString(16)} bytes=[${descDump}] base=0x${base.toString(16)}`);
   cpu.setFlag(0x001, false);
   return true;
 }

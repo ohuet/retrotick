@@ -1800,6 +1800,33 @@ export function cpuStep(cpu: CPU): void {
           let ctx = '';
           for (let i = -8; i < 8; i++) ctx += cpu.mem.readU8((instrEip + i) >>> 0).toString(16).padStart(2, '0') + ' ';
           console.warn(`  bytes(eip-8..+8): ${ctx}`);
+          // If top-of-stack looks like a near-call return address within the
+          // current CS, dump the 8 bytes before it — that's where the CALL
+          // instruction lives, and its disassembly reveals the target.
+          const topWord = cpu.mem.readU16((ssBaseHere + spHere) >>> 0);
+          const retLinear = (csBaseHere + topWord) >>> 0;
+          let retCtx = '';
+          for (let i = -8; i < 2; i++) retCtx += cpu.mem.readU8((retLinear + i) >>> 0).toString(16).padStart(2, '0') + ' ';
+          console.warn(`  caller bytes(ret-8..+2) at linear 0x${retLinear.toString(16)}: ${retCtx}`);
+          // Also dump 32 bytes of DS data around a guessed indirect-call target
+          // (the FF /2 near-call form `ff 16 lo hi` puts the offset 2 bytes into
+          // the call instruction). Try to decode it and dump [ds:offset].
+          const callOp = cpu.mem.readU8((retLinear - 4) >>> 0);
+          const callMod = cpu.mem.readU8((retLinear - 3) >>> 0);
+          if (callOp === 0xff && callMod === 0x16) {
+            const target = cpu.mem.readU16((retLinear - 2) >>> 0);
+            const dsBaseHere = cpu.segBase(cpu.ds);
+            const val = cpu.mem.readU16((dsBaseHere + target) >>> 0);
+            console.warn(`  near call [ds:0x${target.toString(16)}]=0x${val.toString(16)} (ds=${cpu.ds.toString(16)} base 0x${dsBaseHere.toString(16)})`);
+            // Also sample what that slot would contain under several candidate
+            // base hypotheses (crash came from a wrong DS — help identify it).
+            const csBaseProbe = csBaseHere;
+            const ssBaseProbe = ssBaseHere;
+            const cand0 = cpu.mem.readU16((0 + target) >>> 0);
+            const candCS = cpu.mem.readU16((csBaseProbe + target) >>> 0);
+            const candSS = cpu.mem.readU16((ssBaseProbe + target) >>> 0);
+            console.warn(`  [target 0x${target.toString(16)}] at base=0:0x${cand0.toString(16)} at base=csBase(0x${csBaseProbe.toString(16)}):0x${candCS.toString(16)} at base=ssBase(0x${ssBaseProbe.toString(16)}):0x${candSS.toString(16)}`);
+          }
           cpu.haltReason = 'illegal instruction';
           cpu.halted = true;
           break;

@@ -120,7 +120,23 @@ export class CPU {
     // (e.g. memory testers scanning extended memory 64KB at a time), so caching is unsafe.
     if (this.emu?._gdtBase) {
       const base = this.loadGdtDescriptorBase(sel);
-      if (base !== undefined) return base;
+      if (base !== undefined) {
+        // Fallback for uninitialized descriptor slots: DOS/4GW's 16-bit PM
+        // code sometimes loads segment registers with the original real-mode
+        // segment value (e.g. `mov ds, rmSeg`) expecting the PM selector to
+        // map linearly to `rmSeg << 4`. If the selector index has an entirely
+        // zero descriptor (never written by the host or the client), treat it
+        // as a real-mode segment shadow. A non-null selector with non-zero
+        // bytes means the client explicitly set it up and we must honor the
+        // (possibly zero) base it stored.
+        if (base === 0 && sel >= 8) {
+          const addr = this.emu._gdtBase + ((sel & 0xFFF8) >>> 3) * 8;
+          const lo = this.mem.readU32(addr);
+          const hi = this.mem.readU32(addr + 4);
+          if (lo === 0 && hi === 0) return (sel * 16) >>> 0;
+        }
+        return base;
+      }
     }
     // No GDT (Win16): use the pre-populated selector→base map.
     const cached = this.segBases.get(sel);
