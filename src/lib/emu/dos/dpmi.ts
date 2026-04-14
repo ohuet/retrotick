@@ -163,14 +163,19 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // idx 7 (0x38): PM reflector code — base=DPMI_REFLECTOR_BASE, limit=0x500, code, DPL=3
   writeGdtEntry(emu.memory, gdtBase, 7, DPMI_REFLECTOR_BASE, 0x500, 0xFA, 0x00); // code readable DPL=3
 
-  // Write 256 reflector stubs: MOV AL, intNum; INT FEh; IRET (5 bytes each)
+  // Write 256 reflector stubs: MOV AL, intNum; INT FEh; RETF (5 bytes each).
+  // The DPMI default reflector address (returned by AX=0204 GetPmIntVector) is
+  // a callable far procedure — clients reach it with CALL FAR ptr16:16, which
+  // pushes only CS:IP. The stub must therefore terminate with RETF (0xCB), not
+  // IRET (0xCF). Using IRET pops a phantom FLAGS word and shifts SP by 2 extra
+  // bytes, corrupting the caller's stack on every interrupt reflection.
   for (let i = 0; i < 256; i++) {
     const addr = DPMI_REFLECTOR_BASE + i * 5;
     emu.memory.writeU8(addr + 0, 0xB0);              // MOV AL, imm8
     emu.memory.writeU8(addr + 1, i);                  // interrupt number
     emu.memory.writeU8(addr + 2, 0xCD);              // INT FEh
     emu.memory.writeU8(addr + 3, DPMI_REFLECTOR_INT);
-    emu.memory.writeU8(addr + 4, 0xCF);              // IRET
+    emu.memory.writeU8(addr + 4, 0xCB);              // RETF
   }
 
   // Set GDT in emulator
