@@ -291,7 +291,12 @@ export function dosDeleteFile(cpu: CPU, emu: Emulator): void {
 export function dosSeekFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const origin = cpu.reg[EAX] & 0xFF;
-  const offset = ((cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX)) >>> 0;
+  // CX:DX is a 32-bit offset. For SEEK_CUR/SEEK_END DOS interprets it as
+  // signed (allowing negative seeks relative to current/end). JS `|` yields
+  // a signed 32-bit which is exactly what we want — don't force unsigned
+  // with `>>> 0`, that would turn -4 into 0xFFFFFFFC and break end-relative
+  // seeks (e.g. Second Reality reads the last 4 bytes of its own EXE).
+  const offset = (cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX);
   const f = emu._dosFiles.get(h);
   if (f) {
     if (origin === 0) f.pos = offset;           // SEEK_SET
