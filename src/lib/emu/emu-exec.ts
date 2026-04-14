@@ -1255,7 +1255,9 @@ export function emuTick(emu: Emulator): void {
       const ss = emu.cpu.ss;
       const esp = emu.cpu.reg[4] >>> 0;
       const rm = emu.cpu.realMode ? 'RM' : 'PM';
-      console.log(`[HB] ${rm} steps=${emu.cpuSteps} ${cs.toString(16)}:${ip.toString(16)} eax=${eax.toString(16)} ebx=${ebx.toString(16)} ecx=${ecx.toString(16)} edx=${edx.toString(16)} ds=${ds.toString(16)} es=${es.toString(16)} ss=${ss.toString(16)} esp=${esp.toString(16)}`);
+      let bytes = '';
+      for (let k = 0; k < 8; k++) bytes += emu.memory.readU8((emu.cpu.eip + k) >>> 0).toString(16).padStart(2, '0') + ' ';
+      console.log(`[HB] ${rm} steps=${emu.cpuSteps} ${cs.toString(16)}:${ip.toString(16)} eax=${eax.toString(16)} ebx=${ebx.toString(16)} ecx=${ecx.toString(16)} edx=${edx.toString(16)} ds=${ds.toString(16)} es=${es.toString(16)} ss=${ss.toString(16)} esp=${esp.toString(16)} bytes=[${bytes.trim()}]`);
       // On the first RM heartbeat AFTER we've seen a DPMI entry (= post-V86
       // transition), dump 512 bytes around current EIP so we can disassemble
       // the looping code.

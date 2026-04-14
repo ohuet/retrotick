@@ -292,10 +292,9 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
     case 0x0205: return dpmiSetPmExcHandler(cpu, st, false); // interrupt vector (int 0-255)
 
     // ── Real mode translation ──────────────────────────────────────
-    case 0x0300: return dpmiSimulateRmInt(cpu, emu);
-    case 0x0301: // Call RM Far — same as 0x0300 but for far calls (treat identically)
-    case 0x0302: // Call RM IRET — same as 0x0300 for our purposes
-      return dpmiSimulateRmInt(cpu, emu);
+    case 0x0300: return dpmiSimulateRmInt(cpu, emu, 'int');
+    case 0x0301: return dpmiSimulateRmInt(cpu, emu, 'farcall');
+    case 0x0302: return dpmiSimulateRmInt(cpu, emu, 'iret');
     case 0x0303: { // Allocate Real Mode Callback
       // DS:(E)SI = PM callback procedure address
       // ES:(E)DI = RM call structure (50-byte buffer) used by the callback
@@ -660,11 +659,36 @@ function dpmiSetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boo
 
 // ── Real mode simulation ─────────────────────────────────────────────
 
-/** AX=0300: Simulate real mode interrupt. BL=int, ES:EDI → 50-byte RM call struct */
-function dpmiSimulateRmInt(cpu: CPU, emu: Emulator): boolean {
+/** AX=0300 (int), AX=0301 (farcall), AX=0302 (iret) — invoke a real-mode
+ *  procedure (either via INT, a far CALL, or a pushed IRET frame) described
+ *  by a 50-byte RM call structure at ES:EDI. For 'int', BL provides the INT
+ *  number (the struct's CS:IP is ignored and the IVT is used). For 'farcall'
+ *  and 'iret', the struct's CS:IP specifies the target, and BL is ignored. */
+function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'iret'): boolean {
   const intNum = cpu.getReg8(EBX); // BL
   const structAddr = (cpu.segBase(cpu.es) + (cpu.use32 ? cpu.reg[EDI] : (cpu.reg[EDI] & 0xFFFF))) >>> 0;
-  console.log(`[DPMI-SRI] AX=${(cpu.getReg16(EAX)).toString(16).padStart(4,'0')} intNum=${intNum.toString(16)} struct@0x${structAddr.toString(16)}`);
+  const sriCS = emu.memory.readU16(structAddr + 0x2C);
+  const sriIP = emu.memory.readU16(structAddr + 0x2A);
+  const sriSS = emu.memory.readU16(structAddr + 0x30);
+  const sriSP = emu.memory.readU16(structAddr + 0x2E);
+  const targetLinear = (sriCS * 16 + sriIP) >>> 0;
+  let targetBytes = '';
+  for (let k = 0; k < 16; k++) targetBytes += emu.memory.readU8((targetLinear + k) >>> 0).toString(16).padStart(2, '0') + ' ';
+  const inEax = emu.memory.readU32(structAddr + 0x1C);
+  const inEbx = emu.memory.readU32(structAddr + 0x10);
+  const inEcx = emu.memory.readU32(structAddr + 0x18);
+  const inEdx = emu.memory.readU32(structAddr + 0x14);
+  const inES = emu.memory.readU16(structAddr + 0x22);
+  const inDS = emu.memory.readU16(structAddr + 0x24);
+  console.log(`[DPMI-SRI] mode=${mode} intNum=${intNum.toString(16)} struct@0x${structAddr.toString(16)} rmCS:IP=${sriCS.toString(16)}:${sriIP.toString(16)} (lin 0x${targetLinear.toString(16)}) rmSS:SP=${sriSS.toString(16)}:${sriSP.toString(16)} bytes=[${targetBytes.trim()}]`);
+  console.log(`  in: eax=${inEax.toString(16)} ebx=${inEbx.toString(16)} ecx=${inEcx.toString(16)} edx=${inEdx.toString(16)} es=${inES.toString(16)} ds=${inDS.toString(16)}`);
+  // Dump current caller EIP bytes to see where INT 31h fired from
+  const callerCS = cpu.cs;
+  const callerCsBase = cpu.realMode ? (callerCS * 16) >>> 0 : cpu.segBase(callerCS);
+  const callerIp = (cpu.eip - callerCsBase) >>> 0;
+  let callerBytes = '';
+  for (let k = -6; k < 4; k++) callerBytes += emu.memory.readU8((cpu.eip + k) >>> 0).toString(16).padStart(2, '0') + ' ';
+  console.log(`  caller @${callerCS.toString(16)}:${callerIp.toString(16)} bytes=[${callerBytes.trim()}]`);
   // Read the 50-byte real mode call structure
   const rmEDI = emu.memory.readU32(structAddr + 0x00);
   const rmESI = emu.memory.readU32(structAddr + 0x04);
@@ -708,8 +732,51 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator): boolean {
   cpu.realMode = true;
   cpu.use32 = false;
 
-  // Call the DOS interrupt handler
-  handleDosInt(cpu, intNum, emu);
+  // For AX=0300 we dispatch the IVT entry for BL; for AX=0301/0302 the
+  // target is specified in the struct's CS:IP.
+  //
+  // We can't synchronously execute arbitrary real-mode code from within a
+  // JS handler. But DOS/4GW's LE loader uses AX=0302 to invoke a fixed
+  // dispatch table in low memory where each entry is `CD XX CA YY YY`
+  // (INT imm8; RETF imm16). For those stubs we can just emulate the INT
+  // directly. Any other farcall/iret target falls through as a NOP.
+  if (mode === 'int') {
+    handleDosInt(cpu, intNum, emu);
+  } else {
+    const targetLin = (sriCS * 16 + sriIP) >>> 0;
+    const b0 = emu.memory.readU8(targetLin);
+    const b2 = emu.memory.readU8((targetLin + 2) >>> 0);
+    if (b0 === 0xCD && (b2 === 0xCA || b2 === 0xCB)) {
+      const stubInt = emu.memory.readU8((targetLin + 1) >>> 0);
+      console.log(`  → ${mode} stub is 'INT ${stubInt.toString(16)}; RET${b2 === 0xCA ? 'F' : 'F'}' — executing INT ${stubInt.toString(16)}`);
+      // For INT 21h AH=40h (write) to stderr/stdout, dump the buffer contents
+      // BEFORE the call (handleDosInt actually writes it out) so we can see
+      // what the DOS extender is reporting.
+      if (stubInt === 0x21) {
+        const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
+        if (ah === 0x40) {
+          const h = cpu.getReg16(EBX);
+          const n = cpu.getReg16(ECX);
+          const dsB = cpu.segBase(cpu.ds);
+          const ptr = (dsB + cpu.getReg16(EDX)) >>> 0;
+          let asc = '';
+          let hex = '';
+          for (let k = 0; k < Math.min(n, 64); k++) {
+            const c = emu.memory.readU8((ptr + k) >>> 0);
+            hex += c.toString(16).padStart(2, '0') + ' ';
+            asc += (c >= 0x20 && c < 0x7f) ? String.fromCharCode(c) : '.';
+          }
+          console.log(`  INT 21h/AH=40 write h=${h} n=${n} ds:dx=${cpu.ds.toString(16)}:${cpu.getReg16(EDX).toString(16)} lin=0x${ptr.toString(16)} hex=[${hex.trim()}] "${asc}"`);
+        }
+      }
+      handleDosInt(cpu, stubInt, emu);
+      const outEax = cpu.reg[EAX] >>> 0;
+      const outCF = (cpu.getFlags() & 1) ? 1 : 0;
+      console.log(`  ← after INT ${stubInt.toString(16)}: eax=${outEax.toString(16)} cf=${outCF}`);
+    } else {
+      console.warn(`[DPMI-SRI] ${mode} target ${sriCS.toString(16)}:${sriIP.toString(16)} is not a recognized INT-stub — skipped (NOP)`);
+    }
+  }
 
   // Write results back to the struct — the RM handler may have updated any
   // of these, so mirror them all so the DPMI caller sees the same thing a
