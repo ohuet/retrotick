@@ -51,10 +51,16 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
       if (callerCS === handler.sel || callerCS === 0x08) {
         // Handler is reflecting to RM — fall through to JS handler
       } else {
-        // Push interrupt frame; if CS is 32-bit, use 32-bit frame
-        const csIs32 = cpu.loadGdtDescriptorIs32(callerCS);
+        // Push interrupt frame. Size depends on the DPMI CLIENT mode, not the
+        // caller's CS: a 32-bit client's handler terminates with IRETD (`66 cf`)
+        // regardless of what CS was when the interrupt fired, so we must push
+        // 12 bytes to match. DOOM runs 32-bit but its 16-bit shadow segments
+        // (cs=0x202 etc) would otherwise make us push only 6 bytes, which then
+        // leaks 6 bytes of garbage on every IRET cycle and eventually derails
+        // execution to a random CS:EIP.
+        const clientIs32 = !!cpu.emu._dpmiState.is32bit;
         const returnIP = cpu.eip - cpu.segBase(callerCS);
-        if (csIs32) {
+        if (clientIs32) {
           cpu.push32(cpu.getFlags());
           cpu.push32(callerCS);
           cpu.push32(returnIP >>> 0);
