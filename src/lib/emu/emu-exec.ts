@@ -1256,6 +1256,20 @@ export function emuTick(emu: Emulator): void {
       const esp = emu.cpu.reg[4] >>> 0;
       const rm = emu.cpu.realMode ? 'RM' : 'PM';
       console.log(`[HB] ${rm} steps=${emu.cpuSteps} ${cs.toString(16)}:${ip.toString(16)} eax=${eax.toString(16)} ebx=${ebx.toString(16)} ecx=${ecx.toString(16)} edx=${edx.toString(16)} ds=${ds.toString(16)} es=${es.toString(16)} ss=${ss.toString(16)} esp=${esp.toString(16)}`);
+      // On the first RM heartbeat AFTER we've seen a DPMI entry (= post-V86
+      // transition), dump 512 bytes around current EIP so we can disassemble
+      // the looping code.
+      if (emu.cpu.realMode && (emu as any)._dbgSawDpmiEntry && !(emu as any)._dbgDumpedLoopCode) {
+        (emu as any)._dbgDumpedLoopCode = true;
+        const dumpStart = (emu.cpu.eip - 0x100) >>> 0;
+        let hex = '';
+        for (let k = 0; k < 512; k++) {
+          hex += emu.memory.readU8((dumpStart + k) >>> 0).toString(16).padStart(2, '0');
+          if ((k & 15) === 15) hex += '\n';
+          else hex += ' ';
+        }
+        console.log(`[LOOPDUMP] 512 bytes starting at linear 0x${dumpStart.toString(16)} (eip-0x100..+0x100):\n${hex}`);
+      }
     }
   }
   } catch (err) {
