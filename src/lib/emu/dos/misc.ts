@@ -269,6 +269,15 @@ export function handleInt2F(cpu: CPU, emu: Emulator): boolean {
     return true;
   }
 
+  if (ax === 0x1686) {
+    // DPMI - GET CPU MODE. Returns AX=0 if caller is already in protected
+    // mode, AX!=0 (typically AX=1, the input value preserved) if real mode.
+    // We never invoke this from PM in our current setup, so always answer
+    // "real mode" here. DOS4GW uses this to decide whether to call AX=1687.
+    cpu.setReg16(EAX, 0x0001);
+    return true;
+  }
+
   if (ax === 0x1687) {
     if (!emu.dosEnableDpmi) {
       cpu.setReg16(EAX, 0x0001); // DPMI not present (disabled in settings)

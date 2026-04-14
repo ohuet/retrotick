@@ -23,7 +23,13 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
   // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
   if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
     const dpmi = cpu.emu._dpmiState;
-    const handler = dpmi.pmExcHandlers.get(intNum + 256); // interrupt namespace (key=vec+256)
+    // DPMI keeps two handler tables: AX=0203 stores in the exception namespace
+    // (key=vec, vec 0..31), AX=0205 stores in the interrupt namespace
+    // (key=vec+256). For exception vectors (0..31) the exception namespace
+    // takes precedence; otherwise fall through to the interrupt namespace so
+    // hardware IRQs and software INTs hit AX=0205-installed handlers.
+    const handler = (intNum < 32 ? dpmi.pmExcHandlers.get(intNum) : undefined)
+      ?? dpmi.pmExcHandlers.get(intNum + 256);
     // Don't intercept: INT 31h (DPMI services), INT FCh/FDh (DPMI stubs),
     // INT 20h (terminate), INT 21h AH<0xEE (standard DOS — handled in JS).
     // Only route to PM handlers for interrupts the PM client actually needs
