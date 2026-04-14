@@ -58,7 +58,6 @@ emu.screenHeight = 200;
 emu.exeName = 'DoomShw/DOOM.EXE';
 emu.exePath = 'D:\\DoomShw\\DOOM.EXE';
 
-// Add all companion files (DOOM1.WAD, DEFAULT.CFG, etc.)
 for (const fname of readdirSync(BASE)) {
   const fp = `${BASE}/${fname}`;
   if (statSync(fp).isFile() && fname !== 'DOOM.EXE') {
@@ -69,20 +68,13 @@ for (const fname of readdirSync(BASE)) {
 await emu.load(doomBuf, peInfo, mockCanvas);
 emu.run();
 
-const BATCH = 100000;
-const MAX_BATCHES = 100;
-let totalSteps = 0;
-
-for (let batch = 0; batch < MAX_BATCHES; batch++) {
+const MAX_TICKS = 1000;
+for (let tick = 0; tick < MAX_TICKS; tick++) {
   if (emu.halted) {
-    console.log(`[HALT] CPU halted after ${totalSteps} batches, reason=${emu.haltReason}`);
+    console.log(`[HALT] halted after ${tick} ticks, reason=${emu.haltReason}`);
     break;
   }
-  for (let i = 0; i < BATCH; i++) {
-    emu.tick();
-    if (emu.halted) break;
-  }
-  totalSteps++;
+  emu.tick();
 }
 
-console.log(`[DONE] batches=${totalSteps} halted=${emu.halted} reason=${emu.haltReason}`);
+console.log(`[DONE] halted=${emu.halted} reason=${emu.haltReason} cpuSteps=${emu.cpuSteps}`);

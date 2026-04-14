@@ -1126,7 +1126,20 @@ export function emuTick(emu: Emulator): void {
     if (emu.cpu.halted) {
       const hBytes: string[] = [];
       for (let j = 0; j < 8; j++) hBytes.push(emu.memory.readU8((prevEip + j) >>> 0).toString(16).padStart(2, '0'));
-      console.warn(`[CPU-HALT] at EIP=0x${prevEip.toString(16)} bytes: ${hBytes.join(' ')} ESP=0x${(emu.cpu.reg[4]>>>0).toString(16)}`);
+      console.warn(`[CPU-HALT] at EIP=0x${prevEip.toString(16)} bytes: ${hBytes.join(' ')} ESP=0x${(emu.cpu.reg[4]>>>0).toString(16)} reason="${emu.cpu.haltReason}" cs=${emu.cpu.cs.toString(16)} ds=${emu.cpu.ds.toString(16)} ss=${emu.cpu.ss.toString(16)} RM=${emu.cpu.realMode}`);
+      // Dump the per-instruction ring buffer so we can see how we reached the halt.
+      if (emu._eipHistory) {
+        const idx = emu._eipHistIdx || 0;
+        const arr = emu._eipHistory;
+        const lines: string[] = [];
+        for (let h = Math.max(0, idx - 32); h < idx; h++) {
+          const addr = arr[h & 63] >>> 0;
+          const bytes: string[] = [];
+          for (let b = 0; b < 8; b++) bytes.push(emu.memory.readU8((addr + b) >>> 0).toString(16).padStart(2, '0'));
+          lines.push(`    0x${addr.toString(16).padStart(8, '0')}: ${bytes.join(' ')}`);
+        }
+        console.warn(`[CPU-HALT] EIP history (last 32):\n${lines.join('\n')}`);
+      }
       emu.haltReason = emu.cpu.haltReason || 'illegal instruction';
       emu.halted = true;
       break;
