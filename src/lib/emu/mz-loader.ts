@@ -88,10 +88,27 @@ export function loadMZ(arrayBuffer: ArrayBuffer, memory: Memory, mzHeader: MZHea
   }
 
   // --- Build PSP ---
-  memory.writeU8(pspLinear + 0x00, 0xCD); // INT 20h
+  // 0x00: INT 20h instruction (legacy program-terminate via CALL CS:0)
+  memory.writeU8(pspLinear + 0x00, 0xCD);
   memory.writeU8(pspLinear + 0x01, 0x20);
+  // 0x02: top of allocated memory (paragraphs)
   memory.writeU16(pspLinear + 0x02, topSeg);
-  memory.writeU16(pspLinear + 0x16, LOAD_SEG); // parent PSP = self (top-level process)
+  // 0x16: parent PSP segment
+  memory.writeU16(pspLinear + 0x16, LOAD_SEG);
+  // 0x18..0x2B: Job File Table (20 default handles, 0xFF = closed). DOS sets the
+  // first 5 to STDIN/OUT/ERR/AUX/PRN (handles 0..4) before launching the program.
+  for (let i = 0; i < 20; i++) memory.writeU8(pspLinear + 0x18 + i, i < 5 ? i : 0xFF);
+  // 0x32: JFT entry count (DOS 3+ uses 20 by default)
+  memory.writeU16(pspLinear + 0x32, 20);
+  // 0x34: far pointer to JFT (PSP:0018)
+  memory.writeU16(pspLinear + 0x34, 0x0018);
+  memory.writeU16(pspLinear + 0x36, LOAD_SEG);
+  // 0x50: DOS function dispatcher: INT 21h; RETF (3 bytes). Some DOS programs
+  // (notably Watcom DOS/4G family) issue `CALL FAR PSP:0050h` rather than
+  // `INT 21h` directly, so this stub MUST be valid code.
+  memory.writeU8(pspLinear + 0x50, 0xCD); // INT
+  memory.writeU8(pspLinear + 0x51, 0x21); // 21h
+  memory.writeU8(pspLinear + 0x52, 0xCB); // RETF
 
   // Write environment
   const envLinear = ENV_SEG * 16;
@@ -204,10 +221,27 @@ export function loadCOM(arrayBuffer: ArrayBuffer, memory: Memory, exePath: strin
   }
 
   // --- Build PSP ---
-  memory.writeU8(pspLinear + 0x00, 0xCD); // INT 20h
+  // 0x00: INT 20h instruction (legacy program-terminate via CALL CS:0)
+  memory.writeU8(pspLinear + 0x00, 0xCD);
   memory.writeU8(pspLinear + 0x01, 0x20);
+  // 0x02: top of allocated memory (paragraphs)
   memory.writeU16(pspLinear + 0x02, topSeg);
-  memory.writeU16(pspLinear + 0x16, LOAD_SEG); // parent PSP = self (top-level process)
+  // 0x16: parent PSP segment
+  memory.writeU16(pspLinear + 0x16, LOAD_SEG);
+  // 0x18..0x2B: Job File Table (20 default handles, 0xFF = closed). DOS sets the
+  // first 5 to STDIN/OUT/ERR/AUX/PRN (handles 0..4) before launching the program.
+  for (let i = 0; i < 20; i++) memory.writeU8(pspLinear + 0x18 + i, i < 5 ? i : 0xFF);
+  // 0x32: JFT entry count (DOS 3+ uses 20 by default)
+  memory.writeU16(pspLinear + 0x32, 20);
+  // 0x34: far pointer to JFT (PSP:0018)
+  memory.writeU16(pspLinear + 0x34, 0x0018);
+  memory.writeU16(pspLinear + 0x36, LOAD_SEG);
+  // 0x50: DOS function dispatcher: INT 21h; RETF (3 bytes). Some DOS programs
+  // (notably Watcom DOS/4G family) issue `CALL FAR PSP:0050h` rather than
+  // `INT 21h` directly, so this stub MUST be valid code.
+  memory.writeU8(pspLinear + 0x50, 0xCD); // INT
+  memory.writeU8(pspLinear + 0x51, 0x21); // 21h
+  memory.writeU8(pspLinear + 0x52, 0xCB); // RETF
 
   // Write environment
   const envLinear = ENV_SEG * 16;
