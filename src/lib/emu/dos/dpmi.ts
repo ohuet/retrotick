@@ -117,7 +117,13 @@ function readGdtEntryLimit(mem: Emulator['memory'], gdtBase: number, index: numb
 /** Called on INT 0xFD — switch from real mode to protected mode */
 export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   const is32bit = (cpu.reg[EAX] & 1) !== 0;
-  console.log('[DPMI] Entering protected mode');
+  {
+    const sb = (cpu.ss * 16) >>> 0;
+    const sp = cpu.reg[ESP] & 0xFFFF;
+    const peekIP = cpu.mem.readU16((sb + sp) >>> 0);
+    const peekCS = cpu.mem.readU16((sb + sp + 2) >>> 0);
+    console.log(`[DPMI] Entering PM (${is32bit ? '32' : '16'}-bit) — retCS:IP=${peekCS.toString(16)}:${peekIP.toString(16)}`);
+  }
 
   // Enable A20 gate — required for PM to access memory above 1MB.
   // The GDT is at 0x3F0000; with A20 off, writes would go to 0xF0000.

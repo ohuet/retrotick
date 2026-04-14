@@ -467,34 +467,13 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
       const al = cpu.reg[EAX] & 0xFF;
       switch (al) {
         case 0x00: { // VCPI Installation Check
-          // Match DOSBox (src/ints/ems.cpp): VCPI is only "present" when the
-          // caller is ALREADY in V86 mode (i.e. EMM386 put them there), or when
-          // the JEMM driver detection magic is passed (CX=0, DI=0x0012). Pure
-          // real-mode callers must see "VCPI not present" (AH = EMM_FUNC_NOSUP).
-          //
-          // This matters for DOS/4GW v1.97/v2.x: if DE00 returns SUCCESS from
-          // real mode, DOS4GW enters its VCPI code path (sub_92AB sets
-          // ds:[2E]=0xB → sub_7E4F → unnamed function → sub_4E96 → fails on LE
-          // files because sub_4C1F only recognizes MF/MZ/BW signatures). If DE00
-          // returns failure, DOS4GW falls back to mode 0xA (raw mode switch via
-          // sub_8087) which does LGDT/LMSW/JMP directly — the path that works
-          // in DOSBox for LE loading.
-          const cx00 = cpu.getReg16(ECX);
-          const di00 = cpu.getReg16(EDI);
-          const jemmMagic = (cx00 === 0 && di00 === 0x0012);
-          // V86 mode is tracked in our CPU by (realMode && emu._vcpiPrivateArea)
-          // — we only set _vcpiPrivateArea once a program has successfully passed
-          // through VCPI activation, which only happens AFTER the caller went to
-          // V86. Before that, we're in pure real mode.
-          const inV86 = cpu.realMode && !!emu._vcpiPrivateArea;
-          if (!jemmMagic && !inV86) {
-            // Return failure: not installed.
-            cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8400; // AH = EMM_FUNC_NOSUP
-            break;
-          }
-          // Set up private area and save V86 IVT on first successful call.
-          // Must happen here (before DOS4GW modifies IVT with PM selectors)
-          // so HW interrupts during V86 don't dispatch to PM handlers.
+          // Return "VCPI present" unconditionally. In DOSBox, DE00 requires
+          // cpu.pmode && FLAG_VM (i.e. V86 mode) — DOSBox always runs RM as V86
+          // under an EMM386 monitor. We don't emulate a real V86 monitor, so we
+          // present VCPI as available whenever EMS is enabled. DOS extenders
+          // (DOS4GW, DPMI hosts) can then use the VCPI services we emulate.
+          // Set up private area and save IVT on first successful call so HW
+          // interrupts during extender activation see the right vectors.
           if (!emu._vcpiPrivateArea) {
             setupVcpiPrivateArea(cpu.mem);
             emu._vcpiPrivateArea = VCPI_PRIVATE_AREA;
