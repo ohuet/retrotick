@@ -619,7 +619,6 @@ function dpmiSetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boo
 /** AX=0300: Simulate real mode interrupt. BL=int, ES:EDI → 50-byte RM call struct */
 function dpmiSimulateRmInt(cpu: CPU, emu: Emulator): boolean {
   const intNum = cpu.getReg8(EBX); // BL
-  const ax = cpu.getReg16(EAX); // current AX tells us if this is 0300/0301/0302
   const structAddr = (cpu.segBase(cpu.es) + (cpu.use32 ? cpu.reg[EDI] : (cpu.reg[EDI] & 0xFFFF))) >>> 0;
   // Read the 50-byte real mode call structure
   const rmEDI = emu.memory.readU32(structAddr + 0x00);
