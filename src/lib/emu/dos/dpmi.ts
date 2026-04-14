@@ -352,7 +352,31 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
     case 0x0601: // Unlock linear region — NOP success
       cpu.setFlag(0x001, false);
       return true;
+    case 0x0702: // Mark page as demand paging candidate — NOP success
+    case 0x0703: // Discard page contents — NOP success
+      cpu.setFlag(0x001, false);
+      return true;
     case 0x0800: return dpmiPhysicalAddrMapping(cpu);
+    case 0x0900: { // Get and Disable Virtual Interrupt State — return prev IF, then CLI
+      const prevIF = (cpu.getFlags() & 0x0200) ? 1 : 0;
+      cpu.setReg8(EAX, prevIF);
+      cpu.setFlags(cpu.getFlags() & ~0x0200);
+      cpu.setFlag(0x001, false);
+      return true;
+    }
+    case 0x0901: { // Get and Enable Virtual Interrupt State — return prev IF, then STI
+      const prevIF = (cpu.getFlags() & 0x0200) ? 1 : 0;
+      cpu.setReg8(EAX, prevIF);
+      cpu.setFlags(cpu.getFlags() | 0x0200);
+      cpu.setFlag(0x001, false);
+      return true;
+    }
+    case 0x0902: { // Get Virtual Interrupt State — return current IF
+      const curIF = (cpu.getFlags() & 0x0200) ? 1 : 0;
+      cpu.setReg8(EAX, curIF);
+      cpu.setFlag(0x001, false);
+      return true;
+    }
 
     default:
       console.warn(`[DPMI] Unimplemented INT 31h AX=0x${ax.toString(16).padStart(4, '0')} → CF=1`);
