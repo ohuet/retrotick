@@ -212,7 +212,8 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const count = cpu.getReg16(ECX);
   const dsBase = cpu.segBase(cpu.ds);
-  const bufAddr = dsBase + cpu.getReg16(EDX);
+  const dx = cpu.getReg16(EDX);
+  const bufAddr = dsBase + dx;
   if (h <= 2) {
     cpu.setReg16(EAX, 0);
     cpu.setFlag(CF, false);
@@ -220,6 +221,9 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
     const f = emu._dosFiles.get(h);
     if (f) {
       const avail = Math.min(count, f.data.length - f.pos);
+      if ((emu as any)._dbgSawDpmiEntry) {
+        console.log(`[READ] h=${h.toString(16)} pos=0x${f.pos.toString(16)} cnt=${count.toString(16)} ds:dx=${cpu.ds.toString(16)}:${dx.toString(16)} lin=0x${bufAddr.toString(16)} rm=${cpu.realMode} name="${f.name ?? '?'}" avail=${avail.toString(16)}`);
+      }
       for (let i = 0; i < avail; i++) {
         cpu.mem.writeU8(bufAddr + i, f.data[f.pos + i]);
       }
@@ -287,7 +291,7 @@ export function dosDeleteFile(cpu: CPU, emu: Emulator): void {
 export function dosSeekFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
   const origin = cpu.reg[EAX] & 0xFF;
-  const offset = (cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX);
+  const offset = ((cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX)) >>> 0;
   const f = emu._dosFiles.get(h);
   if (f) {
     if (origin === 0) f.pos = offset;           // SEEK_SET
@@ -296,6 +300,9 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
     f.pos = Math.max(0, Math.min(f.pos, f.data.length));
     const of = emu.handles.get<OpenFile>(h);
     if (of) of.pos = f.pos;
+    if ((emu as any)._dbgSawDpmiEntry) {
+      console.log(`[SEEK] h=${h.toString(16)} origin=${origin} offset=0x${offset.toString(16)} → pos=0x${f.pos.toString(16)} name="${f.name ?? '?'}"`);
+    }
     cpu.setReg16(EDX, (f.pos >>> 16) & 0xFFFF);
     cpu.setReg16(EAX, f.pos & 0xFFFF);
     cpu.setFlag(CF, false);

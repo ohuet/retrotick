@@ -121,22 +121,32 @@ export class CPU {
     if (this.emu?._gdtBase) {
       const base = this.loadGdtDescriptorBase(sel);
       if (base !== undefined) {
-        // Fallback for uninitialized descriptor slots: DOS/4GW's 16-bit PM
-        // code sometimes loads segment registers with the original real-mode
-        // segment value (e.g. `mov ds, rmSeg`) expecting the PM selector to
-        // map linearly to `rmSeg << 4`. If the selector index has an entirely
-        // zero descriptor (never written by the host or the client), treat it
-        // as a real-mode segment shadow. A non-null selector with non-zero
-        // bytes means the client explicitly set it up and we must honor the
-        // (possibly zero) base it stored.
+        // Fallback for descriptor slots that are base=0, limit=0 — effectively
+        // uninitialized from a "where does this point" perspective even if the
+        // access byte got touched. DOS/4GW's 16-bit PM bootstrap loads segment
+        // registers with literal real-mode segment values (`mov ds, rmSeg`)
+        // expecting the PM selector to map linearly to `rmSeg << 4`. For such
+        // "shadow" selectors we treat the selector value as a real-mode
+        // segment. Any descriptor with a non-zero base OR a non-zero limit is
+        // a real, explicitly-configured selector and we honor it as-is.
         if (base === 0 && sel >= 8) {
-          const addr = this.emu._gdtBase + ((sel & 0xFFF8) >>> 3) * 8;
-          const lo = this.mem.readU32(addr);
-          const hi = this.mem.readU32(addr + 4);
-          if (lo === 0 && hi === 0) return (sel * 16) >>> 0;
+          const descAddr = this.emu._gdtBase + ((sel & 0xFFF8) >>> 3) * 8;
+          const lo = this.mem.readU32(descAddr);
+          const hi = this.mem.readU32(descAddr + 4);
+          const limitLo = lo & 0xFFFF;
+          const limitHi = (hi >>> 16) & 0x0F;
+          const limit = (limitHi << 16) | limitLo;
+          if (limit === 0) return (sel * 16) >>> 0;
         }
         return base;
       }
+      // loadGdtDescriptorBase returned undefined — either the selector has
+      // the LDT bit set but no LDT is installed, or the index is past the
+      // GDT limit. DOS/4GW uses LDT-style selector values (TI=1) as shadows
+      // of real-mode segments without ever running LLDT, so fall back to
+      // the same RM-seg-shadow rule: base = sel << 4. Guards against null
+      // selectors and known emulator-owned selectors (< 8).
+      if (sel >= 8) return (sel * 16) >>> 0;
     }
     // No GDT (Win16): use the pre-populated selector→base map.
     const cached = this.segBases.get(sel);

@@ -1790,7 +1790,15 @@ export function cpuStep(cpu: CPU): void {
         default: {
           const csBaseHere = cpu.realMode ? (cpu.cs * 16) >>> 0 : cpu.segBase(cpu.cs);
           const ipHere = (instrEip - csBaseHere) >>> 0;
-          console.warn(`Unimplemented FF /${d.regField} at CS:IP=${cpu.cs.toString(16)}:${ipHere.toString(16)} (linear 0x${instrEip.toString(16)}) realMode=${cpu.realMode} use32=${cpu.use32}`);
+          console.warn(`Unimplemented FF /${d.regField} at CS:IP=${cpu.cs.toString(16)}:${ipHere.toString(16)} (linear 0x${instrEip.toString(16)}) csBase=0x${csBaseHere.toString(16)} realMode=${cpu.realMode} use32=${cpu.use32}`);
+          // Dump the GDT slot for CS to see if an explicit descriptor exists
+          if (!cpu.realMode && cpu.emu?._gdtBase) {
+            const csIdx = (cpu.cs & 0xFFF8) >>> 3;
+            const descAddr = cpu.emu._gdtBase + csIdx * 8;
+            let desc = '';
+            for (let i = 0; i < 8; i++) desc += cpu.mem.readU8((descAddr + i) >>> 0).toString(16).padStart(2, '0') + ' ';
+            console.warn(`  CS GDT[${csIdx}] @0x${descAddr.toString(16)}: ${desc}`);
+          }
           // Dump stack (8 words) — top-of-stack often holds the call site
           const ssBaseHere = cpu.realMode ? (cpu.ss * 16) >>> 0 : cpu.segBase(cpu.ss);
           const spHere = cpu.use32 ? (cpu.reg[ESP] >>> 0) : (cpu.reg[ESP] & 0xFFFF);

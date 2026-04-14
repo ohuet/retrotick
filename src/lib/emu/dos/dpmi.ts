@@ -437,13 +437,11 @@ function dpmiGetSegmentBase(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
   const idx = (sel & 0xFFF8) >>> 3;
   let base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
   // Same uninitialized-descriptor fallback as cpu.segBase: if the GDT slot
-  // is wholly zero, synthesize base = sel * 16 (treat the selector value as
-  // a real-mode segment shadow — what DOS/4GW assumes).
+  // has base=0 AND limit=0, synthesize base = sel * 16 (treat the selector
+  // value as a real-mode segment shadow — what DOS/4GW assumes).
   if (base === 0 && sel >= 8) {
-    const addr = emu._gdtBase + idx * 8;
-    const lo = emu.memory.readU32(addr);
-    const hi = emu.memory.readU32(addr + 4);
-    if (lo === 0 && hi === 0) base = (sel * 16) >>> 0;
+    const limit = readGdtEntryLimit(emu.memory, emu._gdtBase, idx);
+    if (limit === 0) base = (sel * 16) >>> 0;
   }
   cpu.setReg16(ECX, (base >>> 16) & 0xFFFF);
   cpu.setReg16(EDX, base & 0xFFFF);
