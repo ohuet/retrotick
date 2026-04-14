@@ -41,6 +41,7 @@ import { setupXmsStub } from './dos/xms';
 import { setupDpmiStub } from './dos/dpmi';
 import { setupEmsDeviceHeader, EMS_DEVICE_SEG } from './dos/ems';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
+import { VGA_FONT_8X16_ROM, ROM_FONT_8X16_ADDR, ROM_FONT_8X16_SEG, ROM_FONT_8X16_OFF } from './dos/vga-font-16';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
 import { Thread } from './thread';
 import { parsePE, extractExports, extractMenus } from '../pe';
@@ -515,7 +516,7 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
         if (key.startsWith(prefix)) { hasStubs = true; break; }
       }
       if (!hasStubs) {
-        emu.missingDlls.push(dllLower);
+        emu.missingDlls.push(dllLower.includes('.') ? dllLower : dllLower + '.dll');
       }
     }
     if (emu.missingDlls.length > 0) {
@@ -1254,10 +1255,14 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   for (let i = 0; i < 128 * 8; i++) {
     emu.memory.writeU8(ROM_FONT_CGA_ADDR + i, VGA_FONT_8X8_ROM[i]);
   }
-  // INT 43h → points to current font (full 256-char 8x8 font at F000:1000)
-  emu.memory.writeU16(0x43 * 4, ROM_FONT_8X8_OFF);
-  emu.memory.writeU16(0x43 * 4 + 2, ROM_FONT_8X8_SEG);
-  emu._dosIntVectors.set(0x43, (ROM_FONT_8X8_SEG << 16) | ROM_FONT_8X8_OFF);
+  // Write VGA 8x16 ROM font to F000:2000 (4096 bytes, 256 chars × 16 bytes)
+  for (let i = 0; i < VGA_FONT_8X16_ROM.length; i++) {
+    emu.memory.writeU8(ROM_FONT_8X16_ADDR + i, VGA_FONT_8X16_ROM[i]);
+  }
+  // INT 43h → points to current font (8x16 font for default 80x25 text mode)
+  emu.memory.writeU16(0x43 * 4, ROM_FONT_8X16_OFF);
+  emu.memory.writeU16(0x43 * 4 + 2, ROM_FONT_8X16_SEG);
+  emu._dosIntVectors.set(0x43, (ROM_FONT_8X16_SEG << 16) | ROM_FONT_8X16_OFF);
   // INT 1Fh → points to chars 128-255 of the 8x8 font (F000:1400)
   const FONT_HI_OFF = ROM_FONT_8X8_OFF + 128 * 8; // 0x1400
   emu.memory.writeU16(0x1F * 4, FONT_HI_OFF);

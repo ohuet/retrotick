@@ -795,13 +795,14 @@ export function cpuStep(cpu: CPU): void {
     // MOV Sreg, r/m16
     case 0x8E: {
       const d = cpu.decodeModRM(16);
+      const sel = d.val & 0xFFFF;
       switch (d.regField) {
-        case 0: cpu.es = d.val & 0xFFFF; break;
-        case 1: cpu.loadCS(d.val & 0xFFFF); break;
-        case 2: cpu.ss = d.val & 0xFFFF; cpu._inhibitTF = true; cpu._inhibitIRQ = true; break; // MOV SS suppresses TF + IRQ
-        case 3: cpu.ds = d.val & 0xFFFF; break;
-        case 4: cpu.fs = d.val & 0xFFFF; break;
-        case 5: cpu.gs = d.val & 0xFFFF; break;
+        case 0: cpu.es = sel; break;
+        case 1: cpu.loadCS(sel); break;
+        case 2: cpu.ss = sel; cpu._inhibitTF = true; cpu._inhibitIRQ = true; break; // MOV SS suppresses TF + IRQ
+        case 3: cpu.ds = sel; break;
+        case 4: cpu.fs = sel; break;
+        case 5: cpu.gs = sel; break;
       }
       break;
     }
