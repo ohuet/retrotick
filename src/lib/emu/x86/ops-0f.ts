@@ -350,11 +350,13 @@ export function exec0F(
         const newPE = cpu.emu._cr0 & 1;
         if (!oldPE && newPE) {
           // Transition to protected mode — set up segment bases from GDT
+          console.log(`[CR0] RM→PM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)}`);
           cpu.realMode = false;
         } else if (oldPE && !newPE) {
           // Back to real mode — enable "unreal mode" if data segments have flat base.
           // DOS4GW sets base=0 for DS/ES/SS in PM, returns to RM, and expects the
           // CPU to cache the flat base for 32-bit data access in real mode.
+          console.log(`[CR0] PM→RM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)} ds=${cpu.ds.toString(16)} es=${cpu.es.toString(16)} ss=${cpu.ss.toString(16)} esp=${(cpu.reg[4] >>> 0).toString(16)}`);
           if (cpu.segBase(cpu.ds) === 0 || cpu.segBase(cpu.es) === 0) {
             cpu._unrealMode = true;
           }

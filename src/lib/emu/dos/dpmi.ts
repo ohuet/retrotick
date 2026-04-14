@@ -665,6 +665,7 @@ function dpmiSetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boo
 function dpmiSimulateRmInt(cpu: CPU, emu: Emulator): boolean {
   const intNum = cpu.getReg8(EBX); // BL
   const structAddr = (cpu.segBase(cpu.es) + (cpu.use32 ? cpu.reg[EDI] : (cpu.reg[EDI] & 0xFFFF))) >>> 0;
+  console.log(`[DPMI-SRI] AX=${(cpu.getReg16(EAX)).toString(16).padStart(4,'0')} intNum=${intNum.toString(16)} struct@0x${structAddr.toString(16)}`);
   // Read the 50-byte real mode call structure
   const rmEDI = emu.memory.readU32(structAddr + 0x00);
   const rmESI = emu.memory.readU32(structAddr + 0x04);
@@ -913,6 +914,7 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     // RM → PM: switch to protected mode
     const newESP = cpu.reg[EBX] >>> 0; // 32-bit ESP for PM
     const newEIP = cpu.reg[EDI] >>> 0; // 32-bit EIP for PM
+    console.log(`[DPMI-SW] RM→PM newCS=${newCS.toString(16)} newIP=${newEIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newESP.toString(16)}`);
     cpu.realMode = false;
     cpu.loadCS(newCS);
     cpu.ds = newDS;
@@ -924,6 +926,7 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     // PM → RM: switch to real mode
     const newSP = cpu.getReg16(EBX);
     const newIP = cpu.getReg16(EDI);
+    console.log(`[DPMI-SW] PM→RM newCS=${newCS.toString(16)} newIP=${newIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newSP.toString(16)}`);
     cpu.realMode = true;
     cpu.use32 = false;
     cpu._addrSize16 = true;

@@ -1236,6 +1236,28 @@ export function emuTick(emu: Emulator): void {
   }
   emu.cpuSteps += stepCount;
   emu._pitInsnCount += stepCount;
+  // DOS heartbeat: log CS:IP + key regs once per ~500ms of wall clock so we
+  // can tell a compute-bound infinite loop from genuine work (IP moving).
+  if (emu.isDOS) {
+    const nowHB = performance.now();
+    const lastHB = (emu as any)._dbgHeartbeatMs ?? 0;
+    if (nowHB - lastHB > 500) {
+      (emu as any)._dbgHeartbeatMs = nowHB;
+      const cs = emu.cpu.cs;
+      const csBase = emu.cpu.realMode ? (cs * 16) >>> 0 : emu.cpu.segBase(cs);
+      const ip = (emu.cpu.eip - csBase) >>> 0;
+      const eax = emu.cpu.reg[0] >>> 0;
+      const ebx = emu.cpu.reg[3] >>> 0;
+      const ecx = emu.cpu.reg[1] >>> 0;
+      const edx = emu.cpu.reg[2] >>> 0;
+      const ds = emu.cpu.ds;
+      const es = emu.cpu.es;
+      const ss = emu.cpu.ss;
+      const esp = emu.cpu.reg[4] >>> 0;
+      const rm = emu.cpu.realMode ? 'RM' : 'PM';
+      console.log(`[HB] ${rm} steps=${emu.cpuSteps} ${cs.toString(16)}:${ip.toString(16)} eax=${eax.toString(16)} ebx=${ebx.toString(16)} ecx=${ecx.toString(16)} edx=${edx.toString(16)} ds=${ds.toString(16)} es=${es.toString(16)} ss=${ss.toString(16)} esp=${esp.toString(16)}`);
+    }
+  }
   } catch (err) {
     console.error(`[EMU] tick() error at EIP=0x${(emu.cpu.eip >>> 0).toString(16)}:`, err);
     emu.haltReason = 'internal emulator error';

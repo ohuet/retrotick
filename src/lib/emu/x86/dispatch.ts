@@ -1275,6 +1275,7 @@ export function cpuStep(cpu: CPU): void {
           const newDS = cpu.pop32() & 0xFFFF;
           const newFS = cpu.pop32() & 0xFFFF;
           const newGS = cpu.pop32() & 0xFFFF;
+          console.log(`[IRETD-V86] cs=${cs2.toString(16)} eip=${eip2.toString(16)} ss=${newSS.toString(16)} esp=${newESP.toString(16)} ds=${newDS.toString(16)} es=${newES.toString(16)}`);
           cpu.realMode = true;
           cpu.use32 = false;
           cpu._addrSize16 = true;

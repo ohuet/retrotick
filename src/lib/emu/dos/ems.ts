@@ -760,6 +760,7 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       }
       // Switch to V86/real mode. V86 addressing is seg*16 (not flat),
       // so EIP must be stored as linear = segBase + offset.
+      console.log(`[VCPI-DE0C] PM→V86 cs=${newCS.toString(16)} eip=${newEIP.toString(16)} ss=${newSS.toString(16)} esp=${newESP.toString(16)} ds=${newDS.toString(16)} es=${newES.toString(16)}`);
       cpu.realMode = true;
       cpu.use32 = false;
       cpu._addrSize16 = true;
