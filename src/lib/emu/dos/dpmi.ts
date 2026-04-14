@@ -264,16 +264,6 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
 
   const st = emu._dpmiState;
 
-  // TEMP DPMI trace — log everything except high-frequency 0x204 polls
-  if (ax !== 0x0204 && ax !== 0x0203 && ax !== 0x0202 && ax !== 0x0201) {
-    const bx = cpu.getReg16(EBX);
-    const cx = cpu.getReg16(ECX);
-    const dx = cpu.getReg16(EDX);
-    const si = cpu.getReg16(ESI);
-    const di = cpu.getReg16(EDI);
-    const ipOff = (cpu.eip - cpu.segBase(cpu.cs)) >>> 0;
-    console.log(`[INT31] AX=${ax.toString(16).padStart(4,'0')} BX=${bx.toString(16)} CX=${cx.toString(16)} DX=${dx.toString(16)} SI=${si.toString(16)} DI=${di.toString(16)} DS=${cpu.ds.toString(16)} ES=${cpu.es.toString(16)} @${cpu.cs.toString(16)}:${ipOff.toString(16)}`);
-  }
 
   switch (ax) {
     // ── Descriptor management ──────────────────────────────────────
@@ -454,7 +444,6 @@ function dpmiGetSegmentBase(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
     const hi = emu.memory.readU32(addr + 4);
     if (lo === 0 && hi === 0) base = (sel * 16) >>> 0;
   }
-  console.log(`[GetBase] sel=${sel.toString(16)} idx=${idx} base=0x${base.toString(16)}`);
   cpu.setReg16(ECX, (base >>> 16) & 0xFFFF);
   cpu.setReg16(EDX, base & 0xFFFF);
   cpu.setFlag(0x001, false);
@@ -571,16 +560,12 @@ function dpmiSetDescriptor(cpu: CPU, emu: Emulator): boolean {
   const descAddr = emu._gdtBase + idx * 8;
   const bufAddr = (cpu.segBase(cpu.es) + (cpu.use32 ? cpu.reg[EDI] : (cpu.reg[EDI] & 0xFFFF))) >>> 0;
 
-  let descDump = '';
   for (let i = 0; i < 8; i++) {
-    const b = emu.memory.readU8(bufAddr + i);
-    descDump += b.toString(16).padStart(2, '0') + ' ';
-    emu.memory.writeU8(descAddr + i, b);
+    emu.memory.writeU8(descAddr + i, emu.memory.readU8(bufAddr + i));
   }
   // Update segBases cache
   const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
   cpu.segBases.set(sel, base);
-  console.log(`[SetDesc] sel=${sel.toString(16)} bufLin=0x${bufAddr.toString(16)} bytes=[${descDump}] base=0x${base.toString(16)}`);
   cpu.setFlag(0x001, false);
   return true;
 }
