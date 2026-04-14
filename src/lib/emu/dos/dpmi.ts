@@ -122,7 +122,7 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
     const sp = cpu.reg[ESP] & 0xFFFF;
     const peekIP = cpu.mem.readU16((sb + sp) >>> 0);
     const peekCS = cpu.mem.readU16((sb + sp + 2) >>> 0);
-    console.log(`[DPMI] Entering PM (${is32bit ? '32' : '16'}-bit) — retCS:IP=${peekCS.toString(16)}:${peekIP.toString(16)}`);
+    console.log(`[DPMI] Entering PM (${is32bit ? '32' : '16'}-bit) — retCS:IP=${peekCS.toString(16)}:${peekIP.toString(16)} rmDS=${cpu.ds.toString(16)} rmES=${cpu.es.toString(16)} rmSS=${cpu.ss.toString(16)} rmSP=${sp.toString(16)} PSP=${(emu._dosPSP ?? 0).toString(16)}`);
   }
 
   // Enable A20 gate — required for PM to access memory above 1MB.

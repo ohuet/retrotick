@@ -1780,11 +1780,24 @@ export function cpuStep(cpu: CPU): void {
           if (opSize === 16) cpu.push16(d.val);
           else cpu.push32(d.val);
           break;
-        default:
-          console.warn(`Unimplemented FF /${d.regField} at 0x${((cpu.eip) >>> 0).toString(16)}`);
+        default: {
+          const csBaseHere = cpu.realMode ? (cpu.cs * 16) >>> 0 : cpu.segBase(cpu.cs);
+          const ipHere = (instrEip - csBaseHere) >>> 0;
+          console.warn(`Unimplemented FF /${d.regField} at CS:IP=${cpu.cs.toString(16)}:${ipHere.toString(16)} (linear 0x${instrEip.toString(16)}) realMode=${cpu.realMode} use32=${cpu.use32}`);
+          // Dump stack (8 words) — top-of-stack often holds the call site
+          const ssBaseHere = cpu.realMode ? (cpu.ss * 16) >>> 0 : cpu.segBase(cpu.ss);
+          const spHere = cpu.use32 ? (cpu.reg[ESP] >>> 0) : (cpu.reg[ESP] & 0xFFFF);
+          let stk = '';
+          for (let i = 0; i < 8; i++) stk += cpu.mem.readU16((ssBaseHere + spHere + i * 2) >>> 0).toString(16).padStart(4, '0') + ' ';
+          console.warn(`  SS:SP=${cpu.ss.toString(16)}:${spHere.toString(16)} stack[0..16]: ${stk}`);
+          // Dump 16 bytes around the faulting instruction (so the previous CALL/JMP shows)
+          let ctx = '';
+          for (let i = -8; i < 8; i++) ctx += cpu.mem.readU8((instrEip + i) >>> 0).toString(16).padStart(2, '0') + ' ';
+          console.warn(`  bytes(eip-8..+8): ${ctx}`);
           cpu.haltReason = 'illegal instruction';
           cpu.halted = true;
           break;
+        }
       }
       break;
     }
