@@ -376,6 +376,7 @@ export class Emulator {
   _dosPSP = 0;
   _dosLoadSegment = 0;
   _cr0 = 0;           // Control Register 0 (PE bit etc.)
+  _cr3 = 0;           // Control Register 3 (page directory base) — stored for read-back, paging not actually performed
   _gdtBase = 0;       // GDT linear base address
   _gdtLimit = 0;      // GDT limit
   _idtBase = 0;       // IDT linear base address

@@ -125,10 +125,7 @@ export class CPU {
         // uninitialized from a "where does this point" perspective even if the
         // access byte got touched. DOS/4GW's 16-bit PM bootstrap loads segment
         // registers with literal real-mode segment values (`mov ds, rmSeg`)
-        // expecting the PM selector to map linearly to `rmSeg << 4`. For such
-        // "shadow" selectors we treat the selector value as a real-mode
-        // segment. Any descriptor with a non-zero base OR a non-zero limit is
-        // a real, explicitly-configured selector and we honor it as-is.
+        // expecting the PM selector to map linearly to `rmSeg << 4`.
         if (base === 0 && sel >= 8) {
           const descAddr = this.emu._gdtBase + ((sel & 0xFFF8) >>> 3) * 8;
           const lo = this.mem.readU32(descAddr);
@@ -136,17 +133,20 @@ export class CPU {
           const limitLo = lo & 0xFFFF;
           const limitHi = (hi >>> 16) & 0x0F;
           const limit = (limitHi << 16) | limitLo;
-          if (limit === 0) return (sel * 16) >>> 0;
+          if (limit === 0) {
+            this.ensureShadowDescriptor(sel);
+            return (sel * 16) >>> 0;
+          }
         }
         return base;
       }
-      // loadGdtDescriptorBase returned undefined — either the selector has
-      // the LDT bit set but no LDT is installed, or the index is past the
-      // GDT limit. DOS/4GW uses LDT-style selector values (TI=1) as shadows
-      // of real-mode segments without ever running LLDT, so fall back to
-      // the same RM-seg-shadow rule: base = sel << 4. Guards against null
-      // selectors and known emulator-owned selectors (< 8).
-      if (sel >= 8) return (sel * 16) >>> 0;
+      // Descriptor slot is past the GDT limit — ensure a shadow exists so
+      // GDT-mem readers (LODSW walking a descriptor table, DPMI GetDescriptor)
+      // see real-mode-shadow bytes.
+      if (sel >= 8) {
+        this.ensureShadowDescriptor(sel);
+        return (sel * 16) >>> 0;
+      }
     }
     // No GDT (Win16): use the pre-populated selector→base map.
     const cached = this.segBases.get(sel);
@@ -219,6 +219,32 @@ export class CPU {
     // G bit (bit 23 of hi): when set, limit is in 4KB pages
     if ((hi & (1 << 23)) !== 0) limit = (((limit + 1) << 12) - 1) >>> 0;
     return limit;
+  }
+
+  /** Write a real-mode-shadow descriptor to the GDT slot for `sel` if the slot
+   *  is currently unpopulated. Used for DOS extender clients (DOS/4GW) that
+   *  load RM segment values directly into PM segment registers and expect the
+   *  host to transparently shadow-map them. */
+  ensureShadowDescriptor(sel: number): void {
+    if (!this.emu || !this.emu._gdtBase || sel < 8) return;
+    // Write the shadow into the GDT slot at (sel >> 3) regardless of the TI
+    // bit: DOS/4GW uses real-mode segment values directly as selectors and
+    // reads the matching GDT linear address via a flat data selector, so the
+    // GDT memory needs valid bytes for any selector it ever touches.
+    const idx = (sel & 0xFFF8) >>> 3;
+    if (idx === 0 || idx * 8 + 7 > this.emu._gdtLimit) return;
+    const descAddr = this.emu._gdtBase + idx * 8;
+    // Only write if the slot is currently all-zero (never populated).
+    const lo = this.mem.readU32(descAddr);
+    const hi = this.mem.readU32(descAddr + 4);
+    if (lo !== 0 || hi !== 0) return;
+    // Shadow descriptor: base = sel*16, limit = 0xFFFF (64KB), access = 0xF2
+    // (present, DPL=3, data R/W, expand-up), flags = 0 (16-bit, byte granular).
+    const base = (sel * 16) >>> 0;
+    const newLo = ((base & 0xFFFF) << 16) | 0xFFFF; // base_lo<<16 | limit_lo
+    const newHi = ((base >>> 24) << 24) | 0x00F200 | ((base >>> 16) & 0xFF);
+    this.mem.writeU32(descAddr, newLo >>> 0);
+    this.mem.writeU32(descAddr + 4, newHi >>> 0);
   }
 
   /** Read a GDT/LDT descriptor and return the access rights word as LAR would expose it.

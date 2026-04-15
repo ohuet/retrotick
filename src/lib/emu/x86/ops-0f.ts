@@ -260,17 +260,23 @@ export function exec0F(
     case 0x02: { // LAR r16/r32, r/m16 — load access rights
       const d = cpu.decodeModRM(opSize);
       const sel = d.val & 0xFFFF;
-      // Fast path: if we have a live GDT, read the access byte + flags
-      // nibble directly. LAR is called by DOS/4GW's selector-table scan
-      // loops, so the cost matters. The pre-fix fallback that returned a
-      // hard-coded 0xF300 for every selector in segBases mis-reported the
-      // DPL/type/system bits and made those scans see every selector as
-      // a present 16-bit data R/W descriptor.
       let rights: number | undefined;
       if (!cpu.realMode && cpu.emu?._gdtBase) {
         rights = cpu.loadGdtDescriptorAccessRights(sel);
         // Treat a slot with Present bit clear as invalid → ZF=0.
         if (rights !== undefined && (rights & 0x8000) === 0) rights = undefined;
+        // Shadow-selector fallback: an all-zero GDT slot for a non-null
+        // selector is DOS/4GW using a real-mode segment value as a PM
+        // selector (see cpu.segBase). Real DPMI hosts auto-shadow these;
+        // we report them as present 16-bit data R/W DPL=3 segments so
+        // that DOS/4GW's LAR-based validator accepts them.
+        if (rights === undefined && sel >= 8) {
+          const base = cpu.loadGdtDescriptorBase(sel);
+          const lim = cpu.loadGdtDescriptorLimit(sel);
+          if ((base === undefined || (base === 0 && lim === 0))) {
+            rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+          }
+        }
       } else if (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3)) {
         rights = opSize === 16 ? 0xF300 : 0x00CF9300;
       }
@@ -352,7 +358,8 @@ export function exec0F(
       const crn = d.regField;
       let val = 0;
       if (crn === 0) val = cpu.emu?._cr0 ?? 0;
-      // CR2 (page fault address), CR3 (page dir base), CR4 (extensions) — return 0
+      else if (crn === 3) val = cpu.emu?._cr3 ?? 0;
+      // CR2 (page fault address), CR4 (extensions) — return 0
       cpu.writeModRM(d, val, 32);
       break;
     }
@@ -368,6 +375,10 @@ export function exec0F(
     case 0x22: {
       const d = cpu.decodeModRM(32);
       const crn = d.regField;
+      if (crn === 3 && cpu.emu) {
+        cpu.emu._cr3 = d.val >>> 0;
+        break;
+      }
       if (crn === 0 && cpu.emu) {
         const oldPE = cpu.emu._cr0 & 1;
         cpu.emu._cr0 = d.val >>> 0;

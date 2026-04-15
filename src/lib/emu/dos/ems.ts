@@ -627,6 +627,7 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           let newCR0 = (emu._cr0 | 1) >>> 0;
           if (newCR3 !== 0) newCR0 = (newCR0 | 0x80000000) >>> 0;
           emu._cr0 = newCR0;
+          emu._cr3 = newCR3 >>> 0;
           // Clear TSS busy bit before loading TR (required for LTR)
           if (newTR && emu._gdtBase) {
             const trDescAddr = emu._gdtBase + (newTR & 0xFFF8) + 5;
