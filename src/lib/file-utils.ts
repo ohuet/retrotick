@@ -4,6 +4,13 @@ import type { PEInfo } from './pe';
 export function extractFirstIconUrl(data: ArrayBuffer): string | null {
   try {
     const peInfo = parsePE(data);
+    return extractFirstIconUrlFromParsed(peInfo, data);
+  } catch {}
+  return null;
+}
+
+export function extractFirstIconUrlFromParsed(peInfo: PEInfo, data: ArrayBuffer): string | null {
+  try {
     const icons = extractIcons(peInfo, data);
     if (icons.length > 0) return URL.createObjectURL(icons[0].blob);
   } catch {}
@@ -16,16 +23,20 @@ export function isExeFile(data: ArrayBuffer, name?: string): { ok: boolean; peIn
   }
   try {
     const peInfo = parsePE(data);
-    if (peInfo.isMZ) return { ok: true, peInfo };
-    if (peInfo.isNE) return { ok: true, peInfo };
-    const isDll = (peInfo.coffHeader.characteristics & 0x2000) !== 0;
-    const isI386 = peInfo.coffHeader.machine === 0x014C;
-    const isARM = peInfo.coffHeader.machine === 0x01C0;
-    if (isDll && name?.toLowerCase().endsWith('.cpl') && isI386) return { ok: true, peInfo };
-    return { ok: !isDll && (isI386 || isARM), peInfo };
+    return classifyExe(peInfo, name);
   } catch {
     return { ok: false };
   }
+}
+
+export function classifyExe(peInfo: PEInfo, name?: string): { ok: boolean; peInfo: PEInfo } {
+  if (peInfo.isMZ) return { ok: true, peInfo };
+  if (peInfo.isNE) return { ok: true, peInfo };
+  const isDll = (peInfo.coffHeader.characteristics & 0x2000) !== 0;
+  const isI386 = peInfo.coffHeader.machine === 0x014C;
+  const isARM = peInfo.coffHeader.machine === 0x01C0;
+  if (isDll && name?.toLowerCase().endsWith('.cpl') && isI386) return { ok: true, peInfo };
+  return { ok: !isDll && (isI386 || isARM), peInfo };
 }
 
 export type RunExeFn = (buf: ArrayBuffer, peInfo: PEInfo, additional: Map<string, ArrayBuffer>, exeName: string, commandLine?: string) => void;

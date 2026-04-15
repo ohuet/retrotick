@@ -387,7 +387,7 @@ export function FolderWindow({
               ))}
               {fm.items.length === 0 && (
                 <div class="flex items-center justify-center w-full text-gray-400 text-sm" style={{ minHeight: '200px' }}>
-                  {t().folderEmpty}
+                  {fm.isLoading ? t().folderLoading : t().folderEmpty}
                 </div>
               )}
             </div>

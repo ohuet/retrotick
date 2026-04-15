@@ -234,16 +234,35 @@ export async function copyEntry(sourceName: string, destName: string): Promise<v
 }
 
 export async function getItemsInFolder(prefix: string): Promise<StoredFile[]> {
-  const all = await getAllFiles();
-  return all.filter(f => {
-    if (!f.name.startsWith(prefix)) return false;
-    const rest = f.name.slice(prefix.length);
-    if (!rest) return false;
-    if (isFolder(f.name)) {
-      // Direct child folder: rest is "name/" (no additional slash before the trailing one)
-      return rest.indexOf('/') === rest.length - 1;
-    }
-    // Direct child file: no slash in rest
-    return !rest.includes('/');
+  // Scan only entries whose key starts with `prefix` using a bounded key range.
+  // The previous implementation called getAllFiles() and transferred every
+  // file's ArrayBuffer to the main thread just to filter by name, which is
+  // O(total store size) per folder open — noticeable once the store holds
+  // many large EXEs.
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    // IDBKeyRange.bound(prefix, prefix + '\uffff') selects every key whose
+    // string sort order falls between prefix and the highest BMP code point,
+    // i.e. every entry whose name starts with prefix.
+    const range = IDBKeyRange.bound(prefix, prefix + '\uffff', false, false);
+    const req = store.getAll(range);
+    req.onsuccess = () => {
+      const all = req.result as StoredFile[];
+      const out: StoredFile[] = [];
+      for (const f of all) {
+        const rest = f.name.slice(prefix.length);
+        if (!rest) continue; // the folder marker itself
+        if (isFolder(f.name)) {
+          // Direct child folder: rest is "name/" (no additional slash before the trailing one)
+          if (rest.indexOf('/') === rest.length - 1) out.push(f);
+        } else if (!rest.includes('/')) {
+          out.push(f);
+        }
+      }
+      resolve(out);
+    };
+    req.onerror = () => reject(req.error);
   });
 }
