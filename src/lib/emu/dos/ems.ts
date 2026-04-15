@@ -555,11 +555,18 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
         case 0x05: // VCPI Free Page
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
-        case 0x06: // VCPI Get Physical Address of Page in 1st MB
-          // Identity map: physical = linear for first 1MB
-          cpu.reg[EDX] = (cpu.getReg16(ECX) << 12) >>> 0;
+        case 0x06: { // VCPI Get Physical Address of Page in 1st MB
+          // Identity map: physical = linear for first 1MB. The spec restricts
+          // CX to page numbers 0x00..0xFF; reject anything outside that range.
+          const cxPage = cpu.getReg16(ECX);
+          if (cxPage >= 0x100) {
+            cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8B00; // invalid page
+            break;
+          }
+          cpu.reg[EDX] = (cxPage << 12) >>> 0;
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
           break;
+        }
         case 0x07: // VCPI Read CR0 → EBX = current CR0
           cpu.reg[EBX] = (emu._cr0 ?? 0) >>> 0;
           cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
@@ -675,32 +682,12 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
   const ax = cpu.getReg16(EAX);
   const fn = ax & 0xFF;
 
-  // For non-switch functions (0x04, 0x05), we need to return to the CALL FAR caller.
-  // The CALL FAR pushed CS:EIP onto the stack. The caller may use 16-bit or 32-bit
-  // operand size (with 66 prefix), creating a 4-byte or 8-byte frame. The stub's
-  // RETF might not match. Instead, pop the return address ourselves and set EIP.
-  // We detect the frame size by checking if the value at ESP+4 looks like a valid
-  // PM selector (< 0x100 with valid GDT/LDT entry) → 32-bit, otherwise → 16-bit.
-  const returnToCaller = () => {
-    const ssBase = cpu.segBase(cpu.ss);
-    const esp = cpu.reg[ESP] >>> 0;
-    // Try 16-bit frame first (4 bytes: WORD IP + WORD CS)
-    const ret16IP = cpu.mem.readU16(ssBase + esp);
-    const ret16CS = cpu.mem.readU16(ssBase + esp + 2);
-    // Try 32-bit frame (8 bytes: DWORD EIP + DWORD CS)
-    const ret32EIP = cpu.mem.readU32(ssBase + esp);
-    const ret32CS = cpu.mem.readU32(ssBase + esp + 4) & 0xFFFF;
-    // Heuristic: if 32-bit CS is a small valid selector (< 0x100), use 32-bit
-    if (ret32CS > 0 && ret32CS < 0x100 && (ret32CS & 0x3) === 0) {
-      cpu.reg[ESP] = (esp + 8) | 0;
-      cpu.loadCS(ret32CS);
-      cpu.eip = (cpu.segBase(ret32CS) + ret32EIP) >>> 0;
-    } else {
-      cpu.reg[ESP] = (esp + 4) | 0;
-      cpu.loadCS(ret16CS);
-      cpu.eip = (cpu.segBase(ret16CS) + ret16IP) >>> 0;
-    }
-  };
+  // Control transfer after handling: the INT FAh dispatch leaves EIP pointing at
+  // the RETF in the PM entry stub. The stub's segment D bit matches the CS the
+  // client installed for the VCPI entry, so its RETF naturally pops the same
+  // frame size the caller's CALL FAR pushed (4 bytes for a 16-bit client, 8 for
+  // a 32-bit client). Cases 0x04/0x05 therefore just set results and return —
+  // no manual stack walk needed.
 
   switch (fn) {
     case 0x04: { // Allocate 4KB Page
@@ -708,32 +695,26 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       const page = emu._vcpiNextPage++;
       cpu.reg[EDX] = page << 12;
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
-      returnToCaller();
       return true;
     }
     case 0x05: // Free 4KB Page
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
-      returnToCaller();
       return true;
 
     case 0x0C: { // Switch from PM to V86 mode
-      // The client pushes a return frame on the stack before CALL FAR to the entry point:
+      // The client pushes a V86 return frame on the stack before CALL FAR to the
+      // entry point:
       //   PUSH GS, PUSH FS, PUSH DS, PUSH ES, PUSH SS
       //   PUSH ESP, PUSH EFLAGS, PUSH CS, PUSH EIP
-      // Then CALL FAR pushes return CS:EIP (8 bytes for 32-bit).
-      // Then the INT FAh in the stub pushes FLAGS+CS+EIP (varies by D bit).
-      //
-      // We need to skip the INT frame + CALL FAR frame to reach the V86 frame.
-      // The stub is in a 16-bit segment (CS from DE01 descriptor 1 has D=0?
-      // Actually DE01 sets it as 32-bit: 0x00CF9A00). Let's check opSize.
-      // With 32-bit CS: INT pushes 12 bytes (EFLAGS+CS+EIP), CALL FAR pushed 8.
-      // Total to skip: 20 bytes.
+      // Then CALL FAR pushes its own return CS:EIP (4 bytes for a 16-bit client,
+      // 8 bytes for a 32-bit client). dispatchException does not push anything
+      // extra for JS-handled traps, so we only need to skip past the CALL FAR
+      // frame. The frame size matches the D bit of the stub segment the client
+      // installed, which is exactly what cpu.use32 reflects at trap time.
       const ssBase = cpu.segBase(cpu.ss);
       const esp = cpu.reg[ESP] >>> 0;
-      // dispatchException doesn't push a frame for JS handlers, and INT CD FA
-      // only called dispatchException which fell through to handleDosInt.
-      // Only the CALL FAR frame (8 bytes: 32-bit CS + EIP) needs to be skipped.
-      const frameBase = ssBase + esp + 8;
+      const callFarFrameBytes = cpu.use32 ? 8 : 4;
+      const frameBase = ssBase + esp + callFarFrameBytes;
       const newEIP = cpu.mem.readU32(frameBase + 0);
       const newCS = cpu.mem.readU32(frameBase + 4) & 0xFFFF;
       const newEFLAGS = cpu.mem.readU32(frameBase + 8);

@@ -44,9 +44,6 @@ export interface DpmiState {
   memBlocks: Map<number, { base: number; size: number }>;
   nextMemAddr: number;
   dosMemBlocks: Map<number, { rmSeg: number; sel: number; paras: number }>;
-  // Recursion tracking for PM handler dispatch
-  _activeHandlers?: Set<number>;
-  _handlerCleanup?: { intNum: number; esp: number }[];
   pmExcHandlers: Map<number, { sel: number; off: number }>;
   // Real mode callbacks (AX=0303/0304)
   rmCallbacks?: { pmSel: number; pmOff: number; rmStructAddr: number; rmSeg: number; rmOff: number }[];
@@ -413,7 +410,33 @@ export function handleInt31(cpu: CPU, emu: Emulator): boolean {
 /** AX=0000: Allocate LDT descriptors. CX=count → AX=base selector */
 function dpmiAllocDescriptors(cpu: CPU, emu: Emulator, st: DpmiState): boolean {
   const count = cpu.getReg16(ECX) || 1;
-  const base = st.nextSelector;
+  // DPMI requires the returned selectors to be contiguous with an increment of
+  // 8. Try to satisfy the request from freeSelectors first: scan for any run of
+  // `count` consecutive free entries, remove them from the pool, and reuse that
+  // base. Otherwise fall through to bumping nextSelector.
+  let base = -1;
+  if (count === 1 && st.freeSelectors.length > 0) {
+    base = st.freeSelectors.pop()!;
+  } else if (count > 1 && st.freeSelectors.length >= count) {
+    const sorted = [...st.freeSelectors].sort((a, b) => a - b);
+    for (let i = 0; i <= sorted.length - count; i++) {
+      let ok = true;
+      for (let j = 1; j < count; j++) {
+        if (sorted[i + j] !== sorted[i] + j * 8) { ok = false; break; }
+      }
+      if (ok) {
+        base = sorted[i];
+        const run = new Set<number>();
+        for (let j = 0; j < count; j++) run.add(sorted[i + j]);
+        st.freeSelectors = st.freeSelectors.filter(s => !run.has(s));
+        break;
+      }
+    }
+  }
+  if (base < 0) {
+    base = st.nextSelector;
+    st.nextSelector = base + count * 8;
+  }
   for (let i = 0; i < count; i++) {
     const sel = base + i * 8;
     const idx = (sel & 0xFFF8) >>> 3;
@@ -422,7 +445,6 @@ function dpmiAllocDescriptors(cpu: CPU, emu: Emulator, st: DpmiState): boolean {
     // without falling back to a GDT memory read on every call.
     cpu.segLimits.set(sel, 0);
   }
-  st.nextSelector = base + count * 8;
   cpu.setReg16(EAX, base);
   cpu.setFlag(0x001, false);
   return true;
