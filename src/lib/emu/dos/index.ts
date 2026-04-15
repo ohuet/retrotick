@@ -86,6 +86,11 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       emu.memory.writeU32(0x46C, (emu.memory.readU32(0x46C) + 1) >>> 0);
       // Chain to INT 1Ch (user timer tick hook) like real BIOS.
       // Programs like QBasic install INT 1Ch handlers for time-based processing.
+      // Only chain in real mode: the IVT vector is a real-mode seg:off pair,
+      // and the raw `cpu.cs = seg` below would load an invalid GDT selector
+      // in PM. PM clients hook INT 1Ch via INT 31h AX=0205 instead, reached
+      // through dispatchException before we ever get here.
+      if (!cpu.realMode) return true;
       const bios1C = emu._dosBiosDefaultVectors.get(0x1C) ?? ((0xF000 << 16) | (0x1C * 5));
       // Check IVT memory first — programs may write INT 1Ch directly
       const ivt1COff = cpu.mem.readU16(0x1C * 4);
