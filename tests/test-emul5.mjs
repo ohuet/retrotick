@@ -128,6 +128,9 @@ const WATCH_RANGES = [
   [0x85d0, 0x85e0],
   // Track 0x2626 (= ds:[0x1526] in DOS4GW data, source of strcpy)
   [0x2626, 0x2640],
+  // Track ds:[0xcf8] (the far pointer used by lds si,[0xcf8])
+  // ds=0x110 → linear 0x1100+0xcf8 = 0x1df8
+  [0x1df8, 0x1dfc],
 ];
 const WATCH_ADDR = 0x1abc;
 const WATCH_END = 0x1abe;
@@ -159,7 +162,10 @@ function inWatch(addr, size) {
 function logWatch(size, addr, val) {
   if (inWatch(addr, size)) {
     const cpu = emu.cpu;
-    console.log(`[WATCH] w${size*8} addr=0x${addr.toString(16)} val=0x${(val >>> 0).toString(16)} cs=${cpu.cs.toString(16)} eip=${(cpu.eip>>>0).toString(16)} es=${cpu.es.toString(16)} ds=${cpu.ds.toString(16)} edi=${(cpu.reg[7]>>>0).toString(16)} step=${stepNum}`);
+    let bytes = '';
+    const eip = (cpu.eip >>> 0);
+    for (let i = -4; i < 8; i++) bytes += cpu.mem.readU8((eip + i) >>> 0).toString(16).padStart(2,'0') + ' ';
+    console.log(`[WATCH] w${size*8} addr=0x${addr.toString(16)} val=0x${(val >>> 0).toString(16)} cs=${cpu.cs.toString(16)} eip=${eip.toString(16)} es=${cpu.es.toString(16)} ds=${cpu.ds.toString(16)} edi=${(cpu.reg[7]>>>0).toString(16)} esi=${(cpu.reg[6]>>>0).toString(16)} step=${stepNum} bytes(eip-4..+8)=[${bytes}]`);
     dumpCs18();
   }
 }
@@ -224,9 +230,47 @@ emu.cpu.step = function() {
     globalThis._preEntry.push({stepNum, cs: beforeCS, eip: beforeEIP, b0: this.mem.readU8(beforeEIP), b1: this.mem.readU8(beforeEIP+1), b2: this.mem.readU8(beforeEIP+2), b3: this.mem.readU8(beforeEIP+3), b4: this.mem.readU8(beforeEIP+4)});
     if (globalThis._preEntry.length > 64) globalThis._preEntry.shift();
   }
+  // Dump source string for the strcpy at step 3886
+  if (stepNum === 3886 && !globalThis._dump9ff9) {
+    globalThis._dump9ff9 = true;
+    // SI=0x4f at this point (already incremented past 0x4e)
+    // The string starts at 0x9ff9:0x4e = linear 0x9ffde
+    const linStart = 0x9ffde;
+    let hex = '';
+    let asc = '';
+    for (let k = 0; k < 64; k++) {
+      const c = this.mem.readU8((linStart + k) >>> 0);
+      hex += c.toString(16).padStart(2,'0') + ' ';
+      asc += (c >= 0x20 && c < 0x7f) ? String.fromCharCode(c) : '.';
+    }
+    console.log(`\n[DUMP @ step 3886] linear 0x${linStart.toString(16)} (DS:SI start):`);
+    console.log(`  hex: ${hex}`);
+    console.log(`  asc: "${asc}"`);
+    // Also dump 64 bytes earlier
+    const linEarly = 0x9ff90;
+    let hex2 = '';
+    let asc2 = '';
+    for (let k = 0; k < 80; k++) {
+      const c = this.mem.readU8((linEarly + k) >>> 0);
+      hex2 += c.toString(16).padStart(2,'0') + ' ';
+      asc2 += (c >= 0x20 && c < 0x7f) ? String.fromCharCode(c) : '.';
+    }
+    console.log(`[DUMP @ step 3886] linear 0x${linEarly.toString(16)} (segment 0x9ff9 base):`);
+    console.log(`  hex: ${hex2}`);
+    console.log(`  asc: "${asc2}"\n`);
+  }
   // Detect entry into sub_4E96 (linear 0xc2d6) and sub_4C1F (linear 0xc05f)
   if (beforeEIP === 0xc2d6 && !globalThis._sub4e96Entry) {
     globalThis._sub4e96Entry = true;
+    // Verify the patch is still in effect at this point
+    let cur = '';
+    for (let k = 0; k < 32; k++) {
+      const c = this.mem.readU8(0x2290 + k);
+      if (c === 0) break;
+      cur += String.fromCharCode(c);
+    }
+    const handle = this.mem.readU16(0x1100 + 0x0E70);
+    console.log(`\n[CHECK] At sub_4E96 entry: ds:[1190]="${cur}" ds:[0E70]=0x${handle.toString(16)}\n`);
     console.log(`\n>>> 64 STEPS BEFORE sub_4E96 entry:`);
     for (const t of globalThis._preEntry) {
       const bytes = `${t.b0.toString(16).padStart(2,'0')} ${t.b1.toString(16).padStart(2,'0')} ${t.b2.toString(16).padStart(2,'0')} ${t.b3.toString(16).padStart(2,'0')} ${t.b4.toString(16).padStart(2,'0')}`;
@@ -566,7 +610,7 @@ let totalTicks = 0;
 
 for (let i = 0; i < MAX_TICKS; i++) {
   if (emu.halted) {
-    console.log(`[HALT] after ${totalTicks} ticks: ${emu.cpu.haltReason}`);
+    console.log(`[HALT] after ${totalTicks} ticks: cpuHR=${emu.cpu.haltReason || ''} emuHR=${emu.haltReason || ''} EIP=0x${(emu.cpu.eip>>>0).toString(16)} CS=0x${emu.cpu.cs.toString(16)} RM=${emu.cpu.realMode}`);
     console.log(`[INT21LOG] ${int21Log.length} INT 21h calls total. Showing ALL:`);
     const i21start = 0;
     for (let k = i21start; k < int21Log.length; k++) {
