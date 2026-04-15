@@ -1,3 +1,5 @@
+import { openDB, FILES_META_STORE as META_STORE, FILES_DATA_STORE as DATA_STORE } from './idb';
+
 export interface StoredFile {
   name: string;
   data: ArrayBuffer;
@@ -24,65 +26,6 @@ export interface DesktopFilesChangedDetail {
 /** Dispatch a `desktop-files-changed` CustomEvent with targeted payload. */
 export function dispatchDesktopFilesChanged(detail: DesktopFilesChangedDetail): void {
   window.dispatchEvent(new CustomEvent('desktop-files-changed', { detail }));
-}
-
-const DB_NAME = 'exeviewer';
-const META_STORE = 'filesMeta';
-const DATA_STORE = 'filesData';
-const DB_VERSION = 4;
-
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = (ev) => {
-      const db = req.result;
-      const tx = req.transaction!;
-      if (!db.objectStoreNames.contains('registry')) {
-        db.createObjectStore('registry');
-      }
-      if (!db.objectStoreNames.contains('profiles')) {
-        db.createObjectStore('profiles');
-      }
-
-      // Split the old monolithic `files` store (v3) into `filesMeta` + `filesData`.
-      // filesMeta is queried without touching ArrayBuffers, so syncing the list
-      // of virtual files at emulator launch no longer pays the structured-clone
-      // cost of every stored binary.
-      const prev = ev.oldVersion;
-      const hadOldStore = db.objectStoreNames.contains('files');
-      const needsMeta = !db.objectStoreNames.contains(META_STORE);
-      const needsData = !db.objectStoreNames.contains(DATA_STORE);
-      if (needsMeta) db.createObjectStore(META_STORE, { keyPath: 'name' });
-      if (needsData) db.createObjectStore(DATA_STORE, { keyPath: 'name' });
-
-      if (prev > 0 && prev < 4 && hadOldStore) {
-        // Migrate every record from v3 `files` to v4 (filesMeta + filesData).
-        // The upgrade transaction spans every store, so we can read from the
-        // old store and write to the new ones atomically. Once migration
-        // completes the old store is dropped.
-        const oldStore = tx.objectStore('files');
-        const metaStore = tx.objectStore(META_STORE);
-        const dataStore = tx.objectStore(DATA_STORE);
-        oldStore.openCursor().onsuccess = (e) => {
-          const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
-          if (cursor) {
-            const rec = cursor.value as StoredFile;
-            const size = rec.data?.byteLength ?? 0;
-            metaStore.put({ name: rec.name, size, addedAt: rec.addedAt ?? Date.now() });
-            dataStore.put({ name: rec.name, data: rec.data ?? new ArrayBuffer(0) });
-            cursor.continue();
-          } else {
-            // Drop the old store once the cursor walk completes.
-            if (db.objectStoreNames.contains('files')) db.deleteObjectStore('files');
-          }
-        };
-      } else if (hadOldStore) {
-        db.deleteObjectStore('files');
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
 }
 
 /** List every file's name/size/addedAt without transferring ArrayBuffers. */
