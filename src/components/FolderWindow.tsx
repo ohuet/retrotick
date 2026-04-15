@@ -4,7 +4,8 @@ import { MenuDropdown } from './win2k/MenuBar';
 import { DesktopIcon, INTERNAL_MIME, FOLDER_ICON_16 } from './DesktopIcon';
 import {
   getItemsInFolder, addFile, renameEntry,
-  isFolder, displayName, getAllFiles, readDroppedItems,
+  isFolder, displayName, getAllFiles, getFile, readDroppedItems,
+  dispatchDesktopFilesChanged,
 } from '../lib/file-store';
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
 import { useFolderTools } from '../hooks/useFolderTools';
@@ -286,6 +287,8 @@ export function FolderWindow({
     if (raw) {
       let paths: string[];
       try { paths = JSON.parse(raw); } catch { paths = [raw]; }
+      const added: string[] = [];
+      const deleted: string[] = [];
       for (const internalPath of paths) {
         if (internalPath.startsWith(prefix) && !internalPath.slice(prefix.length).includes('/')) continue;
         if (isFolder(internalPath) && internalPath.slice(0, -1).startsWith(prefix) && !internalPath.slice(prefix.length, -1).includes('/')) continue;
@@ -293,9 +296,11 @@ export function FolderWindow({
         const isDir = isFolder(internalPath);
         const newName = prefix + dName + (isDir ? '/' : '');
         await renameEntry(internalPath, newName);
+        added.push(newName);
+        deleted.push(internalPath);
       }
       await fm.loadItems();
-      window.dispatchEvent(new Event('desktop-files-changed'));
+      dispatchDesktopFilesChanged({ source: 'ui', added, deleted });
       return;
     }
     if (!e.dataTransfer) return;
@@ -451,9 +456,8 @@ export function FolderWindow({
                 else if (id === CMD_COPY) onCopy([...fm.selected], prefix);
                 else if (id === CMD_RENAME) { fm.setEditingName(item.name); fm.selectOne(item.name); }
                 else if (id === CMD_VIEW && !item.isFolder) {
-                  getAllFiles().then(all => {
-                    const f = all.find(s => s.name === item.name);
-                    if (f) onViewResources(f.data, displayName(item.name));
+                  getFile(item.name).then(buf => {
+                    if (buf) onViewResources(buf, displayName(item.name));
                   });
                 }
                 else if (id === CMD_DELETE) fm.setConfirmDelete([...fm.selected]);

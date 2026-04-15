@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
 import {
   addFolder, deleteFolder, deleteFile, renameEntry,
-  isFolder, displayName, addFile, getAllFiles, readDroppedItems,
+  isFolder, displayName, addFile, listFileMetadata, readDroppedItems,
+  dispatchDesktopFilesChanged,
   type StoredFile,
 } from '../lib/file-store';
 import { extractFirstIconUrlFromParsed, classifyExe } from '../lib/file-utils';
@@ -151,11 +152,11 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
   useEffect(() => {
     if (Array.isArray(propertiesItem) || !propertiesItem?.isFolder) { setFolderContents(null); return; }
     const folderPrefix = propertiesItem.name.endsWith('/') ? propertiesItem.name : propertiesItem.name + '/';
-    getAllFiles().then(all => {
+    listFileMetadata().then(all => {
       let files = 0, folders = 0, totalSize = 0;
       for (const f of all) {
         if (!f.name.startsWith(folderPrefix)) continue;
-        if (isFolder(f.name)) folders++; else { files++; totalSize += f.data.byteLength; }
+        if (isFolder(f.name)) folders++; else { files++; totalSize += f.size; }
       }
       setFolderContents({ files, folders, totalSize });
     });
@@ -169,7 +170,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     setContextMenu(null);
     clearSelection();
     await loadItems();
-    window.dispatchEvent(new Event('desktop-files-changed'));
+    dispatchDesktopFilesChanged({ source: 'ui', deleted: names });
   }
 
   async function handleRename(oldName: string, newDisplayName: string) {
@@ -179,7 +180,7 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
     const newName = prefix + newDisplayName + (isFolder(oldName) ? '/' : '');
     await renameEntry(oldName, newName);
     await loadItems();
-    window.dispatchEvent(new Event('desktop-files-changed'));
+    dispatchDesktopFilesChanged({ source: 'ui', added: [newName], deleted: [oldName] });
   }
 
   async function handleNewFolder() {
@@ -197,6 +198,8 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
 
   async function handleDropOnFolder(folderName: string, draggedPaths: string[]) {
     const folderPrefix = folderName.endsWith('/') ? folderName : folderName + '/';
+    const added: string[] = [];
+    const deleted: string[] = [];
     for (const draggedPath of draggedPaths) {
       if (draggedPath === folderName) continue;
       if (draggedPath.startsWith(folderPrefix)) continue;
@@ -204,9 +207,11 @@ export function useFolderTools(prefix: string, fetchItems: () => Promise<StoredF
       const isDir = isFolder(draggedPath);
       const newName = folderPrefix + dName + (isDir ? '/' : '');
       await renameEntry(draggedPath, newName);
+      added.push(newName);
+      deleted.push(draggedPath);
     }
     await loadItems();
-    window.dispatchEvent(new Event('desktop-files-changed'));
+    dispatchDesktopFilesChanged({ source: 'ui', added, deleted });
   }
 
   async function handleExternalDropOnFolder(folderName: string, e: DragEvent) {

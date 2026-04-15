@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import type { PEInfo } from '../lib/pe';
 import type { MenuItem } from '../lib/pe/types';
-import { getRootItems, addFile, renameEntry, isFolder, displayName, getAllFiles, readDroppedItems } from '../lib/file-store';
+import { getRootItems, addFile, renameEntry, isFolder, displayName, getAllFiles, getFile, readDroppedItems, dispatchDesktopFilesChanged } from '../lib/file-store';
 import type { Emulator } from '../lib/emu/emulator';
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
 import { useFolderTools } from '../hooks/useFolderTools';
@@ -138,16 +138,20 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
     if (raw) {
       let paths: string[];
       try { paths = JSON.parse(raw); } catch { paths = [raw]; }
+      const added: string[] = [];
+      const deleted: string[] = [];
       for (const internalPath of paths) {
         const dName = displayName(internalPath);
         const isDir = isFolder(internalPath);
         const newName = isDir ? dName + '/' : dName;
         if (internalPath !== newName) {
           await renameEntry(internalPath, newName);
+          added.push(newName);
+          deleted.push(internalPath);
         }
       }
       await fm.loadItems();
-      window.dispatchEvent(new Event('desktop-files-changed'));
+      dispatchDesktopFilesChanged({ source: 'ui', added, deleted });
       return;
     }
 
@@ -180,9 +184,8 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
 
   async function handleViewResources(name: string) {
     fm.setContextMenu(null);
-    const stored = await getAllFiles();
-    const f = stored.find(s => s.name === name);
-    if (f) onViewResources(f.data, name);
+    const data = await getFile(name);
+    if (data) onViewResources(data, name);
   }
 
   const isCutSource = clipboard?.mode === 'cut' && clipboard.sourcePrefix === '';
