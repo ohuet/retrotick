@@ -207,6 +207,30 @@ export class CPU {
     return (hi & (1 << 22)) !== 0;
   }
 
+  /** Read a GDT/LDT descriptor and return the byte limit (accounting for G bit) */
+  loadGdtDescriptorLimit(sel: number): number | undefined {
+    const descAddr = this._descTableAddr(sel);
+    if (descAddr < 0) return undefined;
+    const lo = this.mem.readU32(descAddr);
+    const hi = this.mem.readU32(descAddr + 4);
+    const limitLo = lo & 0xFFFF;
+    const limitHi = (hi >>> 16) & 0x0F;
+    let limit = ((limitHi << 16) | limitLo) >>> 0;
+    // G bit (bit 23 of hi): when set, limit is in 4KB pages
+    if ((hi & (1 << 23)) !== 0) limit = (((limit + 1) << 12) - 1) >>> 0;
+    return limit;
+  }
+
+  /** Read a GDT/LDT descriptor and return the access rights word as LAR would expose it.
+   *  LAR result format: low byte = 0, bits 8..15 = access byte, bits 20..23 = flags nibble. */
+  loadGdtDescriptorAccessRights(sel: number): number | undefined {
+    const descAddr = this._descTableAddr(sel);
+    if (descAddr < 0) return undefined;
+    const hi = this.mem.readU32(descAddr + 4);
+    // Mask out base/limit fields, keep the access byte (bits 8..15) and flags (bits 20..23)
+    return (hi & 0x00F0FF00) >>> 0;
+  }
+
   // Register accessors for 8/16 bit subregisters
   getReg8(idx: number): number {
     // idx 0-3: AL,CL,DL,BL; 4-7: AH,CH,DH,BH

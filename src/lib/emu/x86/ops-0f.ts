@@ -260,9 +260,21 @@ export function exec0F(
     case 0x02: { // LAR r16/r32, r/m16 — load access rights
       const d = cpu.decodeModRM(opSize);
       const sel = d.val & 0xFFFF;
-      if (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3)) {
-        // Valid selector — return data segment access rights, set ZF
-        const rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+      // Fast path: if we have a live GDT, read the access byte + flags
+      // nibble directly. LAR is called by DOS/4GW's selector-table scan
+      // loops, so the cost matters. The pre-fix fallback that returned a
+      // hard-coded 0xF300 for every selector in segBases mis-reported the
+      // DPL/type/system bits and made those scans see every selector as
+      // a present 16-bit data R/W descriptor.
+      let rights: number | undefined;
+      if (!cpu.realMode && cpu.emu?._gdtBase) {
+        rights = cpu.loadGdtDescriptorAccessRights(sel);
+        // Treat a slot with Present bit clear as invalid → ZF=0.
+        if (rights !== undefined && (rights & 0x8000) === 0) rights = undefined;
+      } else if (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3)) {
+        rights = opSize === 16 ? 0xF300 : 0x00CF9300;
+      }
+      if (rights !== undefined) {
         if (opSize === 16) {
           cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (rights & 0xFFFF);
         } else {
@@ -279,7 +291,19 @@ export function exec0F(
       const d = cpu.decodeModRM(opSize);
       const sel = d.val & 0xFFFF;
       const canonical = sel >>> 3;
-      const limit = cpu.segLimits.get(sel) ?? cpu.segLimits.get(canonical);
+      // Fast path: segLimits Map (populated by the NE/Win16 loaders and by
+      // the DPMI helpers that mutate GDT entries). Fallback to reading the
+      // GDT descriptor when the selector was set up outside of any loader —
+      // e.g., by `dpmiSetDescriptor` before a corresponding segLimits update,
+      // or by guest code writing a raw descriptor through a flat-mode alias.
+      // Returning the old 64KB default here is NOT safe: DOS/4GW's 16-bit
+      // PM memcpy reads `lsl cx, bx` for small selectors and then runs
+      // `rep movsw` — a wrong 0xFFFF causes it to overwrite 64KB of its
+      // own PM code.
+      let limit = cpu.segLimits.get(sel) ?? cpu.segLimits.get(canonical);
+      if (limit === undefined && !cpu.realMode && cpu.emu?._gdtBase) {
+        limit = cpu.loadGdtDescriptorLimit(sel);
+      }
       if (limit !== undefined) {
         if (opSize === 16) {
           cpu.reg[d.regField] = (cpu.reg[d.regField] & 0xFFFF0000) | (limit & 0xFFFF);

@@ -233,6 +233,16 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.segBases.set(0x28, esBase);
   cpu.segBases.set(0x30, 0); // flat code for stubs
   cpu.segBases.set(0x38, DPMI_REFLECTOR_BASE); // PM reflector stubs
+  // Mirror limits into segLimits so LSL can resolve them via the fast Map path
+  // (otherwise every LSL in hot loops — DOS/4GW's selector scans — would have
+  // to read 8 bytes of GDT memory).
+  cpu.segLimits.set(0x08, 0xFFFF);
+  cpu.segLimits.set(0x10, 0xFFFF);
+  cpu.segLimits.set(0x18, 0xFFFF);
+  cpu.segLimits.set(0x20, 0xFF);
+  cpu.segLimits.set(0x28, 0xFFFF);
+  cpu.segLimits.set(0x30, 0xFFFFFFFF); // 4GB flat (G=1, limit=0xFFFFF pages)
+  cpu.segLimits.set(0x38, 0x500);
 
   // Initialize DPMI state
   emu._dpmiState = {
@@ -408,6 +418,9 @@ function dpmiAllocDescriptors(cpu: CPU, emu: Emulator, st: DpmiState): boolean {
     const sel = base + i * 8;
     const idx = (sel & 0xFFF8) >>> 3;
     writeGdtEntry(emu.memory, emu._gdtBase, idx, 0, 0, 0xF2, 0x00);
+    // Seed segLimits with the initial 0 limit so LSL's Map path resolves it
+    // without falling back to a GDT memory read on every call.
+    cpu.segLimits.set(sel, 0);
   }
   st.nextSelector = base + count * 8;
   cpu.setReg16(EAX, base);
@@ -473,7 +486,8 @@ function dpmiSetSegmentBase(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
 function dpmiSetSegmentLimit(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
   const sel = cpu.getReg16(EBX);
   const idx = (sel & 0xFFF8) >>> 3;
-  let newLimit = ((cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX)) >>> 0;
+  const requestedLimit = ((cpu.getReg16(ECX) << 16) | cpu.getReg16(EDX)) >>> 0;
+  let newLimit = requestedLimit;
 
   const addr = emu._gdtBase + idx * 8;
   const oldHi = emu.memory.readU32(addr + 4);
@@ -490,6 +504,8 @@ function dpmiSetSegmentLimit(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
   }
 
   writeGdtEntry(emu.memory, emu._gdtBase, idx, base, newLimit, access, flags);
+  // Mirror the effective byte limit into segLimits so LSL hits the fast Map path.
+  cpu.segLimits.set(sel, requestedLimit);
   cpu.setFlag(0x001, false);
   return true;
 }
@@ -531,6 +547,9 @@ function dpmiCreateAlias(cpu: CPU, emu: Emulator, st: DpmiState): boolean {
   writeGdtEntry(emu.memory, emu._gdtBase, newIdx, base, limit, 0xF2, flags);
 
   cpu.segBases.set(newSel, base);
+  // Mirror the byte limit (accounting for G bit) into segLimits for fast LSL.
+  const byteLimit = ((flags & 0x08) !== 0) ? ((((limit + 1) << 12) - 1) >>> 0) : limit;
+  cpu.segLimits.set(newSel, byteLimit);
   cpu.setReg16(EAX, newSel);
   cpu.setFlag(0x001, false);
   return true;
@@ -561,9 +580,13 @@ function dpmiSetDescriptor(cpu: CPU, emu: Emulator): boolean {
   for (let i = 0; i < 8; i++) {
     emu.memory.writeU8(descAddr + i, emu.memory.readU8(bufAddr + i));
   }
-  // Update segBases cache
+  // Update segBases and segLimits caches from the freshly written descriptor.
   const base = readGdtEntryBase(emu.memory, emu._gdtBase, idx);
+  const rawLimit = readGdtEntryLimit(emu.memory, emu._gdtBase, idx);
+  const hi = emu.memory.readU32(descAddr + 4);
+  const byteLimit = ((hi & (1 << 23)) !== 0) ? ((((rawLimit + 1) << 12) - 1) >>> 0) : rawLimit;
   cpu.segBases.set(sel, base);
+  cpu.segLimits.set(sel, byteLimit);
   cpu.setFlag(0x001, false);
   return true;
 }
@@ -585,6 +608,7 @@ function dpmiAllocDosMem(cpu: CPU, emu: Emulator, st: DpmiState): boolean {
   const idx = (sel & 0xFFF8) >>> 3;
   writeGdtEntry(emu.memory, emu._gdtBase, idx, base, size - 1, 0xF2, 0x00);
   cpu.segBases.set(sel, base);
+  cpu.segLimits.set(sel, size - 1);
 
   st.dosMemBlocks.set(sel, { rmSeg, sel, paras });
 
