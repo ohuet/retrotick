@@ -16,8 +16,22 @@ const IF = 0x200;
 const DF = 0x400;
 const OF = 0x800;
 
-/** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode). */
-export function dispatchException(cpu: CPU, intNum: number): boolean {
+/** Dispatch a CPU exception/interrupt through handleDosInt or IDT (protected mode).
+ *
+ *  `source` selects which DPMI handler table to consult in PM:
+ *    - 'exception': CPU-generated fault/trap (DE, UD, DF, GP, PF, …). Looks up
+ *      the exception namespace set via INT 31h AX=0203 only.
+ *    - 'interrupt': hardware IRQ or software INT imm8. Looks up the interrupt
+ *      namespace set via INT 31h AX=0205 only. Vectors 0..31 that collide
+ *      with CPU exception numbers (e.g. IRQ0 at vec 0x08 with the default DPMI
+ *      PIC base) must NOT see the exception handler, otherwise DOOM's #DF
+ *      handler gets invoked on every timer tick and leaks stack.
+ */
+export function dispatchException(
+  cpu: CPU,
+  intNum: number,
+  source: 'exception' | 'interrupt' = 'interrupt',
+): boolean {
   // In PM with DPMI active, check if the client installed a PM interrupt handler.
   // Route hardware/software interrupts to it instead of our JS handler.
   // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
@@ -25,11 +39,12 @@ export function dispatchException(cpu: CPU, intNum: number): boolean {
     const dpmi = cpu.emu._dpmiState;
     // DPMI keeps two handler tables: AX=0203 stores in the exception namespace
     // (key=vec, vec 0..31), AX=0205 stores in the interrupt namespace
-    // (key=vec+256). For exception vectors (0..31) the exception namespace
-    // takes precedence; otherwise fall through to the interrupt namespace so
-    // hardware IRQs and software INTs hit AX=0205-installed handlers.
-    const handler = (intNum < 32 ? dpmi.pmExcHandlers.get(intNum) : undefined)
-      ?? dpmi.pmExcHandlers.get(intNum + 256);
+    // (key=vec+256). Pick the table that matches the source of the dispatch —
+    // never fall back across namespaces, or a HW IRQ0 (vec 8) would hit the
+    // client's #DF exception handler and corrupt its stack.
+    const handler = source === 'exception'
+      ? dpmi.pmExcHandlers.get(intNum)
+      : dpmi.pmExcHandlers.get(intNum + 256);
     // Don't intercept: INT 31h (DPMI services), INT FCh/FDh (DPMI stubs),
     // INT 20h (terminate), INT 21h AH<0xEE (standard DOS — handled in JS).
     // Only route to PM handlers for interrupts the PM client actually needs
@@ -124,7 +139,7 @@ function raiseDivideError(cpu: CPU, instrEip: number): void {
   for (let i = 0; i < 8; i++) bytes.push(cpu.mem.readU8((instrEip + i) >>> 0).toString(16).padStart(2, '0'));
   console.warn(`[DIV ERROR] bytes: ${bytes.join(' ')}`);
   cpu.eip = instrEip; // rewind to faulting instruction
-  if (dispatchException(cpu, 0)) return;
+  if (dispatchException(cpu, 0, 'exception')) return;
   cpu.haltReason = 'integer divide by zero';
   cpu.halted = true;
 }

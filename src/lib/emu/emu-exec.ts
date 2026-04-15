@@ -812,14 +812,7 @@ export function emuTick(emu: Emulator): void {
       // In PM with DPMI active, dispatch HW interrupts through dispatchException
       // so PM handlers installed via INT 31h AX=0205 are used.
       if (!emu.cpu.realMode && emu._dpmiState) {
-        // For now, handle INT 08h (timer) in JS directly to avoid recursion
-        // issues when the PM handler chains back. Other HW interrupts go to PM handlers.
-        if (intNum !== 0x08) {
-          dispatchException(emu.cpu, intNum);
-        } else {
-          // Just update the BIOS tick counter (same as JS handler)
-          emu.memory.writeU32(0x46C, (emu.memory.readU32(0x46C) + 1) >>> 0);
-        }
+        dispatchException(emu.cpu, intNum);
         continue;
       }
 
