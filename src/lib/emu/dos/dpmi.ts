@@ -165,23 +165,37 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // idx 6 (0x30): flat code — base=0, limit=4GB, for raw mode switch stubs
   writeGdtEntry(emu.memory, gdtBase, 6, 0, 0xFFFFF, 0x9A, 0x08); // G=1
 
-  // idx 7 (0x38): PM reflector code — base=DPMI_REFLECTOR_BASE, limit=0x500, code, DPL=3
-  writeGdtEntry(emu.memory, gdtBase, 7, DPMI_REFLECTOR_BASE, 0x500, 0xFA, 0x00); // code readable DPL=3
+  // idx 7 (0x38): PM reflector code — base=DPMI_REFLECTOR_BASE, limit=0x500, code, DPL=3.
+  // For 32-bit clients we use D=1 so cpu.use32 is set while the stub runs.
+  writeGdtEntry(emu.memory, gdtBase, 7, DPMI_REFLECTOR_BASE, 0x500, 0xFA, is32bit ? 0x04 : 0x00);
 
-  // Write 256 reflector stubs: MOV AL, intNum; INT FEh; RETF (5 bytes each).
+  // Write 256 reflector stubs: MOV AL, intNum; INT FEh; RETF.
   // The DPMI default reflector address (returned by AX=0204 GetPmIntVector) is
-  // a callable far procedure — clients reach it with CALL FAR ptr16:16, which
-  // pushes only CS:IP. The stub must therefore terminate with RETF (0xCB), not
-  // IRET (0xCF). Using IRET pops a phantom FLAGS word and shifts SP by 2 extra
-  // bytes, corrupting the caller's stack on every interrupt reflection.
+  // a callable far procedure — clients reach it with CALL FAR, which pushes
+  // CS:IP (or CS:EIP for 32-bit clients). The stub must terminate with RETF
+  // and the RETF's operand size must match the caller's CALL FAR push.
+  //
+  // Although DOS/4GW 1.95 declares itself a 32-bit client, its LE code is
+  // loaded into 16-bit real-mode-shadow segments (base = sel*16, D=0), so its
+  // CALL FAR instructions execute in 16-bit mode and push only 2+2 bytes.
+  // We therefore force the RETF to pop 2 bytes + 2 bytes regardless of the
+  // reflector segment's D bit by using a 0x66 operand-size prefix in 32-bit
+  // segments. In 16-bit segments, a plain CB is already a 16-bit RETF.
+  const stubStride = is32bit ? 6 : 5;
   for (let i = 0; i < 256; i++) {
-    const addr = DPMI_REFLECTOR_BASE + i * 5;
+    const addr = DPMI_REFLECTOR_BASE + i * stubStride;
     emu.memory.writeU8(addr + 0, 0xB0);              // MOV AL, imm8
-    emu.memory.writeU8(addr + 1, i);                  // interrupt number
+    emu.memory.writeU8(addr + 1, i);
     emu.memory.writeU8(addr + 2, 0xCD);              // INT FEh
     emu.memory.writeU8(addr + 3, DPMI_REFLECTOR_INT);
-    emu.memory.writeU8(addr + 4, 0xCB);              // RETF
+    if (is32bit) {
+      emu.memory.writeU8(addr + 4, 0x66);            // operand-size override
+      emu.memory.writeU8(addr + 5, 0xCB);            // RETF (16-bit in a 32-bit seg)
+    } else {
+      emu.memory.writeU8(addr + 4, 0xCB);            // RETF (16-bit in a 16-bit seg)
+    }
   }
+  (emu as any)._dpmiReflectorStride = stubStride;
 
   // Set GDT in emulator
   emu._gdtBase = gdtBase;
@@ -205,13 +219,14 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.realMode = false;
 
   // Load segment registers.
-  // Spec says ES should be a PSP selector; DOS4GW-family loaders read ES as if
-  // it were their original real-mode ES. We shadow rmES into GDT[5] (0x28) and
-  // load ES=0x28 so the client sees the same data under the same offset.
-  // The PSP selector is still available at 0x20 for clients that want it.
+  // DPMI 0.9 spec: initial ES is the PSP selector. DOS/4GW 1.95 saves ES into
+  // its internal "psp_sel" global right after entry and later uses DS=psp_sel
+  // to read the command tail at DS:0x81. If ES isn't the PSP selector, the
+  // command-tail parser reads garbage and argv[0] synthesis fails.
+  // GDT[5] (sel 0x28) still holds the rmES shadow for clients that want it.
   cpu.loadCS(0x08);
   cpu.ds = 0x10;
-  cpu.es = 0x28;      // shadow of RM ES (base = rmES * 16)
+  cpu.es = 0x20;      // PSP selector (base = PSP * 16)
   cpu.ss = 0x18;
   cpu.fs = 0;
   cpu.gs = 0;
@@ -681,12 +696,12 @@ function dpmiGetPmExcHandler(cpu: CPU, st: DpmiState, isException: boolean): boo
     cpu.setReg16(ECX, handler.sel);
     cpu.reg[EDX] = handler.off;
   } else {
-    // Return the default PM reflector stub for this interrupt.
-    // Each stub is 5 bytes at selector 0x38, offset = intNum * 5.
-    // The stub does MOV AL,intNum; INT FEh; IRET which traps into our
-    // JS handler to reflect the interrupt to RM/BIOS.
-    cpu.setReg16(ECX, 0x38); // reflector code selector
-    cpu.reg[EDX] = vec * 5;  // offset to the specific INT stub
+    // Default PM reflector stub for this interrupt. Per-stub stride is 5 bytes
+    // for 16-bit clients and 6 bytes for 32-bit clients (extra 0x66 operand-
+    // size override on the terminating RETF).
+    const stride = (cpu.emu as any)?._dpmiReflectorStride || 5;
+    cpu.setReg16(ECX, 0x38);
+    cpu.reg[EDX] = vec * stride;
   }
   cpu.setFlag(0x001, false);
   return true;
