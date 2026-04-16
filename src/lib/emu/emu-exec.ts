@@ -686,8 +686,18 @@ export function emuTick(emu: Emulator): void {
     }
     // Detect IRET from hardware interrupt handler by monitoring SP (RM dispatch)
     // or IF flag restoration (PM IDT dispatch).
-    if (emu._hwIntSavedSP >= 0 && (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP) {
+    // SS must also match: DOS/4GW's PM ISR pops up to 18 bytes from the caller's
+    // stack (handoff between outer and inner frames) before it switches SS:ESP
+    // onto the allocated exception stack. During that window SP transiently
+    // rises above _hwIntSavedSP on the OUTER stack — without an SS check, we
+    // would clear the guard and dispatch another HW IRQ on top of the handler.
+    if (
+      emu._hwIntSavedSP >= 0 &&
+      (emu._hwIntSavedSS < 0 || emu.cpu.ss === emu._hwIntSavedSS) &&
+      (emu.cpu.reg[4] & 0xFFFF) >= emu._hwIntSavedSP
+    ) {
       emu._hwIntSavedSP = -1;
+      emu._hwIntSavedSS = -1;
       // Restore PM state if we switched to RM for the interrupt handler
       if (emu._hwIntPMState) {
         emu._cr0 = emu._hwIntPMState.cr0;
@@ -797,8 +807,14 @@ export function emuTick(emu: Emulator): void {
     if (emu.dosMouse.pendingCallbackMask && emu._mouseCallbackSavedSP < 0 && emu._hwIntSavedSP < 0) {
       dispatchMouseCallback(emu);
     }
-    if (emu._pendingHwInts.length > 0 && emu._hwIntSavedSP < 0 && !emu.cpu._inhibitIRQ) {
+    if (
+      emu._pendingHwInts.length > 0 &&
+      emu._hwIntSavedSP < 0 &&
+      !emu.cpu._inhibitIRQ &&
+      (emu.cpu.getFlags() & 0x0200) !== 0
+    ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
+      // IF=0 blocks all maskable IRQs — required during ISRs and critical sections.
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       const masterBase = emu._picMasterBase;
@@ -812,7 +828,13 @@ export function emuTick(emu: Emulator): void {
       // In PM with DPMI active, dispatch HW interrupts through dispatchException
       // so PM handlers installed via INT 31h AX=0205 are used.
       if (!emu.cpu.realMode && emu._dpmiState) {
+        const prevSS = emu.cpu.ss;
         dispatchException(emu.cpu, intNum, 'interrupt', true);
+        // Mark handler active so the batch loop does not dispatch another HW
+        // interrupt on top of this one. Cleared in the IRETD detection above
+        // when SS matches the saved value AND SP rises back to this level.
+        emu._hwIntSavedSP = emu.cpu.reg[4] & 0xFFFF;
+        emu._hwIntSavedSS = prevSS;
         continue;
       }
 

@@ -1832,6 +1832,7 @@ export class Emulator {
   _lastHwKeyDeliverTime = 0; // performance.now() of last non-E0 scancode delivery
   _tickRunning = false; // reentrancy guard for tick()
   _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
+  _hwIntSavedSS = -1; // SS selector saved alongside SP — PM ISRs switch stacks mid-handler
   _hwIntPMActive = false; // true while a PM IDT-dispatched handler is running
   /** Saved PM state when HW INT handler runs in RM (restored after IRET) */
   _hwIntPMState: { cr0: number; cs: number; ss: number; ds: number; es: number; use32: boolean; segBases: Map<number, number> } | undefined;
