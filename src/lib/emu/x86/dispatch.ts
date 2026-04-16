@@ -31,6 +31,7 @@ export function dispatchException(
   cpu: CPU,
   intNum: number,
   source: 'exception' | 'interrupt' = 'interrupt',
+  hwIrq = false,
 ): boolean {
   // In PM with DPMI active, check if the client installed a PM interrupt handler.
   // Route hardware/software interrupts to it instead of our JS handler.
@@ -75,6 +76,22 @@ export function dispatchException(
         // execution to a random CS:EIP.
         const clientIs32 = !!cpu.emu._dpmiState.is32bit;
         const returnIP = cpu.eip - cpu.segBase(callerCS);
+
+        // For HW IRQs: save full client state so the ISR's IRETD can restore
+        // it. Real DPMI hosts do this via ring transitions; we emulate it by
+        // intercepting IRETD. Only save for HW IRQs — software INTs don't need
+        // this because their handlers typically don't switch stacks, and their
+        // internal IRETs would incorrectly consume the saved state.
+        if (hwIrq) {
+          dpmi.irqReturnStack.push({
+            ss: cpu.ss,
+            esp: cpu.reg[ESP] >>> 0,
+            cs: callerCS,
+            eip: returnIP >>> 0,
+            eflags: cpu.getFlags(),
+          });
+        }
+
         if (clientIs32) {
           cpu.push32(cpu.getFlags());
           cpu.push32(callerCS);
@@ -873,13 +890,14 @@ export function cpuStep(cpu: CPU): void {
       }
       break;
 
-    // CALL FAR ptr16:16/32 — in PM use opSize, in RM use D bit
+    // CALL FAR ptr16:16/32
     case 0x9A: {
       if (opSize === 16) {
         const offset = cpu.fetch16();
         const selector = cpu.fetch16();
+        const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
         cpu.push16(cpu.cs);
-        cpu.push16((cpu.eip - (cpu.segBase(cpu.cs))) & 0xFFFF);
+        cpu.push16(returnIP);
         cpu.loadCS(selector);
         cpu.eip = (cpu.segBase(selector)) + offset;
       } else {
@@ -1145,7 +1163,7 @@ export function cpuStep(cpu: CPU): void {
     }
 
     // RETF — in PM use opSize, in RM use D bit
-    case 0xCB:
+    case 0xCB: {
       if (cpu.realMode ? !cpu.use32 : opSize === 16) {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
@@ -1158,6 +1176,7 @@ export function cpuStep(cpu: CPU): void {
         cpu.eip = (cpu.segBase(cs) + eip2) >>> 0;
       }
       break;
+    }
 
     // LES (0xC4) / LDS (0xC5) — load far pointer
     case 0xC4: case 0xC5: {
@@ -1276,9 +1295,28 @@ export function cpuStep(cpu: CPU): void {
         const ip = cpu.pop16();
         const cs = cpu.pop16();
         const flags = cpu.pop16();
-        cpu.loadCS(cs);
-        cpu.eip = cpu.segBase(cs) + ip;
-        cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
+        if (cpu.emu?._dpmiState?.irqReturnStack.length) {
+          const stk = cpu.emu._dpmiState.irqReturnStack;
+          const top = stk[stk.length - 1];
+          const isMatchedReturn = (cs === top.cs && ip === top.eip);
+          const isReflectorReturn = (cs === 0x38);
+          if (isMatchedReturn || isReflectorReturn) {
+            stk.pop();
+            cpu.loadCS(top.cs);
+            cpu.eip = (cpu.segBase(top.cs) + top.eip) >>> 0;
+            cpu.ss = top.ss;
+            cpu.reg[ESP] = top.esp;
+            cpu.setFlags(top.eflags);
+          } else {
+            cpu.loadCS(cs);
+            cpu.eip = cpu.segBase(cs) + ip;
+            cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
+          }
+        } else {
+          cpu.loadCS(cs);
+          cpu.eip = cpu.segBase(cs) + ip;
+          cpu.setFlags((cpu.getFlags() & 0xFFFF0000) | (flags & 0xFFFF));
+        }
       } else {
         let eip2 = cpu.pop32() >>> 0;
         const cs2 = cpu.pop32() & 0xFFFF;
@@ -1312,9 +1350,34 @@ export function cpuStep(cpu: CPU): void {
           cpu.eip = (cs2 * 16 + eip2) >>> 0;
           cpu.setFlags(eflags & ~(1 << 17)); // clear VM for our RM mode
         } else {
-          cpu.loadCS(cs2);
-          cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
-          cpu.setFlags(eflags);
+          // DPMI HW interrupt return detection. Two cases:
+          // 1. ISR didn't switch stacks → popped CS:EIP matches saved return
+          // 2. ISR switched stacks → popped from wrong stack, stale values.
+          //    Detected by IRETD to cs=reflector_sel (0x38) — the ISR's IRETD
+          //    popped stale data that decoded as the reflector address.
+          // In both cases, restore the saved client state.
+          if (cpu.emu?._dpmiState?.irqReturnStack.length) {
+            const stk = cpu.emu._dpmiState.irqReturnStack;
+            const top = stk[stk.length - 1];
+            const isMatchedReturn = (cs2 === top.cs && eip2 === top.eip);
+            const isReflectorReturn = (cs2 === 0x38); // DPMI_REFLECTOR_SEL
+            if (isMatchedReturn || isReflectorReturn) {
+              stk.pop();
+              cpu.loadCS(top.cs);
+              cpu.eip = (cpu.segBase(top.cs) + top.eip) >>> 0;
+              cpu.ss = top.ss;
+              cpu.reg[ESP] = top.esp;
+              cpu.setFlags(top.eflags);
+            } else {
+              cpu.loadCS(cs2);
+              cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
+              cpu.setFlags(eflags);
+            }
+          } else {
+            cpu.loadCS(cs2);
+            cpu.eip = (cpu.segBase(cs2) + eip2) >>> 0;
+            cpu.setFlags(eflags);
+          }
         }
       }
       break;
@@ -1768,8 +1831,9 @@ export function cpuStep(cpu: CPU): void {
           if (opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
+            const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF;
             cpu.push16(cpu.cs);
-            cpu.push16((cpu.eip - cpu.segBase(cpu.cs)) & 0xFFFF);
+            cpu.push16(returnIP);
             cpu.loadCS(farSel);
             cpu.eip = (cpu.segBase(farSel)) + farOff;
           } else {

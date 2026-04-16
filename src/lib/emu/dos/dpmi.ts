@@ -29,6 +29,7 @@ const DPMI_GDT_LIMIT = DPMI_GDT_ENTRIES * 8 - 1;
 // Placed right after the GDT (0x3F0000 + 0x10000 = 0x400000)
 const DPMI_REFLECTOR_BASE = 0x400000;
 export const DPMI_REFLECTOR_INT = 0xFE; // trap INT for PM reflector stubs
+export const DPMI_REFLECTOR_SEL = 0x38; // GDT index 7 — PM reflector code segment selector
 
 // Memory blocks start after reflector area
 const DPMI_MEM_START = 0x400600;
@@ -48,6 +49,11 @@ export interface DpmiState {
   // Real mode callbacks (AX=0303/0304)
   rmCallbacks?: { pmSel: number; pmOff: number; rmStructAddr: number; rmSeg: number; rmOff: number }[];
   rmCallbackNextAddr?: number; // next linear address for RM callback stubs
+  // Saved client state for DPMI interrupt returns. Real DPMI hosts restore
+  // the full client state (SS:ESP, CS:EIP, EFLAGS) when the ISR does IRETD
+  // (via ring-transition traps). We emulate this by saving at dispatch time
+  // and restoring on IRETD.
+  irqReturnStack: { ss: number; esp: number; cs: number; eip: number; eflags: number }[];
 }
 
 /** Write DPMI stubs at F000:0A00 (entry), F000:0A10 (RM→PM), F000:0A20 (PM→RM) */
@@ -266,6 +272,7 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
     nextMemAddr: DPMI_MEM_START,
     dosMemBlocks: new Map(),
     pmExcHandlers: new Map(),
+    irqReturnStack: [],
   };
 
   // Clear carry flag = success

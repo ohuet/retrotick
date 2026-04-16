@@ -322,13 +322,8 @@ export class Memory {
     return s;
   }
 
-  _watchAddr = 0; // temporary memory write watch
   writeU8(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
-    if (this._watchAddr && addr === this._watchAddr) {
-      console.log(`[MEM-WATCH] Write 0x${(val & 0xFF).toString(16)} to 0x${addr.toString(16)}`);
-      console.trace();
-    }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar!.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flat && addr < this._flatMax) { this._flat[addr] = val & 0xFF; return; }

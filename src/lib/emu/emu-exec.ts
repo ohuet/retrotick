@@ -812,7 +812,7 @@ export function emuTick(emu: Emulator): void {
       // In PM with DPMI active, dispatch HW interrupts through dispatchException
       // so PM handlers installed via INT 31h AX=0205 are used.
       if (!emu.cpu.realMode && emu._dpmiState) {
-        dispatchException(emu.cpu, intNum);
+        dispatchException(emu.cpu, intNum, 'interrupt', true);
         continue;
       }
 
