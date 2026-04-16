@@ -1297,8 +1297,19 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu._dosBiosDefaultVectors.set(0x79, ucdosVec);
 
   // Equipment list and memory size
-  emu.memory.writeU16(0x0410, 0x0021);
+  // Bit 1 = FPU present (required: DOS/4GW checks INT 75h handler's first byte
+  // for 0x9B/FWAIT to detect FPU; programs also read this via INT 11h)
+  emu.memory.writeU16(0x0410, 0x0023);
   emu.memory.writeU16(0x0413, 640);
+
+  // INT 75h (FPU exception / IRQ 13) stub: DOS/4GW reads the first byte of the
+  // INT 75h handler and checks for 0x9B (FWAIT opcode) to detect FPU presence.
+  // Write FWAIT+IRET at the handler address so the check passes.
+  {
+    const int75off = 0x75 * 5;
+    emu.memory.writeU8(BIOS_BASE + int75off, 0x9B); // FWAIT
+    emu.memory.writeU8(BIOS_BASE + int75off + 1, 0xCF); // IRET
+  }
 
   // Heap/virtual allocator
   const imageEnd = mz.loadSegment * 16 + mz.imageSize + 0x100;

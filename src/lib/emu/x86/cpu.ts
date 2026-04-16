@@ -192,16 +192,22 @@ export class CPU {
     if (isLDT) {
       // LDT: look up LDT descriptor in GDT to find LDT base
       const ldtr = this.emu._ldtr ?? 0;
-      if (!ldtr) return -1;
-      const ldtIdx = (ldtr & 0xFFF8) >>> 3;
-      const ldtDescAddr = this.emu._gdtBase + ldtIdx * 8;
-      if (ldtIdx * 8 + 7 > this.emu._gdtLimit) return -1;
-      const ldtLo = this.mem.readU32(ldtDescAddr);
-      const ldtHi = this.mem.readU32(ldtDescAddr + 4);
-      const ldtBase = ((ldtHi >>> 24) << 24) | ((ldtHi & 0xFF) << 16) | ((ldtLo >>> 16) & 0xFFFF);
-      const ldtLimit = (ldtLo & 0xFFFF) | (((ldtHi >>> 16) & 0xF) << 16);
-      if (index * 8 + 7 > ldtLimit) return -1;
-      return ldtBase + index * 8;
+      if (!ldtr) {
+        // No LDTR set. Our DPMI allocator stores all descriptors in the GDT
+        // (using the index from the selector with TI bit masked). Fall through
+        // to the GDT path so that selectors with TI=1 (as DPMI specs require)
+        // still resolve to the correct GDT slot.
+      } else {
+        const ldtIdx = (ldtr & 0xFFF8) >>> 3;
+        const ldtDescAddr = this.emu._gdtBase + ldtIdx * 8;
+        if (ldtIdx * 8 + 7 > this.emu._gdtLimit) return -1;
+        const ldtLo = this.mem.readU32(ldtDescAddr);
+        const ldtHi = this.mem.readU32(ldtDescAddr + 4);
+        const ldtBase = ((ldtHi >>> 24) << 24) | ((ldtHi & 0xFF) << 16) | ((ldtLo >>> 16) & 0xFFFF);
+        const ldtLimit = (ldtLo & 0xFFFF) | (((ldtHi >>> 16) & 0xF) << 16);
+        if (index * 8 + 7 > ldtLimit) return -1;
+        return ldtBase + index * 8;
+      }
     }
     // GDT
     const descAddr = this.emu._gdtBase + index * 8;
