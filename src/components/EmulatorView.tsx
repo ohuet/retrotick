@@ -495,14 +495,16 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     let regFlushTimer: ReturnType<typeof setTimeout> | null = null;
     let profFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const initAndRun = async () => {
+      // Load registry, profiles, and virtual filesystem in parallel (independent IndexedDB reads)
+      const [regData, profData] = await Promise.all([
+        loadRegistry().catch(e => { console.warn('[REG] Failed to load registry from IndexedDB:', e); return null; }),
+        loadProfiles().catch(e => { console.warn('[PROF] Failed to load profiles from IndexedDB:', e); return null; }),
+        syncVirtualFiles(emu),
+      ]);
+
       // Set up registry store with IndexedDB persistence
       const regStore = new RegistryStore();
-      try {
-        const saved = await loadRegistry();
-        if (saved) regStore.deserialize(saved);
-      } catch (e) {
-        console.warn('[REG] Failed to load registry from IndexedDB:', e);
-      }
+      if (regData) regStore.deserialize(regData);
       regStore.onChange = () => {
         if (regFlushTimer !== null) clearTimeout(regFlushTimer);
         regFlushTimer = setTimeout(() => {
@@ -515,12 +517,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Set up profile store with IndexedDB persistence
       const profStore = new ProfileStore();
-      try {
-        const saved = await loadProfiles();
-        if (saved) profStore.deserialize(saved);
-      } catch (e) {
-        console.warn('[PROF] Failed to load profiles from IndexedDB:', e);
-      }
+      if (profData) profStore.deserialize(profData);
       profStore.onChange = () => {
         if (profFlushTimer !== null) clearTimeout(profFlushTimer);
         profFlushTimer = setTimeout(() => {
@@ -530,9 +527,6 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         }, 500);
       };
       emu.profileStore = profStore;
-
-      // Populate virtual filesystem before load() so NE DLL PATH search can find files
-      await syncVirtualFiles(emu);
 
       // Apply DOS settings BEFORE load() so setupDosEnvironment sees the correct flags
       // (EMS device header, XMS/DPMI stubs, etc. are set up during load for MZ files).

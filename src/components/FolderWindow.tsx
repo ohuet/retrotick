@@ -4,7 +4,7 @@ import { MenuDropdown } from './win2k/MenuBar';
 import { DesktopIcon, INTERNAL_MIME, FOLDER_ICON_16 } from './DesktopIcon';
 import {
   getItemsInFolder, addFile, renameEntry,
-  isFolder, displayName, getAllFiles, getFile, readDroppedItems,
+  isFolder, displayName, getFile, listFileMetadata, readDroppedItems,
   dispatchDesktopFilesChanged,
 } from '../lib/file-store';
 import { isExeFile, openWithDefaultApp } from '../lib/file-utils';
@@ -264,19 +264,28 @@ export function FolderWindow({
     if (item.isFolder) {
       onOpenFolder(item.name);
     } else {
-      const allFiles = await getAllFiles();
-      const f = allFiles.find(s => s.name === item.name);
-      if (!f) return;
-      const result = isExeFile(f.data, item.name);
+      const data = await getFile(item.name);
+      if (!data) return;
+      const result = isExeFile(data, item.name);
       if (result.ok && result.peInfo) {
+        // Only pre-load sibling DLLs (not all files) — everything else is lazy-loaded via onFileRequest
+        const metas = await listFileMetadata();
+        const dllExts = new Set(['dll', 'ocx', 'drv', 'vxd', 'cpl']);
+        const siblingDlls = metas.filter(m =>
+          m.name !== item.name && m.name.startsWith(prefix) &&
+          dllExts.has((m.name.split('.').pop() ?? '').toLowerCase()));
         const additional = new Map<string, ArrayBuffer>();
-        for (const s of allFiles) if (s.name !== item.name && s.name.startsWith(prefix)) additional.set(s.name, s.data);
+        await Promise.all(siblingDlls.map(async m => {
+          const buf = await getFile(m.name);
+          if (buf) additional.set(m.name, buf);
+        }));
         const cleanPath = folderPath.replace(/\/+$/, '').replace(/\\+$/, '');
         const fullPath = cleanPath + '/' + displayName(item.name);
-        onRunExe(f.data, result.peInfo, additional, fullPath);
+        onRunExe(data, result.peInfo, additional.size > 0 ? additional : undefined, fullPath);
       } else {
-        const opened = await openWithDefaultApp(item.name, allFiles, onRunExe);
-        if (!opened) onViewResources(f.data, displayName(item.name));
+        const metas = await listFileMetadata();
+        const opened = await openWithDefaultApp(item.name, metas, onRunExe, getFile);
+        if (!opened) onViewResources(data, displayName(item.name));
       }
     }
   }
