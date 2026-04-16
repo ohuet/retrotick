@@ -77,7 +77,29 @@ export class CPU {
   cs = 0; // code segment selector
   ds = 0; // data segment selector
   es = 0; // extra segment selector
-  ss = 0; // stack segment selector
+  // SS is exposed via getter/setter so every assignment updates `_ssB32` —
+  // Intel determines stack addressing size from the CURRENT SS descriptor's
+  // B/D bit (loaded at MOV SS time), not from CS.D. When DOS extenders run
+  // 32-bit code (CS.D=1) on a 16-bit shadow stack (SS.B=0), push/pop must
+  // still use SP (16-bit) + SS base; keying off `use32` would write to the
+  // wrong linear address and corrupt the stack.
+  private _ssVal = 0;
+  /** True when the currently-loaded SS descriptor has B=1 (32-bit stack).
+   *  Default `true` matches Win32/PE where cpu.ss is never explicitly set. */
+  _ssB32 = true;
+  get ss(): number { return this._ssVal; }
+  set ss(val: number) {
+    this._ssVal = val;
+    if (this.realMode) {
+      this._ssB32 = false;
+    } else if (this.emu && this.emu._gdtBase && val >= 8) {
+      // DPMI mode: read SS.B from the live descriptor.
+      this._ssB32 = this.loadGdtDescriptorIs32(val);
+    } else {
+      // Win32 flat / Win16 NE / VCPI: follow global use32.
+      this._ssB32 = this.use32;
+    }
+  }
   segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
   segLimits: Map<number, number> = new Map<number, number>(); // selector → segment limit
   _addrSize16 = false; // true when current instruction uses 16-bit addressing
@@ -240,6 +262,10 @@ export class CPU {
     if (lo !== 0 || hi !== 0) return;
     // Shadow descriptor: base = sel*16, limit = 0xFFFF (64KB), access = 0xF2
     // (present, DPL=3, data R/W, expand-up), flags = 0 (16-bit, byte granular).
+    // We always use D=0 even for 32-bit DPMI clients: DOS/4GW 1.95's PM code
+    // is compiled as 16-bit code with explicit 0x66/0x67 operand/address prefixes
+    // for 32-bit operations. Flipping D=1 would invert the semantics of those
+    // prefixes and corrupt every IRETD/MOVZX etc. in its PM handlers.
     const base = (sel * 16) >>> 0;
     const newLo = ((base & 0xFFFF) << 16) | 0xFFFF; // base_lo<<16 | limit_lo
     const newHi = ((base >>> 24) << 24) | 0x00F200 | ((base >>> 16) & 0xFF);
@@ -321,54 +347,64 @@ export class CPU {
     this.flagsValid = false;
   }
 
-  // Push / Pop — in 16-bit mode, use SS:SP with 16-bit wrap
+  // Push / Pop — stack addressing is determined by SS.B (_ssB32), not CS.D.
+  // In real mode and 16-bit PM (SS.B=0), use SP (16-bit wrap) + SS base.
+  // In 32-bit PM (SS.B=1), use ESP (32-bit flat) + SS base (usually 0 for flat).
   push32(val: number): void {
-    if (!this.use32) {
-      const base = this.segBase(this.ss);
+    const stack32 = this._ssB32 && !this.realMode;
+    if (!stack32) {
+      const base = this.realMode ? (this.ss * 16) >>> 0 : this.segBase(this.ss);
       let sp = (this.reg[ESP] - 4) & 0xFFFF;
       this.reg[ESP] = (this.reg[ESP] & ~0xFFFF) | sp;
       this.mem.writeU32((base + sp) >>> 0, val >>> 0);
     } else {
       this.reg[ESP] = (this.reg[ESP] - 4) | 0;
-      this.mem.writeU32(this.reg[ESP] >>> 0, val >>> 0);
+      const base = this.segBase(this.ss);
+      this.mem.writeU32(((base + this.reg[ESP]) >>> 0), val >>> 0);
     }
   }
 
   pop32(): number {
-    if (!this.use32) {
-      const base = this.segBase(this.ss);
+    const stack32 = this._ssB32 && !this.realMode;
+    if (!stack32) {
+      const base = this.realMode ? (this.ss * 16) >>> 0 : this.segBase(this.ss);
       const sp = this.reg[ESP] & 0xFFFF;
       const val = this.mem.readU32((base + sp) >>> 0);
       this.reg[ESP] = (this.reg[ESP] & ~0xFFFF) | ((sp + 4) & 0xFFFF);
       return val;
     } else {
-      const val = this.mem.readU32(this.reg[ESP] >>> 0);
+      const base = this.segBase(this.ss);
+      const val = this.mem.readU32(((base + this.reg[ESP]) >>> 0));
       this.reg[ESP] = (this.reg[ESP] + 4) | 0;
       return val;
     }
   }
 
   push16(val: number): void {
-    if (!this.use32) {
-      const base = this.segBase(this.ss);
+    const stack32 = this._ssB32 && !this.realMode;
+    if (!stack32) {
+      const base = this.realMode ? (this.ss * 16) >>> 0 : this.segBase(this.ss);
       let sp = (this.reg[ESP] - 2) & 0xFFFF;
       this.reg[ESP] = (this.reg[ESP] & ~0xFFFF) | sp;
       this.mem.writeU16((base + sp) >>> 0, val & 0xFFFF);
     } else {
       this.reg[ESP] = (this.reg[ESP] - 2) | 0;
-      this.mem.writeU16(this.reg[ESP] >>> 0, val & 0xFFFF);
+      const base = this.segBase(this.ss);
+      this.mem.writeU16(((base + this.reg[ESP]) >>> 0), val & 0xFFFF);
     }
   }
 
   pop16(): number {
-    if (!this.use32) {
-      const base = this.segBase(this.ss);
+    const stack32 = this._ssB32 && !this.realMode;
+    if (!stack32) {
+      const base = this.realMode ? (this.ss * 16) >>> 0 : this.segBase(this.ss);
       const sp = this.reg[ESP] & 0xFFFF;
       const val = this.mem.readU16((base + sp) >>> 0);
       this.reg[ESP] = (this.reg[ESP] & ~0xFFFF) | ((sp + 2) & 0xFFFF);
       return val;
     } else {
-      const val = this.mem.readU16(this.reg[ESP] >>> 0);
+      const base = this.segBase(this.ss);
+      const val = this.mem.readU16(((base + this.reg[ESP]) >>> 0));
       this.reg[ESP] = (this.reg[ESP] + 2) | 0;
       return val;
     }
