@@ -225,6 +225,15 @@ export class Memory {
     this._hasVga = v !== null;
   }
 
+  // IVT protection for DPMI clients. When enabled, writes to linear 0-0x3FF
+  // (the real-mode IVT) are silently dropped while the CPU is in PM. On a real
+  // DPMI host with paging, PM linear 0 is mapped to a different physical page
+  // than the RM IVT, so PM writes never clobber the RM IVT. We emulate this
+  // by checking `_pmCpu.realMode` at write time — if false (PM), writes to the
+  // IVT region are ignored.
+  _pmCpu: { realMode: boolean } | null = null;
+  _ivtProtect = false;
+
   // Read-only page ranges (4KB granularity, matching Windows page size): writes throw AccessViolationError
   private _readOnlyPages = new Set<number>();
 
@@ -324,6 +333,7 @@ export class Memory {
 
   writeU8(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
+    if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
     if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar!.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flat && addr < this._flatMax) { this._flat[addr] = val & 0xFF; return; }
@@ -332,6 +342,7 @@ export class Memory {
 
   writeU16(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
+    if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 1 < this._flatMax) { this._flatDV.setUint16(addr, val, true); return; }
@@ -346,6 +357,7 @@ export class Memory {
 
   writeU32(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
+    if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 3 < this._flatMax) { this._flatDV.setUint32(addr, val, true); return; }

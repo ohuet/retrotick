@@ -133,6 +133,16 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // The GDT is at 0x3F0000; with A20 off, writes would go to 0xF0000.
   emu.memory.a20Mask = 0xFFFFFFFF;
 
+  // Enable IVT protection: silently drop PM writes to the real-mode IVT
+  // (linear 0-0x3FF). On a real DPMI host with paging, PM linear 0 maps to a
+  // different physical page than the RM IVT, so DOS/4GW's PM-side writes
+  // (e.g. REP MOVSW at cs=0x98 to clear "PM IVT entries" 0x20-0x27) never
+  // clobber the actual RM IVT. Without paging, those writes would overwrite
+  // IVT[0x20..0x27] with zeros, and DOS/4GW's subsequent IVT reads (used to
+  // populate DPMI AX=0x0302 call structs) would return 0:0, breaking all
+  // file I/O reflected to RM. IVT protection preserves the original IVT.
+  emu.memory._ivtProtect = true;
+
   // Build GDT
   const gdtBase = DPMI_GDT_LINEAR;
   // Zero-fill GDT area

@@ -109,6 +109,10 @@ export class CPU {
 
   constructor(mem: Memory) {
     this.mem = mem;
+    // Memory needs a CPU reference to check realMode for PM-protected writes
+    // (e.g. DPMI IVT protection). Keep the reference as a minimal subset
+    // interface to avoid circular type dependencies.
+    mem._pmCpu = this;
   }
 
   fs = 0; // FS segment selector
