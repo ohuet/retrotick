@@ -216,15 +216,18 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   }
   (emu as any)._dpmiReflectorStride = stubStride;
 
-  // Default terminator stub at offset 0x700 — a single RETF that matches the
-  // caller's operand size. DOS/4GW's dispatcher at cs=1569:0xbf4 reaches a
-  // handler via RETF32, pushing an 8-byte (32-bit client) or 4-byte (16-bit
-  // client) return frame beforehand. For 32-bit clients the reflector segment
-  // has D=1, so a bare 0xCB decodes as RETF32 and pops the matching 8 bytes.
-  // For 16-bit clients the reflector segment has D=0, so 0xCB is RETF16 and
-  // pops 4 bytes. Either way the stub returns cleanly to the dispatcher's
-  // post-handler label at cs=1569:0xc3a (16-bit) or 0xc40 (32-bit).
-  emu.memory.writeU8(DPMI_REFLECTOR_BASE + 0x700, 0xCB); // RETF
+  // Default terminator stub at offset 0x700. DOS/4GW's chain-walk path at
+  // cs=1569:0xbf4 routes type=1 entries to the handler via JMP FAR (RETFD with
+  // EAX=offset, EDX=selector). When the handler returns, the dispatcher at
+  // cs=1569:0xc3a inspects the returned EAX: if non-zero it falls into the
+  // error-1001 path. So our terminator must clear EAX before RETF, otherwise
+  // EAX is whatever junk happened to be in the register at call time.
+  // Encoding `31 c0 cb` works in both 16-bit (XOR AX,AX) and 32-bit
+  // (XOR EAX,EAX) operand-size modes, then RETF that auto-sizes to the
+  // selector's D bit.
+  emu.memory.writeU8(DPMI_REFLECTOR_BASE + 0x700, 0x31); // XOR
+  emu.memory.writeU8(DPMI_REFLECTOR_BASE + 0x701, 0xC0); // EAX, EAX
+  emu.memory.writeU8(DPMI_REFLECTOR_BASE + 0x702, 0xCB); // RETF
   emu.memory._dpmiTerminatorSel = 0x38;
   emu.memory._dpmiTerminatorOff = 0x700;
 
