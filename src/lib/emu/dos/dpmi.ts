@@ -871,22 +871,30 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
     }
   }
 
-  // Write results back to the struct — the RM handler may have updated any
-  // of these, so mirror them all so the DPMI caller sees the same thing a
-  // native RM INT would have left in registers and segment regs (e.g. INT 21h
-  // AH=2F returns DTA in ES:BX, AH=48 returns AX, etc.).
-  emu.memory.writeU32(structAddr + 0x00, cpu.reg[EDI]);
-  emu.memory.writeU32(structAddr + 0x04, cpu.reg[ESI]);
-  emu.memory.writeU32(structAddr + 0x08, cpu.reg[EBP]);
-  emu.memory.writeU32(structAddr + 0x10, cpu.reg[EBX]);
-  emu.memory.writeU32(structAddr + 0x14, cpu.reg[EDX]);
-  emu.memory.writeU32(structAddr + 0x18, cpu.reg[ECX]);
-  emu.memory.writeU32(structAddr + 0x1C, cpu.reg[EAX]);
-  emu.memory.writeU16(structAddr + 0x20, cpu.getFlags() & 0xFFFF);
-  emu.memory.writeU16(structAddr + 0x22, cpu.es);
-  emu.memory.writeU16(structAddr + 0x24, cpu.ds);
-  emu.memory.writeU16(structAddr + 0x26, cpu.fs);
-  emu.memory.writeU16(structAddr + 0x28, cpu.gs);
+  // If the RM handler set _dosFileOpenPending (async file fetch), we must
+  // re-issue the whole DPMI AX=0302 call when the data arrives. Restore the
+  // caller's state but rewind EIP by 2 so the client re-executes `INT 31h`
+  // — that re-triggers dpmiSimulateRmInt with the same struct, which now
+  // hits the sync-data path since the fetch populated the cache.
+  const asyncPending = !!emu._dosFileOpenPending;
+  if (!asyncPending) {
+    // Write results back to the struct — the RM handler may have updated any
+    // of these, so mirror them all so the DPMI caller sees the same thing a
+    // native RM INT would have left in registers and segment regs (e.g. INT 21h
+    // AH=2F returns DTA in ES:BX, AH=48 returns AX, etc.).
+    emu.memory.writeU32(structAddr + 0x00, cpu.reg[EDI]);
+    emu.memory.writeU32(structAddr + 0x04, cpu.reg[ESI]);
+    emu.memory.writeU32(structAddr + 0x08, cpu.reg[EBP]);
+    emu.memory.writeU32(structAddr + 0x10, cpu.reg[EBX]);
+    emu.memory.writeU32(structAddr + 0x14, cpu.reg[EDX]);
+    emu.memory.writeU32(structAddr + 0x18, cpu.reg[ECX]);
+    emu.memory.writeU32(structAddr + 0x1C, cpu.reg[EAX]);
+    emu.memory.writeU16(structAddr + 0x20, cpu.getFlags() & 0xFFFF);
+    emu.memory.writeU16(structAddr + 0x22, cpu.es);
+    emu.memory.writeU16(structAddr + 0x24, cpu.ds);
+    emu.memory.writeU16(structAddr + 0x26, cpu.fs);
+    emu.memory.writeU16(structAddr + 0x28, cpu.gs);
+  }
 
   // Restore PM state
   cpu.reg.set(savedRegs);
@@ -897,7 +905,7 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
   cpu.ss = savedSS;
   cpu.fs = savedFS;
   cpu.gs = savedGS;
-  cpu.eip = savedEIP;
+  cpu.eip = asyncPending ? (savedEIP - 2) >>> 0 : savedEIP;
   cpu.realMode = savedRealMode;
   if (!savedRealMode) {
     const is32 = cpu.loadGdtDescriptorIs32(savedCS);
