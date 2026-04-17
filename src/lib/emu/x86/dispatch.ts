@@ -175,6 +175,8 @@ export function cpuStep(cpu: CPU): void {
     const csBase16 = cpu.realMode ? (cpu.cs * 16) >>> 0 : cpu.segBase(cpu.cs);
     cpu.eip = (csBase16 + ((cpu.eip - csBase16) & 0xFFFF)) >>> 0;
   }
+  // Per-instruction debug hook (set by test harnesses to catch exact derail point)
+  if ((cpu.emu as any)?._stepHook) (cpu.emu as any)._stepHook(cpu);
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
   // Per-instruction trace ring buffer (disabled for perf)
   if (false && cpu.emu && cpu.emu.cpuSteps > 90000000) {
