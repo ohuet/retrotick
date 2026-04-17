@@ -176,7 +176,7 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
 /** 0x3D: Open file (AL=mode, DS:DX=filename) */
 export function dosOpenFile(cpu: CPU, emu: Emulator): void {
   const name = readDsDxString(cpu);
-  console.log(`[OPEN] "${name}"`);
+  if (emu.traceDosInt) console.log(`[OPEN] "${name}"`);
   // DOS device driver detection: EMMXXXX0 (EMS), NUL, CON, etc.
   const baseName = name.replace(/^[*\\\/]*/, '').toUpperCase();
   if (baseName === 'EMMXXXX0' && emu.dosEnableEms) {
@@ -218,7 +218,7 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
     const f = emu._dosFiles.get(h);
     if (f) {
       const avail = Math.min(count, f.data.length - f.pos);
-      if ((emu as any)._dbgSawDpmiEntry) {
+      if (emu.traceDosInt) {
         console.log(`[READ] h=${h.toString(16)} pos=0x${f.pos.toString(16)} cnt=${count.toString(16)} ds:dx=${cpu.ds.toString(16)}:${dx.toString(16)} lin=0x${bufAddr.toString(16)} rm=${cpu.realMode} name="${f.name ?? '?'}" avail=${avail.toString(16)}`);
       }
       for (let i = 0; i < avail; i++) {
@@ -306,7 +306,7 @@ export function dosSeekFile(cpu: CPU, emu: Emulator): void {
     f.pos = Math.max(0, Math.min(f.pos, f.data.length));
     const of = emu.handles.get<OpenFile>(h);
     if (of) of.pos = f.pos;
-    if ((emu as any)._dbgSawDpmiEntry) {
+    if (emu.traceDosInt) {
       console.log(`[SEEK] h=${h.toString(16)} origin=${origin} offset=0x${offset.toString(16)} → pos=0x${f.pos.toString(16)} name="${f.name ?? '?'}"`);
     }
     cpu.setReg16(EDX, (f.pos >>> 16) & 0xFFFF);

@@ -776,15 +776,17 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
   const inEdx = emu.memory.readU32(structAddr + 0x14);
   const inES = emu.memory.readU16(structAddr + 0x22);
   const inDS = emu.memory.readU16(structAddr + 0x24);
-  console.log(`[DPMI-SRI] mode=${mode} intNum=${intNum.toString(16)} struct@0x${structAddr.toString(16)} rmCS:IP=${sriCS.toString(16)}:${sriIP.toString(16)} (lin 0x${targetLinear.toString(16)}) rmSS:SP=${sriSS.toString(16)}:${sriSP.toString(16)} bytes=[${targetBytes.trim()}]`);
-  console.log(`  in: eax=${inEax.toString(16)} ebx=${inEbx.toString(16)} ecx=${inEcx.toString(16)} edx=${inEdx.toString(16)} es=${inES.toString(16)} ds=${inDS.toString(16)}`);
-  // Dump current caller EIP bytes to see where INT 31h fired from
-  const callerCS = cpu.cs;
-  const callerCsBase = cpu.realMode ? (callerCS * 16) >>> 0 : cpu.segBase(callerCS);
-  const callerIp = (cpu.eip - callerCsBase) >>> 0;
-  let callerBytes = '';
-  for (let k = -6; k < 4; k++) callerBytes += emu.memory.readU8((cpu.eip + k) >>> 0).toString(16).padStart(2, '0') + ' ';
-  console.log(`  caller @${callerCS.toString(16)}:${callerIp.toString(16)} bytes=[${callerBytes.trim()}]`);
+  if (emu.traceDosInt) {
+    console.log(`[DPMI-SRI] mode=${mode} intNum=${intNum.toString(16)} struct@0x${structAddr.toString(16)} rmCS:IP=${sriCS.toString(16)}:${sriIP.toString(16)} (lin 0x${targetLinear.toString(16)}) rmSS:SP=${sriSS.toString(16)}:${sriSP.toString(16)} bytes=[${targetBytes.trim()}]`);
+    console.log(`  in: eax=${inEax.toString(16)} ebx=${inEbx.toString(16)} ecx=${inEcx.toString(16)} edx=${inEdx.toString(16)} es=${inES.toString(16)} ds=${inDS.toString(16)}`);
+    // Dump current caller EIP bytes to see where INT 31h fired from
+    const callerCS = cpu.cs;
+    const callerCsBase = cpu.realMode ? (callerCS * 16) >>> 0 : cpu.segBase(callerCS);
+    const callerIp = (cpu.eip - callerCsBase) >>> 0;
+    let callerBytes = '';
+    for (let k = -6; k < 4; k++) callerBytes += emu.memory.readU8((cpu.eip + k) >>> 0).toString(16).padStart(2, '0') + ' ';
+    console.log(`  caller @${callerCS.toString(16)}:${callerIp.toString(16)} bytes=[${callerBytes.trim()}]`);
+  }
   // Read the 50-byte real mode call structure
   const rmEDI = emu.memory.readU32(structAddr + 0x00);
   const rmESI = emu.memory.readU32(structAddr + 0x04);
@@ -844,32 +846,36 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
     const b2 = emu.memory.readU8((targetLin + 2) >>> 0);
     if (b0 === 0xCD && (b2 === 0xCA || b2 === 0xCB)) {
       const stubInt = emu.memory.readU8((targetLin + 1) >>> 0);
-      console.log(`  → ${mode} stub is 'INT ${stubInt.toString(16)}; RET${b2 === 0xCA ? 'F' : 'F'}' — executing INT ${stubInt.toString(16)}`);
-      // For INT 21h AH=40h (write) to stderr/stdout, dump the buffer contents
-      // BEFORE the call (handleDosInt actually writes it out) so we can see
-      // what the DOS extender is reporting.
-      if (stubInt === 0x21) {
-        const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
-        if (ah === 0x40) {
-          const h = cpu.getReg16(EBX);
-          const n = cpu.getReg16(ECX);
-          const dsB = cpu.segBase(cpu.ds);
-          const ptr = (dsB + cpu.getReg16(EDX)) >>> 0;
-          let asc = '';
-          let hex = '';
-          for (let k = 0; k < Math.min(n, 64); k++) {
-            const c = emu.memory.readU8((ptr + k) >>> 0);
-            hex += c.toString(16).padStart(2, '0') + ' ';
-            asc += (c >= 0x20 && c < 0x7f) ? String.fromCharCode(c) : '.';
+      if (emu.traceDosInt) {
+        console.log(`  → ${mode} stub is 'INT ${stubInt.toString(16)}; RET${b2 === 0xCA ? 'F' : 'F'}' — executing INT ${stubInt.toString(16)}`);
+        // For INT 21h AH=40h (write) to stderr/stdout, dump the buffer contents
+        // BEFORE the call (handleDosInt actually writes it out) so we can see
+        // what the DOS extender is reporting.
+        if (stubInt === 0x21) {
+          const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
+          if (ah === 0x40) {
+            const h = cpu.getReg16(EBX);
+            const n = cpu.getReg16(ECX);
+            const dsB = cpu.segBase(cpu.ds);
+            const ptr = (dsB + cpu.getReg16(EDX)) >>> 0;
+            let asc = '';
+            let hex = '';
+            for (let k = 0; k < Math.min(n, 64); k++) {
+              const c = emu.memory.readU8((ptr + k) >>> 0);
+              hex += c.toString(16).padStart(2, '0') + ' ';
+              asc += (c >= 0x20 && c < 0x7f) ? String.fromCharCode(c) : '.';
+            }
+            console.log(`  INT 21h/AH=40 write h=${h} n=${n} ds:dx=${cpu.ds.toString(16)}:${cpu.getReg16(EDX).toString(16)} lin=0x${ptr.toString(16)} hex=[${hex.trim()}] "${asc}"`);
           }
-          console.log(`  INT 21h/AH=40 write h=${h} n=${n} ds:dx=${cpu.ds.toString(16)}:${cpu.getReg16(EDX).toString(16)} lin=0x${ptr.toString(16)} hex=[${hex.trim()}] "${asc}"`);
         }
       }
       handleDosInt(cpu, stubInt, emu);
-      const outEax = cpu.reg[EAX] >>> 0;
-      const outCF = (cpu.getFlags() & 1) ? 1 : 0;
-      console.log(`  ← after INT ${stubInt.toString(16)}: eax=${outEax.toString(16)} cf=${outCF}`);
-    } else {
+      if (emu.traceDosInt) {
+        const outEax = cpu.reg[EAX] >>> 0;
+        const outCF = (cpu.getFlags() & 1) ? 1 : 0;
+        console.log(`  ← after INT ${stubInt.toString(16)}: eax=${outEax.toString(16)} cf=${outCF}`);
+      }
+    } else if (emu.traceDosInt) {
       console.warn(`[DPMI-SRI] ${mode} target ${sriCS.toString(16)}:${sriIP.toString(16)} is not a recognized INT-stub — skipped (NOP)`);
     }
   }
@@ -1084,7 +1090,7 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     // RM → PM: switch to protected mode
     const newESP = cpu.reg[EBX] >>> 0; // 32-bit ESP for PM
     const newEIP = cpu.reg[EDI] >>> 0; // 32-bit EIP for PM
-    console.log(`[DPMI-SW] RM→PM newCS=${newCS.toString(16)} newIP=${newEIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newESP.toString(16)}`);
+    if (emu.traceDosInt) console.log(`[DPMI-SW] RM→PM newCS=${newCS.toString(16)} newIP=${newEIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newESP.toString(16)}`);
     cpu.realMode = false;
     cpu.loadCS(newCS);
     cpu.ds = newDS;
@@ -1096,7 +1102,7 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     // PM → RM: switch to real mode
     const newSP = cpu.getReg16(EBX);
     const newIP = cpu.getReg16(EDI);
-    console.log(`[DPMI-SW] PM→RM newCS=${newCS.toString(16)} newIP=${newIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newSP.toString(16)}`);
+    if (emu.traceDosInt) console.log(`[DPMI-SW] PM→RM newCS=${newCS.toString(16)} newIP=${newIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newSP.toString(16)}`);
     cpu.realMode = true;
     cpu.use32 = false;
     cpu._addrSize16 = true;

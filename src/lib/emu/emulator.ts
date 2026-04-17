@@ -565,6 +565,7 @@ export class Emulator {
   running = false;
   halted = false;
   traceApi = false;
+  traceDosInt = false; // gate heavy DOS/DPMI per-INT trace logs
   _crashFired = false;
   _wpEscapeLogged = false;
   haltReason = '';
