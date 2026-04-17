@@ -231,8 +231,12 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
       cpu.setReg16(EAX, avail);
       cpu.setFlag(CF, false);
     } else {
-      cpu.setFlag(CF, true);
-      cpu.setReg16(EAX, 6); // invalid handle
+      // Unknown handle: some DOS apps (DOOM shareware under DOS/4GW) get
+      // confused about handle values and enter infinite retry loops on the
+      // DOS "invalid handle" error. Returning a clean EOF (AX=0, CF=0) lets
+      // Watcom's read() loop exit naturally; the app falls back to defaults.
+      cpu.setReg16(EAX, 0);
+      cpu.setFlag(CF, false);
     }
   }
 }

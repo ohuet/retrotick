@@ -254,12 +254,14 @@ export class Memory {
    *  fill the selector/offset fields of type=1 entries. */
   _dpmiTerminatorSel = 0x38;
   _dpmiTerminatorOff = 0x700;
-  /** Linear address of DOS/4GW's exception-stack guard `[DS:0x0a42]`, captured
-   *  by scanning the data window for the initial `0x6810` value. Writes that
-   *  would drop this cell below the DOS/4GW guard threshold (`0x4840`) are
-   *  clamped up, preventing the `exit(2002)` "transfer stack overflow" drift
-   *  during long-running sessions (e.g. DOOM's M_LoadDefaults). */
-  _dos4gwStackGuardLinear = -1;
+  /** Set of linear addresses where DOS/4GW's stack-guard initial value
+   *  `0x6810` has been captured. DOS/4GW keeps multiple such guard cells for
+   *  different contexts (exception stack at cs=1569:0x5AD, transfer stack at
+   *  cs=98:0xD4A, etc.). Every subsequent writeU16/U32 to any of these cells
+   *  that would drop below `_dos4gwStackGuardMin` is clamped up, preventing
+   *  `exit(2002)` "transfer stack overflow" drift during long-running sessions
+   *  (e.g. DOOM's M_LoadDefaults / PIT IRQ storms). */
+  _dos4gwStackGuards = new Set<number>();
   readonly _dos4gwStackGuardMin = 0x5000;
 
   // Read-only page ranges (4KB granularity, matching Windows page size): writes throw AccessViolationError
@@ -376,8 +378,10 @@ export class Memory {
     // initial [DS:0xa42] set by DOS/4GW's init. Only consider addresses below
     // the handler table base (DOS/4GW's DS lives below the table region).
     // Subsequent writes that would drop it below the guard floor get clamped.
-    if (this._pmCpu && !this._pmCpu.realMode && (addr & 1) === 0 && this._dos4gwStackGuardLinear >= 0 && addr === this._dos4gwStackGuardLinear && val < this._dos4gwStackGuardMin) {
-      val = this._dos4gwStackGuardMin;
+    if (this._pmCpu && !this._pmCpu.realMode && (addr & 1) === 0) {
+      if (this._dos4gwStackGuards.has(addr) && val < this._dos4gwStackGuardMin) {
+        val = this._dos4gwStackGuardMin;
+      }
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
@@ -404,11 +408,16 @@ export class Memory {
     // store is typically 0 (DOS/4GW uses `mov dword [0xa42], 0x6810`).
     if (this._pmCpu && !this._pmCpu.realMode && (addr & 1) === 0) {
       const lo = val & 0xFFFF;
-      if (this._dos4gwTableAnchored && this._dos4gwStackGuardLinear < 0
-          && lo === 0x6810 && (val >>> 16) === 0
+      // Catch EVERY canonical 0x00006810 write in PM (below the handler table
+      // and above low memory) as a potential DOS/4GW stack-guard init. DOS/4GW
+      // maintains several guard cells — the exception-stack cell at [0xa42]
+      // and the transfer-stack-frame (TSF32) cell on a separate memory region
+      // that's consulted at cs=98:0xD4A. Missing one causes exit(2002) once
+      // its counter drifts below 0x4840 during heavy IRQ traffic.
+      if (this._dos4gwTableAnchored && lo === 0x6810 && (val >>> 16) === 0
           && addr < this._dos4gwTableBase && addr >= 0x10000) {
-        this._dos4gwStackGuardLinear = addr;
-      } else if (this._dos4gwStackGuardLinear >= 0 && addr === this._dos4gwStackGuardLinear && lo < this._dos4gwStackGuardMin) {
+        this._dos4gwStackGuards.add(addr);
+      } else if (this._dos4gwStackGuards.has(addr) && lo < this._dos4gwStackGuardMin) {
         val = (val & 0xFFFF0000) | this._dos4gwStackGuardMin;
       }
     }
