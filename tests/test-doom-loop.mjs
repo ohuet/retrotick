@@ -50,6 +50,11 @@ emu._stepHook = (cpu) => {
       // Dump the table contents
       const ds = cpu.ds;
       const dsBase = cpu.segBase(ds);
+      // Also check [DS:0x3c7c] — the ES source for the FIRST byte read (`al = [ES:BX+2]`)
+      const esSel0 = emu.memory.readU16((dsBase + 0x3c7c) >>> 0);
+      const bpArg = cpu.reg[5] >>> 0 & 0xFFFF;
+      console.log(`[DS:0x3c7c] = selector 0x${esSel0.toString(16)} (base=0x${cpu.segBase(esSel0).toString(16)})`);
+      console.log(`Function called with BP=${bpArg.toString(16)}, [BP+6] (=BX at entry) = word at DS:BP+6 = ${emu.memory.readU16((dsBase + bpArg + 6) >>> 0).toString(16)}`);
       const esSel = emu.memory.readU16((dsBase + 0x3c7e) >>> 0);
       const esBase = cpu.segBase(esSel);
       const tableOffLo = emu.memory.readU16((esBase + 0x122) >>> 0);
