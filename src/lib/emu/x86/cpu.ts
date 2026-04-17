@@ -85,19 +85,32 @@ export class CPU {
   // wrong linear address and corrupt the stack.
   private _ssVal = 0;
   /** True when the currently-loaded SS descriptor has B=1 (32-bit stack).
-   *  Default `true` matches Win32/PE where cpu.ss is never explicitly set. */
-  _ssB32 = true;
+   *  Default `true` matches Win32/PE where cpu.ss is never explicitly set.
+   *  In DPMI mode this is recomputed on every read from the LIVE descriptor
+   *  (DOS4GW updates SS.B via DPMI AX=0009 after cpu.ss is loaded, and the
+   *  SS setter's snapshot would otherwise stay stale, making pop32 mask ESP
+   *  to 16 bits and derail the stack). */
+  private _ssB32Cache = true;
   get ss(): number { return this._ssVal; }
   set ss(val: number) {
     this._ssVal = val;
+    this._recomputeSsB32();
+  }
+  get _ssB32(): boolean {
+    if (this.realMode) return false;
+    if (this.emu && this.emu._gdtBase && this._ssVal >= 8) {
+      return this.loadGdtDescriptorIs32(this._ssVal);
+    }
+    return this._ssB32Cache;
+  }
+  set _ssB32(v: boolean) { this._ssB32Cache = v; }
+  private _recomputeSsB32(): void {
     if (this.realMode) {
-      this._ssB32 = false;
-    } else if (this.emu && this.emu._gdtBase && val >= 8) {
-      // DPMI mode: read SS.B from the live descriptor.
-      this._ssB32 = this.loadGdtDescriptorIs32(val);
+      this._ssB32Cache = false;
+    } else if (this.emu && this.emu._gdtBase && this._ssVal >= 8) {
+      this._ssB32Cache = this.loadGdtDescriptorIs32(this._ssVal);
     } else {
-      // Win32 flat / Win16 NE / VCPI: follow global use32.
-      this._ssB32 = this.use32;
+      this._ssB32Cache = this.use32;
     }
   }
   segBases: Map<number, number> = new Map<number, number>(); // selector → linear base address
