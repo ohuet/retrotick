@@ -70,7 +70,13 @@ export function dispatchException(
         // 170:0x350f is an FM-volume lookup table, not code) — likely saving
         // state rather than registering a real vector. Skip those so we keep
         // the previously-registered code handler.
-        if (ds !== 0 && isCodeSelector(cpu, ds)) {
+        // Additionally, only intercept when the CALLER runs in 32-bit code
+        // (i.e., the DPMI client). DOS/4GW's own 16-bit PM code also issues
+        // AH=25h internally to mirror vectors into its own tables; intercepting
+        // those registers DOS/4GW's private PM handler as our HW-IRQ/exception
+        // handler, which corrupts its chain-integrity checks (error 1001 at
+        // ST_Init).
+        if (ds !== 0 && isCodeSelector(cpu, ds) && cpu.use32) {
           dpmi.pmExcHandlers.set(vec + 256, { sel: ds, off });
         }
       }

@@ -125,17 +125,14 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
       }
     }
 
-    // Async path: fetch data into cache, then rewind EIP to replay the INT 21h
-    const fileNameForCache = fileInfo.name;
+    // Async path: fetch data into cache, then rewind EIP to replay the INT 21h.
+    // Resume via setTimeout(0) — requestAnimationFrame may not fire reliably
+    // when nothing is painting, and we need the CPU to resume quickly.
     fs.fetchFileData(fileInfo, emu.additionalFiles, resolved).then(() => {
-      // Data is now in virtualFileCache (fetchFileData caches it).
-      // Resume CPU — the INT 21h will re-execute and hit the sync path.
       if (emu._dosFileOpenPending) {
         emu._dosFileOpenPending = false;
         emu.waitingForMessage = false;
-        if (emu.running && !emu.halted) {
-          requestAnimationFrame(emu.tick);
-        }
+        if (emu.running && !emu.halted) setTimeout(emu.tick, 0);
       }
     });
     // Rewind EIP to before the INT 21h instruction (CD 21 = 2 bytes)
@@ -164,7 +161,7 @@ function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string)
       }
       // Async fallback for base name
       fs.fetchFileData(dirInfo, emu.additionalFiles, dirResolved).then(() => {
-        if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) requestAnimationFrame(emu.tick); }
+        if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) setTimeout(emu.tick, 0); }
       });
       cpu.eip -= 2;
       emu._dosFileOpenPending = true;

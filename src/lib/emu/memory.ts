@@ -442,12 +442,19 @@ export class Memory {
         if (base >= 0) {
           this._dos4gwTableAnchored = true;
           this._dos4gwTableBase = base;
-          // Only write the type byte here; offset/selector fields are populated
+          // Populate entries [1..31] as type=1 "default terminator" slots.
+          // Each entry's `next` field must NOT point back into the existing
+          // chain (entry[0].next=1 on a real host), otherwise DOS/4GW's
+          // integrity check at cs=1569 walks [0]→[1]→[0]→… forever, detects
+          // the loop and exits with fatal error 1001 "error in interrupt
+          // chain". Using the entry's own index as .next makes it a proper
+          // self-terminating node. Offset/selector fields are populated
           // lazily (see _dos4gwTableFieldsPopulated) because DOS/4GW uses the
-          // 0x402a38..0x402b2F region for scratch during init and overwriting
-          // it too early corrupts LE load state.
+          // 0x402a38..0x402b2F region for scratch during init and
+          // overwriting it too early corrupts LE-load state.
           for (let i = 1; i <= 31; i++) {
-            this.writeU8(base + i * 8, 1);                 // type = 1 (terminator)
+            this.writeU8(base + i * 8 + 0, 1); // type = 1 (terminator)
+            this.writeU8(base + i * 8 + 1, i); // next = self (no loop)
           }
         }
         this._dos4gwPendingAnchorAddr = addr;

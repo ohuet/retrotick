@@ -564,7 +564,17 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
 
     case 0x4C: { // Terminate with return code
       const retCode = al;
-      if (retCode !== 0) console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)}`);
+      if (retCode !== 0) {
+        const cs = cpu.cs;
+        const ip = (cpu.eip - cpu.segBase(cs)) >>> 0;
+        // Dump stack around the exit-caller to help locate which routine asked
+        // to quit (DOOM exit(-23) = 233, DOS/4GW exit_2002 = 210, etc.)
+        const ssBase = cpu.segBase(cpu.ss);
+        const esp = cpu.reg[4] >>> 0;
+        const stk: string[] = [];
+        for (let i = 0; i < 8; i++) stk.push('0x' + cpu.mem.readU32((ssBase + esp + i * 4) >>> 0).toString(16));
+        console.warn(`[AH=4C] exit=${retCode.toString(16)} PSP=${(emu._dosPSP??0x100).toString(16)} cs=${cs.toString(16)}:${ip.toString(16)} ss:esp=${cpu.ss.toString(16)}:${esp.toString(16)} stack=[${stk.join(' ')}]`);
+      }
       xmsFreeAllForPsp(emu, emu._dosPSP ?? 0x100);
       dosFreeAllMcbsForPsp(cpu, emu, emu._dosPSP ?? 0x100);
       if (dosExecReturn(cpu, emu, retCode)) break;
@@ -1022,7 +1032,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           // Async fallback
           if (ovlInfo) {
             emu.fs.fetchFileData(ovlInfo, emu.additionalFiles, ovlResolved).then(() => {
-              if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) requestAnimationFrame(emu.tick); }
+              if (emu._dosFileOpenPending) { emu._dosFileOpenPending = false; emu.waitingForMessage = false; if (emu.running && !emu.halted) setTimeout(emu.tick, 0); }
             });
             cpu.eip -= 2; emu._dosFileOpenPending = true; emu.waitingForMessage = true;
             break;
@@ -1098,9 +1108,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           if (emu._dosFileOpenPending) {
             emu._dosFileOpenPending = false;
             emu.waitingForMessage = false;
-            if (emu.running && !emu.halted) {
-              requestAnimationFrame(emu.tick);
-            }
+            if (emu.running && !emu.halted) setTimeout(emu.tick, 0);
           }
         });
         cpu.eip -= 2; // rewind to INT 21h
