@@ -231,7 +231,7 @@ export class Memory {
   // than the RM IVT, so PM writes never clobber the RM IVT. We emulate this
   // by checking `_pmCpu.realMode` at write time — if false (PM), writes to the
   // IVT region are ignored.
-  _pmCpu: { realMode: boolean } | null = null;
+  _pmCpu: { realMode: boolean; emu?: { _gdtBase?: number; _gdtLimit?: number }; ss?: number; dropSegBaseCache?: (sel: number) => void; refreshSsB32?: () => void } | null = null;
   _ivtProtect = false;
 
   // DOS/4GW pre-populates its PM interrupt-handler table via two anchor writes
@@ -398,6 +398,21 @@ export class Memory {
   writeU32(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
+    // GDT-region write: invalidate the cached base for the affected selector
+    // so the next segBase() picks up the new descriptor. Memory testers /
+    // shadow descriptor populators that write GDT entries directly need this.
+    // If the write touches the descriptor for the current SS, also refresh
+    // _ssB32 since the D/B bit may have flipped (DPMI AX=0009 / direct flags
+    // patch).
+    if (this._pmCpu && this._pmCpu.emu && this._pmCpu.emu._gdtBase && this._pmCpu.dropSegBaseCache) {
+      const gdtBase = this._pmCpu.emu._gdtBase;
+      const gdtLimit = this._pmCpu.emu._gdtLimit ?? 0xFFFF;
+      if (addr >= gdtBase && addr < gdtBase + gdtLimit + 1) {
+        const sel = ((addr - gdtBase) >>> 3) << 3;
+        this._pmCpu.dropSegBaseCache(sel);
+        if (this._pmCpu.ss === sel && this._pmCpu.refreshSsB32) this._pmCpu.refreshSsB32();
+      }
+    }
     // See writeU16 above — same DOS/4GW stack-guard clamp, but for 32-bit
     // writes. [DS:0xa42] is a 16-bit cell, but DOS/4GW's cs=1569:0x5BA does
     // `mov [0xa42], esi` (a 32-bit store whose low word is the guard value).

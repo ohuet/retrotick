@@ -94,16 +94,25 @@ export class CPU {
   get ss(): number { return this._ssVal; }
   set ss(val: number) {
     this._ssVal = val;
+    this.segBases.delete(val); // invalidate cached base for the new SS
     this._recomputeSsB32();
   }
-  get _ssB32(): boolean {
-    if (this.realMode) return false;
-    if (this.emu && this.emu._gdtBase && this._ssVal >= 8) {
-      return this.loadGdtDescriptorIs32(this._ssVal);
-    }
-    return this._ssB32Cache;
-  }
+  get _ssB32(): boolean { return this._ssB32Cache; }
   set _ssB32(v: boolean) { this._ssB32Cache = v; }
+  /** Drop cached base for a selector. Call after directly modifying a GDT/LDT
+   *  descriptor without going through the segment-register reload path, so the
+   *  next segBase() picks up the new base from the descriptor. The caller is
+   *  responsible for repopulating segBases.set(sel, newBase) immediately when
+   *  the new base is already known. */
+  dropSegBaseCache(sel: number): void {
+    this.segBases.delete(sel);
+  }
+  /** Recompute _ssB32 from the current SS descriptor — call after AX=0009
+   *  (Set Access Rights) on the SS selector, since the D/B bit may have
+   *  changed under us. */
+  refreshSsB32(): void {
+    this._recomputeSsB32();
+  }
   private _recomputeSsB32(): void {
     if (this.realMode) {
       this._ssB32Cache = false;
@@ -154,10 +163,17 @@ export class CPU {
       if (this._unrealMode) return 0;
       return (sel * 16) >>> 0;
     }
-    // Protected mode with a real GDT (DOS extenders): always re-read the descriptor.
-    // Programs can update GDT entries and reload the segment register to switch windows
-    // (e.g. memory testers scanning extended memory 64KB at a time), so caching is unsafe.
+    // Protected mode with a real GDT: prefer the cached base (segBases Map)
+    // populated at segment-register load and at DPMI descriptor-modify time.
+    // Reading the GDT on every push/pop is millions of U32 reads per second
+    // and dominates emulator runtime. The cache is invalidated by the SS/CS/DS/
+    // ES/FS/GS setters and by the AX=0007/0008/0009 DPMI handlers, which is
+    // sufficient because programs that reprogram a descriptor without reloading
+    // the segment register (e.g. memory testers using AX=0007) hit the cache
+    // invalidation in the DPMI service handler itself.
     if (this.emu?._gdtBase) {
+      const cached = this.segBases.get(sel);
+      if (cached !== undefined) return cached;
       const base = this.loadGdtDescriptorBase(sel);
       if (base !== undefined) {
         // Fallback for descriptor slots that are base=0, limit=0 — effectively
@@ -174,9 +190,12 @@ export class CPU {
           const limit = (limitHi << 16) | limitLo;
           if (limit === 0) {
             this.ensureShadowDescriptor(sel);
-            return (sel * 16) >>> 0;
+            const shadowBase = (sel * 16) >>> 0;
+            this.segBases.set(sel, shadowBase);
+            return shadowBase;
           }
         }
+        this.segBases.set(sel, base);
         return base;
       }
       // Descriptor slot is past the GDT limit — ensure a shadow exists so

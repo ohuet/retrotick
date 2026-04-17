@@ -548,7 +548,7 @@ function dpmiSetSegmentBase(cpu: CPU, emu: Emulator, _st: DpmiState): boolean {
   const flags = (oldHi >>> 20) & 0x0F;
   writeGdtEntry(emu.memory, emu._gdtBase, idx, newBase, limit, access, flags);
 
-  // Update segBases cache
+  // Update segBases cache (write-through: descriptor is already updated)
   cpu.segBases.set(sel, newBase);
   cpu.setFlag(0x001, false);
   return true;
@@ -596,6 +596,9 @@ function dpmiSetAccessRights(cpu: CPU, emu: Emulator): boolean {
   const flags = (rights >>> 12) & 0x0F;
 
   writeGdtEntry(emu.memory, emu._gdtBase, idx, base, limit, access, flags);
+  // Base is unchanged but the D/B bit (in flags) may flip — refresh _ssB32 if
+  // this is the live SS selector so future push/pop pick up the new size.
+  if (cpu.ss === sel) cpu.refreshSsB32();
   cpu.setFlag(0x001, false);
   return true;
 }
