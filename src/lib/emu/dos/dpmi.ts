@@ -181,9 +181,12 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   // idx 6 (0x30): flat code — base=0, limit=4GB, for raw mode switch stubs
   writeGdtEntry(emu.memory, gdtBase, 6, 0, 0xFFFFF, 0x9A, 0x08); // G=1
 
-  // idx 7 (0x38): PM reflector code — base=DPMI_REFLECTOR_BASE, limit=0x500, code, DPL=3.
-  // For 32-bit clients we use D=1 so cpu.use32 is set while the stub runs.
-  writeGdtEntry(emu.memory, gdtBase, 7, DPMI_REFLECTOR_BASE, 0x500, 0xFA, is32bit ? 0x04 : 0x00);
+  // idx 7 (0x38): PM reflector code — base=DPMI_REFLECTOR_BASE, limit=0x800, code, DPL=3.
+  // Limit 0x800 covers 256×6 INT-reflector stubs (ending near 0x600) plus the
+  // "default terminator" stub at offset 0x700 used by the DOS/4GW handler-table
+  // populator in memory.ts. For 32-bit clients we use D=1 so cpu.use32 is set
+  // while stubs run (matches the 32-bit RETF in the caller-side dispatch).
+  writeGdtEntry(emu.memory, gdtBase, 7, DPMI_REFLECTOR_BASE, 0x800, 0xFA, is32bit ? 0x04 : 0x00);
 
   // Write 256 reflector stubs: MOV AL, intNum; INT FEh; RETF.
   // The DPMI default reflector address (returned by AX=0204 GetPmIntVector) is
@@ -212,6 +215,18 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
     }
   }
   (emu as any)._dpmiReflectorStride = stubStride;
+
+  // Default terminator stub at offset 0x700 — a single RETF that matches the
+  // caller's operand size. DOS/4GW's dispatcher at cs=1569:0xbf4 reaches a
+  // handler via RETF32, pushing an 8-byte (32-bit client) or 4-byte (16-bit
+  // client) return frame beforehand. For 32-bit clients the reflector segment
+  // has D=1, so a bare 0xCB decodes as RETF32 and pops the matching 8 bytes.
+  // For 16-bit clients the reflector segment has D=0, so 0xCB is RETF16 and
+  // pops 4 bytes. Either way the stub returns cleanly to the dispatcher's
+  // post-handler label at cs=1569:0xc3a (16-bit) or 0xc40 (32-bit).
+  emu.memory.writeU8(DPMI_REFLECTOR_BASE + 0x700, 0xCB); // RETF
+  emu.memory._dpmiTerminatorSel = 0x38;
+  emu.memory._dpmiTerminatorOff = 0x700;
 
   // Set GDT in emulator
   emu._gdtBase = gdtBase;

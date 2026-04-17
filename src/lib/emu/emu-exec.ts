@@ -628,7 +628,10 @@ export function emuTick(emu: Emulator): void {
     // (each hit permanently consumes a DOS/4GW exception-stack frame at
     // cs=1569:0x580, eventually starving the guard at SI<=0x4840 and firing
     // DOS/4GW's exit(2002)).
-    const minStepsPerPitTick = pitReload * 40;
+    // PIT cycle gate: 40x real-hw rate for pure DOS, 200x when DPMI is active.
+    // DOS/4GW's PM IRQ dispatch + user handler takes many more emulator steps
+    // than the 40x budget, so at 40x we overfire and starve DOOM's main thread.
+    const minStepsPerPitTick = pitReload * (emu._dpmiState ? 200 : 40);
     const stepsSince = emu.cpuSteps - emu._dosLastTimerTickSteps;
     if (now - emu._dosLastTimerTick >= timerIntervalMs && stepsSince >= minStepsPerPitTick) {
       emu._dosLastTimerTick += timerIntervalMs;
@@ -747,7 +750,10 @@ export function emuTick(emu: Emulator): void {
       if (emu.isDOS) {
         const pitReload = emu._pitCounters[0] || 0x10000;
         const timerIntervalMs = (pitReload / 1193182) * 1000;
-        const minStepsPerPitTick = pitReload * 40;
+        // PIT cycle gate: 40x real-hw rate for pure DOS, 200x when DPMI is active.
+    // DOS/4GW's PM IRQ dispatch + user handler takes many more emulator steps
+    // than the 40x budget, so at 40x we overfire and starve DOOM's main thread.
+    const minStepsPerPitTick = pitReload * (emu._dpmiState ? 200 : 40);
         const stepsSince = (emu.cpuSteps + stepCount) - emu._dosLastTimerTickSteps;
         if (
           now - emu._dosLastTimerTick >= timerIntervalMs &&

@@ -234,6 +234,34 @@ export class Memory {
   _pmCpu: { realMode: boolean } | null = null;
   _ivtProtect = false;
 
+  // DOS/4GW pre-populates its PM interrupt-handler table via two anchor writes
+  // (entries [0] and [32] get val 0x00050100 = type=0, next=1, sig=0x0005) each
+  // followed by a 4-byte signature write at offset +4 (val 0x0000fdbd for [0]
+  // and 0x0000fdad for [32]). On a real DPMI host the 30 intermediate slots
+  // [1..31] start as type=1 "default terminator" entries that the scan loop at
+  // cs=1569:0x1016 terminates on. Our DPMI allocator returns zero-filled memory
+  // so without this fix entries [1..31] stay type=0 and the scan loops forever.
+  // When we see the two-write pattern in PM, populate the intermediate slots'
+  // type byte so the scan terminates.
+  _dos4gwTableAnchored = false;
+  _dos4gwPendingAnchorAddr = -1;
+  /** Base address of DOS/4GW's handler table, set once the anchor pattern is
+   *  identified. Used later by the lazy handler-field population triggered
+   *  when DOS/4GW first links a chain head to one of the default slots. */
+  _dos4gwTableBase = -1;
+  _dos4gwTableFieldsPopulated = false;
+  /** DPMI default-terminator stub location (set by handleDpmiEntry). Used to
+   *  fill the selector/offset fields of type=1 entries. */
+  _dpmiTerminatorSel = 0x38;
+  _dpmiTerminatorOff = 0x700;
+  /** Linear address of DOS/4GW's exception-stack guard `[DS:0x0a42]`, captured
+   *  by scanning the data window for the initial `0x6810` value. Writes that
+   *  would drop this cell below the DOS/4GW guard threshold (`0x4840`) are
+   *  clamped up, preventing the `exit(2002)` "transfer stack overflow" drift
+   *  during long-running sessions (e.g. DOOM's M_LoadDefaults). */
+  _dos4gwStackGuardLinear = -1;
+  readonly _dos4gwStackGuardMin = 0x5000;
+
   // Read-only page ranges (4KB granularity, matching Windows page size): writes throw AccessViolationError
   private _readOnlyPages = new Set<number>();
 
@@ -343,6 +371,14 @@ export class Memory {
   writeU16(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
+    // Discover the DOS/4GW stack-guard address by watching for the initial
+    // 0x6810 write on a 2-byte boundary in PM — that value is the canonical
+    // initial [DS:0xa42] set by DOS/4GW's init. Only consider addresses below
+    // the handler table base (DOS/4GW's DS lives below the table region).
+    // Subsequent writes that would drop it below the guard floor get clamped.
+    if (this._pmCpu && !this._pmCpu.realMode && (addr & 1) === 0 && this._dos4gwStackGuardLinear >= 0 && addr === this._dos4gwStackGuardLinear && val < this._dos4gwStackGuardMin) {
+      val = this._dos4gwStackGuardMin;
+    }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 1 < this._flatMax) { this._flatDV.setUint16(addr, val, true); return; }
@@ -358,7 +394,56 @@ export class Memory {
   writeU32(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
+    // See writeU16 above — same DOS/4GW stack-guard clamp, but for 32-bit
+    // writes. [DS:0xa42] is a 16-bit cell, but DOS/4GW's cs=1569:0x5BA does
+    // `mov [0xa42], esi` (a 32-bit store whose low word is the guard value).
+    // Capture DOS/4GW's exception-stack guard by the first PM writeU32 whose
+    // low word is the canonical 0x6810 and whose target is a paragraph-aligned
+    // address inside DOS/4GW's LE data region (below the handler table and
+    // within a plausible LE-shadow DS base). The high word of the 32-bit
+    // store is typically 0 (DOS/4GW uses `mov dword [0xa42], 0x6810`).
+    if (this._pmCpu && !this._pmCpu.realMode && (addr & 1) === 0) {
+      const lo = val & 0xFFFF;
+      if (this._dos4gwTableAnchored && this._dos4gwStackGuardLinear < 0
+          && lo === 0x6810 && (val >>> 16) === 0
+          && addr < this._dos4gwTableBase && addr >= 0x10000) {
+        this._dos4gwStackGuardLinear = addr;
+      } else if (this._dos4gwStackGuardLinear >= 0 && addr === this._dos4gwStackGuardLinear && lo < this._dos4gwStackGuardMin) {
+        val = (val & 0xFFFF0000) | this._dos4gwStackGuardMin;
+      }
+    }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }
+    // DOS/4GW handler-table anchor write: see _dos4gwTableAnchored field
+    // comment. DOS/4GW initializes entries [0] and [32] of the PM interrupt-
+    // handler table with the value 0x00050100 (type=0, next=1, sig=0x0005);
+    // the two writes target addresses 0x100 (= 32*8) apart and belong to the
+    // same table. When we see two such writes matching that distance, we
+    // identify the table base and populate intermediate slots with type=1
+    // "default terminator" entries so the scan loop at cs=1569:0x1016
+    // terminates and the subsequent dispatch at cs=1569:0xbf4 calls a
+    // do-nothing RETF stub instead of jumping to 0:0.
+    if (!this._dos4gwTableAnchored && this._pmCpu && !this._pmCpu.realMode
+        && val === 0x00050100 && (addr & 7) === 0 && addr >= 0x100000) {
+      if (this._dos4gwPendingAnchorAddr < 0) {
+        this._dos4gwPendingAnchorAddr = addr;
+      } else {
+        const prev = this._dos4gwPendingAnchorAddr;
+        const delta = addr - prev;
+        const base = delta === 0x100 ? prev : delta === -0x100 ? addr : -1;
+        if (base >= 0) {
+          this._dos4gwTableAnchored = true;
+          this._dos4gwTableBase = base;
+          // Only write the type byte here; offset/selector fields are populated
+          // lazily (see _dos4gwTableFieldsPopulated) because DOS/4GW uses the
+          // 0x402a38..0x402b2F region for scratch during init and overwriting
+          // it too early corrupts LE load state.
+          for (let i = 1; i <= 31; i++) {
+            this.writeU8(base + i * 8, 1);                 // type = 1 (terminator)
+          }
+        }
+        this._dos4gwPendingAnchorAddr = addr;
+      }
+    }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flatDV && addr + 3 < this._flatMax) { this._flatDV.setUint32(addr, val, true); return; }
     const off = addr & SEG_MASK;

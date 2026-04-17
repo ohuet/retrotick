@@ -27,6 +27,18 @@ const OF = 0x800;
  *      PIC base) must NOT see the exception handler, otherwise DOOM's #DF
  *      handler gets invoked on every timer tick and leaks stack.
  */
+/** Return true if the given selector's GDT descriptor has a code-segment
+ *  access byte (bit 3 = 1). Used to filter AH=25h handler registrations —
+ *  DOOM's DMX also issues AH=25h with DS pointing at data (e.g., a lookup
+ *  table), which we should not treat as a real vector install. */
+function isCodeSelector(cpu: CPU, sel: number): boolean {
+  if (cpu.realMode || !cpu.emu?._gdtBase) return true; // fall back to permissive in RM
+  const idx = (sel & 0xFFF8) >>> 3;
+  if (idx === 0) return false;
+  const access = cpu.mem.readU8(cpu.emu._gdtBase + idx * 8 + 5);
+  return (access & 0x18) === 0x18; // bit 4 = system/code-data, bit 3 = code
+}
+
 export function dispatchException(
   cpu: CPU,
   intNum: number,
@@ -38,6 +50,31 @@ export function dispatchException(
   // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
   if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
     const dpmi = cpu.emu._dpmiState;
+    // DOS clients like DOOM install their timer/IRQ handlers via INT 21h AH=25h
+    // rather than DPMI AX=0205h. DOS/4GW's PM INT 21h handler processes the call
+    // internally, but may skip registering IRQ-range vectors (e.g., vec 8) in
+    // the PM handler chain — so HW IRQ0 later finds only DOS/4GW's default
+    // dispatcher and DOOM's timer handler never runs, leaving DOOM stuck in
+    // tick-wait loops (e.g., cs=168:0x51fc6f). Intercept INT 21h AH=25h up
+    // front and register the handler in pmExcHandlers so our HW IRQ dispatch
+    // (below) finds the client's handler directly. DOS/4GW's INT 21h handler
+    // still runs afterwards for any additional bookkeeping.
+    if (intNum === 0x21) {
+      const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
+      if (ah === 0x25) {
+        const vec = cpu.reg[EAX] & 0xFF;
+        const ds = cpu.ds;
+        const off = cpu.use32 ? (cpu.reg[EDX] >>> 0) : (cpu.reg[EDX] & 0xFFFF);
+        // Only install if DS is a *code* selector. DOOM's DMX library also
+        // issues AH=25h calls with DS pointing at its data segment (e.g.,
+        // 170:0x350f is an FM-volume lookup table, not code) — likely saving
+        // state rather than registering a real vector. Skip those so we keep
+        // the previously-registered code handler.
+        if (ds !== 0 && isCodeSelector(cpu, ds)) {
+          dpmi.pmExcHandlers.set(vec + 256, { sel: ds, off });
+        }
+      }
+    }
     // DPMI keeps two handler tables: AX=0203 stores in the exception namespace
     // (key=vec, vec 0..31), AX=0205 stores in the interrupt namespace
     // (key=vec+256). Pick the table that matches the source of the dispatch —
@@ -60,11 +97,14 @@ export function dispatchException(
       && intNum !== 0x20; // INT 20h = terminate, always handle in JS
 
     if (shouldDispatchToPM) {
-      // Recursion guard: if caller's CS matches the handler's selector or
-      // the initial code segment (0x08), this is the handler calling INT N
-      // to reflect to RM — don't re-enter the handler.
+      // Recursion guard (software INT only): if caller's CS matches the
+      // handler's selector or the initial code segment (0x08), this is the
+      // handler calling INT N to reflect to RM — don't re-enter. Hardware
+      // IRQs are excluded because they fire asynchronously while the client
+      // is running its normal code (cs == handler.sel in DOOM's flat model),
+      // and blocking them there makes DOOM's PIT/SB handlers never run.
       const callerCS = cpu.cs;
-      if (callerCS === handler.sel || callerCS === 0x08) {
+      if (!hwIrq && (callerCS === handler.sel || callerCS === 0x08)) {
         // Handler is reflecting to RM — fall through to JS handler
       } else {
         // Push interrupt frame. Size depends on the DPMI CLIENT mode, not the
@@ -177,6 +217,26 @@ export function cpuStep(cpu: CPU): void {
   }
   // Per-instruction debug hook (set by test harnesses to catch exact derail point)
   if ((cpu.emu as any)?._stepHook) (cpu.emu as any)._stepHook(cpu);
+  // Lazily populate DOS/4GW handler-table offset/selector fields once control
+  // first reaches a 32-bit client code segment (cpu.use32 = D=1). DOS/4GW's
+  // own code runs in 16-bit (D=0) LE-shadow segments; the client (e.g. DOOM)
+  // uses a flat D=1 selector. Waiting for the first D=1 fetch guarantees
+  // DOS/4GW's init has finished so we don't clobber LE-load scratch in the
+  // table region.
+  {
+    const mem = cpu.mem as any;
+    if (mem._dos4gwTableAnchored && !mem._dos4gwTableFieldsPopulated && cpu.use32 && !cpu.realMode) {
+      mem._dos4gwTableFieldsPopulated = true;
+      const base = mem._dos4gwTableBase;
+      if (base >= 0) {
+        for (let i = 1; i <= 31; i++) {
+          const e = base + i * 8;
+          cpu.mem.writeU32(e + 2, mem._dpmiTerminatorOff); // offset → RETF stub
+          cpu.mem.writeU16(e + 6, mem._dpmiTerminatorSel); // selector
+        }
+      }
+    }
+  }
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
   // Per-instruction trace ring buffer (disabled for perf)
   if (false && cpu.emu && cpu.emu.cpuSteps > 90000000) {
