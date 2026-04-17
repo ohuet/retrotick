@@ -1,7 +1,7 @@
 import type { CPU } from '../x86/cpu';
 import type { Emulator } from '../emulator';
 import { handleInt09, handleInt16 } from './keyboard';
-import { handleInt10 } from './video';
+import { handleInt10, teletypeOutput } from './video';
 import { handleInt21 } from './int21';
 import { handleInt15, handleInt1A, handleInt20, handleInt2F, handleInt79, handleInt7F, handleUcdosInt3 } from './misc';
 import { handleInt33 } from './mouse';
@@ -136,6 +136,14 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     case 0x2A: // Network — not installed
       cpu.setReg8(EAX, 0); // AL=0 means not installed
       return true;
+    case 0x29: { // Fast Console Output — AL = character to write to stdout.
+      // Used by DOS command processors and some DOS extenders (including
+      // DOS/4GW's error-print routines) that need a minimal printing path
+      // that doesn't touch the DOS API state.
+      const ch = cpu.reg[EAX] & 0xFF;
+      teletypeOutput(cpu, emu, ch);
+      return true;
+    }
     case 0x1A: return handleInt1A(cpu, emu);
     case 0x2F: return handleInt2F(cpu, emu);
     case 0x25: { // Absolute Disk Read (fake — returns synthetic boot sector)
