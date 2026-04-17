@@ -622,8 +622,17 @@ export function emuTick(emu: Emulator): void {
     const now = performance.now();
     const pitReload = emu._pitCounters[0] || 0x10000;
     const timerIntervalMs = (pitReload / 1193182) * 1000;
-    if (now - emu._dosLastTimerTick >= timerIntervalMs) {
+    // Gate PIT on emulated cycles too: real hardware fires IRQ0 once every
+    // pitReload PIT ticks, which for a ~20 MIPS 386 is pitReload * 16.76 insns.
+    // Without a cycle gate, a slow JS emulator overfires IRQ0 during boot
+    // (each hit permanently consumes a DOS/4GW exception-stack frame at
+    // cs=1569:0x580, eventually starving the guard at SI<=0x4840 and firing
+    // DOS/4GW's exit(2002)).
+    const minStepsPerPitTick = pitReload * 40;
+    const stepsSince = emu.cpuSteps - emu._dosLastTimerTickSteps;
+    if (now - emu._dosLastTimerTick >= timerIntervalMs && stepsSince >= minStepsPerPitTick) {
       emu._dosLastTimerTick += timerIntervalMs;
+      emu._dosLastTimerTickSteps = emu.cpuSteps;
       // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
       if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
       const timerInt = emu._picMasterBase; // IRQ 0
@@ -732,14 +741,22 @@ export function emuTick(emu: Emulator): void {
       // DOS games do rapid VGA writes and yielding on each one kills throughput)
       if (!emu.isDOS && emu.screenDirty) { emu.screenDirty = false; break; }
 
-      // DOS timer interrupt — frequency derived from PIT channel 0
+      // DOS timer interrupt — frequency derived from PIT channel 0.
+      // Gate on emulated cycles too (see matching comment in the HLT branch)
+      // so a slow JS emulator does not overfire IRQ0 during boot.
       if (emu.isDOS) {
         const pitReload = emu._pitCounters[0] || 0x10000;
         const timerIntervalMs = (pitReload / 1193182) * 1000;
-        if (now - emu._dosLastTimerTick >= timerIntervalMs) {
+        const minStepsPerPitTick = pitReload * 40;
+        const stepsSince = (emu.cpuSteps + stepCount) - emu._dosLastTimerTickSteps;
+        if (
+          now - emu._dosLastTimerTick >= timerIntervalMs &&
+          stepsSince >= minStepsPerPitTick
+        ) {
           const timerInt = emu._picMasterBase; // IRQ 0
           if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt)) {
             emu._dosLastTimerTick += timerIntervalMs;
+            emu._dosLastTimerTickSteps = emu.cpuSteps + stepCount;
             if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
             emu._pendingHwInts.push(timerInt);
           }

@@ -1833,6 +1833,7 @@ export class Emulator {
   _tickRunning = false; // reentrancy guard for tick()
   _hwIntSavedSP = -1; // SP level saved before HW interrupt dispatch; -1 = no active handler
   _hwIntSavedSS = -1; // SS selector saved alongside SP — PM ISRs switch stacks mid-handler
+  _dosLastTimerTickSteps = 0; // cpuSteps at last PIT IRQ0 dispatch, for cycle-gated timing
   _hwIntPMActive = false; // true while a PM IDT-dispatched handler is running
   /** Saved PM state when HW INT handler runs in RM (restored after IRET) */
   _hwIntPMState: { cr0: number; cs: number; ss: number; ds: number; es: number; use32: boolean; segBases: Map<number, number> } | undefined;
