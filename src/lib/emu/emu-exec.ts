@@ -643,8 +643,16 @@ export function emuTick(emu: Emulator): void {
       // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
       if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
       const timerInt = emu._picMasterBase; // IRQ 0
-      if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt))
-        emu._pendingHwInts.push(timerInt);
+      // Count already-queued IRQ0s: with the IF=0 gate, the guest can sit in a
+      // CLI section for multiple PIT intervals and each interval needs to be
+      // accounted for so music / timer callbacks don't lose time. Cap the
+      // queue at 4 pending IRQ0s to avoid unbounded growth if the guest has
+      // masked the PIC (also checked via _picMasterMask below).
+      if (!(emu._picMasterMask & 0x01)) {
+        let pendingCount = 0;
+        for (const v of emu._pendingHwInts) if (v === timerInt) pendingCount++;
+        if (pendingCount < 4) emu._pendingHwInts.push(timerInt);
+      }
       emu._dosHalted = false;
     }
     // Also wake on pending keyboard interrupt
@@ -764,11 +772,17 @@ export function emuTick(emu: Emulator): void {
           stepsSince >= minStepsPerPitTick
         ) {
           const timerInt = emu._picMasterBase; // IRQ 0
-          if (!(emu._picMasterMask & 0x01) && !emu._pendingHwInts.includes(timerInt)) {
-            emu._dosLastTimerTick += timerIntervalMs;
-            emu._dosLastTimerTickSteps = emu.cpuSteps + stepCount;
-            if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
-            emu._pendingHwInts.push(timerInt);
+          if (!(emu._picMasterMask & 0x01)) {
+            // Allow stacking up to 4 pending IRQ0s so CLI sections do not
+            // silently drop PIT ticks (see HLT-branch comment above).
+            let pendingCount = 0;
+            for (const v of emu._pendingHwInts) if (v === timerInt) pendingCount++;
+            if (pendingCount < 4) {
+              emu._dosLastTimerTick += timerIntervalMs;
+              emu._dosLastTimerTickSteps = emu.cpuSteps + stepCount;
+              if (now - emu._dosLastTimerTick > 200) emu._dosLastTimerTick = now;
+              emu._pendingHwInts.push(timerInt);
+            }
           }
           emu._dosHalted = false;
         }
@@ -838,10 +852,16 @@ export function emuTick(emu: Emulator): void {
       emu._pendingHwInts.length > 0 &&
       emu._hwIntSavedSP < 0 &&
       !emu.cpu._inhibitIRQ &&
-      (emu.cpu.getFlags() & 0x0200) !== 0
+      // Only gate on IF when DPMI is active. DPMI clients (DOOM via DOS/4GW)
+      // need strict IF=0 blocking so IRQs do not dispatch nested on top of a
+      // PM ISR. Real-mode / VCPI guests (Second Reality's pmodew, Prince of
+      // Persia, Monkey Island) do their own timing with CLI/STI around
+      // critical sections and rely on the emulator to honor PIT ticks
+      // back-to-back — blocking IRQ dispatch on IF=0 causes lost ticks and
+      // stalls animations / title-card code.
+      (!emu._dpmiState || (emu.cpu.getFlags() & 0x0200) !== 0)
     ) {
       // _inhibitIRQ: MOV SS/POP SS inhibits for 1 instruction (real x86 behavior).
-      // IF=0 blocks all maskable IRQs — required during ISRs and critical sections.
       const intNum = emu._pendingHwInts.shift()!;
       // Set PIC ISR bit for this IRQ (cleared by EOI from handler)
       const masterBase = emu._picMasterBase;
