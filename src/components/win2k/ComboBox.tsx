@@ -86,6 +86,19 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
     }
   }, [open, selectedIndex]);
 
+  // Lift the parent wrapper above sibling ComboBoxes while the dropdown is open.
+  // The dropdown list is rendered inside this ComboBox's own stacking context,
+  // so setting zIndex on our root alone can't escape a positioned parent.
+  useEffect(() => {
+    const parent = containerRef.current?.parentElement;
+    if (!parent) return;
+    if (open) {
+      const prev = parent.style.zIndex;
+      parent.style.zIndex = '10000';
+      return () => { parent.style.zIndex = prev; };
+    }
+  }, [open]);
+
   const fontStyle = font || fontCSS || '11px/1 "Tahoma", "MS Sans Serif", sans-serif';
   const selectedText = selectedIndex >= 0 && selectedIndex < items.length
     ? items[selectedIndex] : '';
@@ -110,6 +123,9 @@ export function ComboBox({ items, selectedIndex = -1, onSelect, onOpen, font, di
   return (
     <div ref={containerRef} style={{
       position: 'relative', width: '100%', height: '100%',
+      // When the dropdown is open, lift the whole container above sibling controls.
+      // Otherwise a sibling ComboBox rendered later in the DOM paints over this one's list.
+      zIndex: open ? 10000 : 'auto',
     }}>
       {/* Outer sunken container — the whole combobox shares one border */}
       <div
