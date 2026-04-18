@@ -637,7 +637,12 @@ export function emuTick(emu: Emulator): void {
     // fast audio callbacks).
     const minStepsPerPitTick = emu._dpmiState ? pitReload * 200 : 0;
     const stepsSince = emu.cpuSteps - emu._dosLastTimerTickSteps;
-    if (now - emu._dosLastTimerTick >= timerIntervalMs && stepsSince >= minStepsPerPitTick) {
+    // Headless tests advance cpuSteps much faster than wall-clock, so the
+    // wall-clock gate practically never triggers. emu._pitCycleOnly bypasses
+    // the wall-clock check and fires PIT purely on emulated cycles — useful
+    // for headless integration tests that need the timer to advance.
+    const wallOk = emu._pitCycleOnly || (now - emu._dosLastTimerTick >= timerIntervalMs);
+    if (wallOk && stepsSince >= minStepsPerPitTick) {
       emu._dosLastTimerTick += timerIntervalMs;
       emu._dosLastTimerTickSteps = emu.cpuSteps;
       // Cap: don't fall more than 200ms behind (prevents catch-up storm after tab background)
@@ -767,10 +772,8 @@ export function emuTick(emu: Emulator): void {
         // music and animations to run correctly.
         const minStepsPerPitTick = emu._dpmiState ? pitReload * 200 : 0;
         const stepsSince = (emu.cpuSteps + stepCount) - emu._dosLastTimerTickSteps;
-        if (
-          now - emu._dosLastTimerTick >= timerIntervalMs &&
-          stepsSince >= minStepsPerPitTick
-        ) {
+        const wallOk = emu._pitCycleOnly || (now - emu._dosLastTimerTick >= timerIntervalMs);
+        if (wallOk && stepsSince >= minStepsPerPitTick) {
           const timerInt = emu._picMasterBase; // IRQ 0
           if (!(emu._picMasterMask & 0x01)) {
             // Allow stacking up to 4 pending IRQ0s so CLI sections do not
