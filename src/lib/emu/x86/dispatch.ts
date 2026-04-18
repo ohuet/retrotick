@@ -242,6 +242,41 @@ export function cpuStep(cpu: CPU): void {
         }
       }
     }
+    // DOS/4GW chain-walker loop mitigation. The walker at cs=1569:0x0ba4
+    // iterates entries in a PM interrupt handler table and dispatches each
+    // type=1 entry's (sel, off) via RETFD. After the handler returns, the
+    // walker re-enters at 0x0bb8 if EAX != 0 (handler said "call the next
+    // link"). In DOOM Shareware the chain table is set up with entry[1]
+    // pointing to cs=1569:0x08a0, a stub that returns EAX=DI=8 — pointing
+    // straight back at entry[1]. The walker loops forever, and DOS/4GW's
+    // integrity check at cs=1569:0x0f6a eventually raises "1001: error in
+    // interrupt chain" and exits the client (AL=0xE9 = 233).
+    //
+    // Mitigation: at the TEST EAX, EAX just before the re-entry decision
+    // (cs=1569:0x0c45), count consecutive dispatches with the same EDI.
+    // After 3 repeats, force EAX=0 so the JE at 0x0c48 takes the success
+    // path to 0x0c50 and the walker exits cleanly.
+    if (cpu.cs === 0x1569 && !cpu.realMode) {
+      const memX = cpu.mem as any;
+      const cs1569Base = cpu.segBase(0x1569);
+      if (cs1569Base > 0 && cpu.eip === (cs1569Base + 0x0c45) >>> 0) {
+        const edi = cpu.reg[7] >>> 0;
+        if (edi === memX._dos4gwWalkerLastEdi) {
+          memX._dos4gwWalkerRepeat = (memX._dos4gwWalkerRepeat || 0) + 1;
+          if (memX._dos4gwWalkerRepeat >= 3) {
+            cpu.reg[0] = 0; // force EAX=0 so JE takes success branch
+            memX._dos4gwWalkerRepeat = 0;
+            if (!memX._dos4gwWalkerLoggedOnce) {
+              memX._dos4gwWalkerLoggedOnce = true;
+              console.log(`[CHAIN-MIT] DOS/4GW chain walker re-entered 3× with EDI=0x${edi.toString(16)} — forcing EAX=0 to break the loop`);
+            }
+          }
+        } else {
+          memX._dos4gwWalkerLastEdi = edi;
+          memX._dos4gwWalkerRepeat = 1;
+        }
+      }
+    }
   }
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
   // Per-instruction trace ring buffer (disabled for perf)
