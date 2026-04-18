@@ -1,4 +1,5 @@
-// Trace INT 33h calls and returns during DOOM init
+// With the SB fix applied, DOOM runs further. Check if DMX_Init at 0x5229ed
+// is called at any point now (e.g., when sound is initialized fully).
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { Emulator } from '../src/lib/emu/emulator.ts';
 import { parsePE } from '../src/lib/pe/index.ts';
@@ -46,14 +47,35 @@ for (const fname of readdirSync(BASE)) {
   const fp = `${BASE}/${fname}`;
   if (statSync(fp).isFile() && fname !== 'DOOM.EXE') emu.additionalFiles.set(fname, readToArrayBuffer(fp));
 }
-
 await emu.load(doomBuf, peInfo, mockCanvas);
 
-emu.traceDosInt = true;
+const cpu = emu.cpu;
+const origStep = cpu.step.bind(cpu);
+let dmxCalls = 0;
+let writes56f214 = 0;
+const mem = emu.memory;
+const origW32 = mem.writeU32.bind(mem);
+mem.writeU32 = (a, v) => {
+  if (a === 0x56f214 && writes56f214 < 5) {
+    writes56f214++;
+    console.log(`[W 0x56f214=${(v>>>0).toString(16)}] cs=${cpu.cs.toString(16)} eip=0x${(cpu.eip>>>0).toString(16)} step=${emu.cpuSteps}`);
+  }
+  origW32(a, v);
+};
+
+cpu.step = function() {
+  if (cpu.cs === 0x168 && (cpu.eip >>> 0) === 0x5229ed && dmxCalls < 5) {
+    dmxCalls++;
+    console.log(`[DMX_Init CALLED #${dmxCalls}] step=${emu.cpuSteps} EAX=0x${(cpu.reg[0]>>>0).toString(16)} EBX=0x${(cpu.reg[3]>>>0).toString(16)}`);
+  }
+  origStep();
+};
 
 emu.run();
-for (let tick = 0; tick < 2000; tick++) {
+for (let tick = 0; tick < 3000; tick++) {
   if (emu.halted) break;
   emu.tick();
+  if (tick % 500 === 0) console.log(`[TICK ${tick}] step=${emu.cpuSteps}`);
 }
-console.log(`[DONE] step=${emu.cpuSteps}`);
+console.log(`[DONE] step=${emu.cpuSteps} halted=${emu.halted} dmxCalls=${dmxCalls} writes56f214=${writes56f214}`);
+console.log(`[0x56f214] final = 0x${mem.readU32(0x56f214).toString(16)}`);

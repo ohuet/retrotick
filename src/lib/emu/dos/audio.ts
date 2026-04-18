@@ -232,17 +232,14 @@ if (!globalThis._oplRegistered) {
       return this.sbDsp.readStatus();
     }
     if (port === 0x22C) return 0x00;
-    // SB Pro mixer data read — return value for the previously-selected register.
-    // DOOM's I_StartupSound reads mixer register 0x82 (SB16 IRQ status) via this
-    // port: AL&1 set → "DMA IRQ pending" (forces DMX mixer tick). Returning 0xFF
-    // (default for unhandled ports) makes DOOM run the mixer with uninit'd globals,
-    // which loops forever. Return 0 for unknown registers — SB hardware's real
-    // behavior for un-populated mixer registers.
-    if (port === 0x225) {
-      const reg = this.sbDsp.mixerAddr;
-      if (reg === 0x82) return 0x00; // no IRQ pending
-      return 0x00;
-    }
+    // SB Pro/SB16 mixer data register — return the value stored for the
+    // currently-selected register. Writes are remembered in mixerRegs[];
+    // reads of reg 0x82 synthesize SB16 IRQ-status bits from live hardware.
+    // DOOM's I_StartupSound polls mixer reg 0x82 to decide whether the DMX
+    // mixer tick should run; returning 0xFF (default for unhandled ports)
+    // mis-sets bit 0 ("8-bit DMA IRQ pending") and triggers an unbounded
+    // mixer loop. Returning the live state works for any SB Pro/SB16 game.
+    if (port === 0x225) return this.sbDsp.readMixerData();
 
     if (port === 0x00) return this.dma.readAddr(0);
     if (port === 0x01) return this.dma.readCount(0);
@@ -293,6 +290,7 @@ if (!globalThis._oplRegistered) {
     // SB Pro mixer ports
     if (port === 0x224) { this.sbDsp.mixerAddr = value; return true; }
     if (port === 0x225) {
+      this.sbDsp.mixerRegs[this.sbDsp.mixerAddr] = value & 0xFF;
       if (this.sbDsp.mixerAddr === 0x0E) {
         // Stereo/mono select: bit 1 = stereo, bit 5 = filter
         this.sbDsp.stereoMode = !!(value & 0x02);
