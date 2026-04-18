@@ -242,6 +242,53 @@ export function cpuStep(cpu: CPU): void {
         }
       }
     }
+    // DOS/4GW chain walker diagnostic ring buffer. Each walker entry and each
+    // handler-return-point dispatch gets recorded. When the 1001-error thunk
+    // at cs=1569:0x0f68 fires (entry[0] of the chain table is the error
+    // terminator), we dump the recent history so the user can see WHAT chain
+    // of dispatches led the walker to entry[0] on a given run.
+    if (cpu.cs === 0x1569 && !cpu.realMode) {
+      const memX = cpu.mem as any;
+      const cs1569Base = cpu.segBase(0x1569);
+      if (cs1569Base > 0) {
+        if (!memX._walkerRing) {
+          memX._walkerRing = new Array(64).fill(null);
+          memX._walkerRingIdx = 0;
+        }
+        const off = cpu.eip - cs1569Base;
+        if (off === 0x0ba4) {
+          // Walker entered — capture caller + args
+          const bp = cpu.reg[5] >>> 0;
+          const ssBase = cpu.segBase(cpu.ss);
+          const bpLin = (ssBase + (bp & 0xFFFF)) >>> 0;
+          const esp = cpu.reg[4] >>> 0;
+          const retAddr = cpu.mem.readU32((ssBase + (esp & 0xFFFF)) >>> 0);
+          memX._walkerRing[memX._walkerRingIdx & 63] = `entry DI=[BP+6]=0x${cpu.mem.readU16(bpLin + 6).toString(16)} ret=0x${retAddr.toString(16)}`;
+          memX._walkerRingIdx++;
+        } else if (off === 0x0c45) {
+          // Just before TEST EAX, EAX — handler just returned
+          const eax = cpu.reg[0] >>> 0;
+          const edi = cpu.reg[7] >>> 0;
+          memX._walkerRing[memX._walkerRingIdx & 63] = `  testEAX=0x${eax.toString(16)} EDI=0x${edi.toString(16)}`;
+          memX._walkerRingIdx++;
+        } else if (off === 0x0f68 && !memX._1001Logged) {
+          memX._1001Logged = true;
+          console.warn(`[1001-ERROR] DOS/4GW 1001-error thunk entered at cs=1569:0x0f68, step ${(cpu.emu as any).cpuSteps}`);
+          console.warn(`  Walker dispatch history (last ${Math.min(64, memX._walkerRingIdx)} events):`);
+          const n = Math.min(64, memX._walkerRingIdx);
+          for (let h = 0; h < n; h++) {
+            const idx = (memX._walkerRingIdx - n + h) & 63;
+            console.warn(`    ${memX._walkerRing[idx] || '(empty)'}`);
+          }
+          // Also dump what's in the chain table around entry[0]
+          console.warn(`  Chain table entries [0..4]:`);
+          for (let i = 0; i < 5; i++) {
+            const a = 0x2eef0 + i * 8;
+            console.warn(`    entry[${i}] type=${cpu.mem.readU8(a)} next=${cpu.mem.readU8(a+1)} off=0x${cpu.mem.readU32(a+2).toString(16)} sel=0x${cpu.mem.readU16(a+6).toString(16)}`);
+          }
+        }
+      }
+    }
   }
   const instrEip = cpu.eip; // save for fault reporting (e.g. divide error)
   // Per-instruction trace ring buffer (disabled for perf)
