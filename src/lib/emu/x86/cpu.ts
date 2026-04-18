@@ -69,8 +69,19 @@ export class CPU {
   // Back-reference to emulator (set during load, used for DOS INT handling)
   emu: Emulator | null = null;
 
-  // Real mode: segment * 16 = linear (no lookup table needed)
-  realMode = false;
+  // Real mode: segment * 16 = linear (no lookup table needed).
+  // Exposed via getter/setter so every transition recomputes `_ssB32` — the
+  // PM→RM→PM path (DPMI AX=0300 simulate-RM-int, INT 31h AX=0x0301/0302, etc.)
+  // changes the stack-addressing rules, and a stale `_ssB32` makes pop32 mask
+  // ESP to 16 bits once back in PM, which derails any subsequent RET.
+  private _realMode = false;
+  get realMode(): boolean { return this._realMode; }
+  set realMode(v: boolean) {
+    if (this._realMode !== v) {
+      this._realMode = v;
+      this._recomputeSsB32();
+    }
+  }
 
   // 16-bit (NE) mode support
   use32 = true; // false for NE executables
