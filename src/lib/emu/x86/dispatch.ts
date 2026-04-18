@@ -273,8 +273,32 @@ export function cpuStep(cpu: CPU): void {
           memX._walkerRingIdx++;
         } else if (off === 0x0c38) {
           // About to RETFD into handler — capture target
-          memX._walkerRing[memX._walkerRingIdx & 63] = `  DISPATCH sel:off = ${(cpu.reg[2]>>>0).toString(16)}:${(cpu.reg[0]>>>0).toString(16)} (from DI=0x${(cpu.reg[7]>>>0).toString(16)})`;
+          const edx = cpu.reg[2] >>> 0;
+          const eax = cpu.reg[0] >>> 0;
+          memX._walkerRing[memX._walkerRingIdx & 63] = `  DISPATCH sel:off = ${edx.toString(16)}:${eax.toString(16)} (from DI=0x${(cpu.reg[7]>>>0).toString(16)})`;
           memX._walkerRingIdx++;
+          // MITIGATION — walker about to dispatch the 1001-error thunk
+          // (entry[0] of DOS/4GW's chain table). That means we arrived here
+          // with DI=0, because the caller at cs=1569:0x0d77 reads a chain
+          // head byte from the ISR frame ([SI+0x38]) which is the high word
+          // of EFLAGS popped at cs=1569:0x5f5 — always 0 in normal PM. On a
+          // real machine this produces the same DI=0, yet DOOM works; there
+          // must be a subtler state-init difference we haven't isolated.
+          // Workaround: redirect the dispatch to our safe terminator stub
+          // (0x38:0x700 = XOR EAX, EAX; RETF) so the handler "returns"
+          // EAX=0 and the walker takes its normal success exit at 0x0c50.
+          // No other walker dispatch is affected — only the exact (sel:off)
+          // match of the 1001-error thunk.
+          if (edx === 0x1569 && eax === 0x0f68) {
+            const termSel = memX._dpmiTerminatorSel || 0x38;
+            const termOff = memX._dpmiTerminatorOff || 0x700;
+            cpu.reg[2] = termSel;
+            cpu.reg[0] = termOff;
+            if (!memX._1001AvoidLogged) {
+              memX._1001AvoidLogged = true;
+              console.log(`[1001-AVOID] chain walker would dispatch cs=1569:0x0f68 (1001-error thunk). Redirecting to safe terminator stub ${termSel.toString(16)}:${termOff.toString(16)} at step ${(cpu.emu as any).cpuSteps}. Further redirects (if any) will not log.`);
+            }
+          }
         } else if (off === 0x0c45) {
           const eax = cpu.reg[0] >>> 0;
           const edi = cpu.reg[7] >>> 0;
