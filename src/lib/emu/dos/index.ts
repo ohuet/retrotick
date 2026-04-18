@@ -116,6 +116,16 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
       return true;
     }
     case 0x09: return handleInt09(cpu, emu);
+    case 0x11: {
+      // BIOS equipment list — AX = equipment word.
+      // bit 1 = math coprocessor (Pentium has integrated FPU)
+      // bit 2 = PS/2 mouse installed
+      // bits 4-5 = 10b (initial video mode: 80x25 color)
+      // bit 14 = 1 parallel printer
+      const EQUIPMENT_WORD = 0x4026;
+      cpu.setReg16(EAX, EQUIPMENT_WORD);
+      return true;
+    }
     case 0x12: // Get conventional memory size → AX = KB (640)
       cpu.setReg16(EAX, 640);
       return true;

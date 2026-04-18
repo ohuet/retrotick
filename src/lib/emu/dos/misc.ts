@@ -163,7 +163,7 @@ export function handleInt20(cpu: CPU, emu: Emulator): boolean {
     emu._dosPSP = parentPSP;
     // PSP termination vector is always a real-mode seg:off — reset to real mode
     if (!cpu.realMode && cpu.emu) {
-      cpu.emu._cr0 = 0;
+      cpu.emu._cr0 = 0x12;
       cpu.realMode = true;
       cpu.segBases.clear();
     }

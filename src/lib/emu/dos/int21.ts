@@ -616,7 +616,7 @@ export function handleInt21(cpu: CPU, emu: Emulator): boolean {
           // PSP termination vector is always a real-mode seg:off.
           // If a DOS extender (PMODEW) entered protected mode, reset to real mode now.
           if (!cpu.realMode && cpu.emu) {
-            cpu.emu._cr0 = 0;
+            cpu.emu._cr0 = 0x12;
             cpu.realMode = true;
             cpu.segBases.clear();
           }

@@ -930,7 +930,7 @@ export function emuTick(emu: Emulator): void {
             use32: emu.cpu.use32,
             segBases: new Map(emu.cpu.segBases),
           };
-          emu._cr0 = 0;
+          emu._cr0 = 0x12; // keep MP+ET on PM→RM transition
           emu.cpu.realMode = true;
           emu.cpu.use32 = false;       // RM handlers are 16-bit code
           emu.cpu._addrSize16 = true;

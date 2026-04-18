@@ -375,7 +375,7 @@ export class Emulator {
   _dosDtaOfs?: number;
   _dosPSP = 0;
   _dosLoadSegment = 0;
-  _cr0 = 0;           // Control Register 0 (PE bit etc.)
+  _cr0 = 0x12;        // CR0 — MP (bit 1) + ET (bit 4): Pentium post-BIOS state with FPU present
   _cr3 = 0;           // Control Register 3 (page directory base) — stored for read-back, paging not actually performed
   _gdtBase = 0;       // GDT linear base address
   _gdtLimit = 0;      // GDT limit
