@@ -232,6 +232,17 @@ if (!globalThis._oplRegistered) {
       return this.sbDsp.readStatus();
     }
     if (port === 0x22C) return 0x00;
+    // SB Pro mixer data read — return value for the previously-selected register.
+    // DOOM's I_StartupSound reads mixer register 0x82 (SB16 IRQ status) via this
+    // port: AL&1 set → "DMA IRQ pending" (forces DMX mixer tick). Returning 0xFF
+    // (default for unhandled ports) makes DOOM run the mixer with uninit'd globals,
+    // which loops forever. Return 0 for unknown registers — SB hardware's real
+    // behavior for un-populated mixer registers.
+    if (port === 0x225) {
+      const reg = this.sbDsp.mixerAddr;
+      if (reg === 0x82) return 0x00; // no IRQ pending
+      return 0x00;
+    }
 
     if (port === 0x00) return this.dma.readAddr(0);
     if (port === 0x01) return this.dma.readCount(0);

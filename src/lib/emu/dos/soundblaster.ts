@@ -9,8 +9,12 @@
 import type { DMAController } from './dma';
 
 const SB_DSP_READY = 0xAA;
-const SB_DSP_VERSION_HI = 2;
-const SB_DSP_VERSION_LO = 1;
+// Report SB16 DSP v4.05. DOOM's I_StartupSound stores (major<<8|minor) as the
+// DMA threshold at [0x56d226]; when >= 0x400 it takes the port-0x82 check path
+// in 0x51fe14 (which returns 0 for our DMA page=0, skipping the mixer) instead
+// of forcing the mixer to run with uninit'd DMX globals (which loops forever).
+const SB_DSP_VERSION_HI = 4;
+const SB_DSP_VERSION_LO = 5;
 
 export const SB_IRQ = 7; // IRQ 7 → INT 0x0F
 
