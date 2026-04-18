@@ -282,33 +282,41 @@ export function cpuStep(cpu: CPU): void {
           memX._walkerRingIdx++;
         } else if (off === 0x0f68 && !memX._1001Logged) {
           memX._1001Logged = true;
-          console.warn(`[1001-ERROR] DOS/4GW 1001-error thunk entered at cs=1569:0x0f68, step ${(cpu.emu as any).cpuSteps}`);
-          // Dump the last 128 cs=1569 EIPs
-          console.warn(`  Last 128 cs=1569 EIPs before 0xf68:`);
+          // Build ONE big string and emit it with a single console.log call so
+          // the browser only attaches ONE stack trace. Emitting N warn calls
+          // gives N stack traces — the user reported 140k+ lines of noise.
+          const out: string[] = [];
+          out.push(`[1001-ERROR] DOS/4GW 1001-error thunk entered at cs=1569:0x0f68, step ${(cpu.emu as any).cpuSteps}`);
+          out.push(`  Last 128 cs=1569 EIPs before 0xf68:`);
           const ringN = Math.min(128, memX._eip1569RingIdx);
-          let line = '';
+          let line = '    ';
           for (let h = 0; h < ringN; h++) {
             const idx = (memX._eip1569RingIdx - ringN + h) & 127;
             line += memX._eip1569Ring[idx].toString(16).padStart(4, '0') + ' ';
-            if ((h + 1) % 16 === 0) { console.warn('    ' + line); line = ''; }
+            if ((h + 1) % 16 === 0) { out.push(line); line = '    '; }
           }
-          if (line) console.warn('    ' + line);
-          console.warn(`  Walker dispatch history (last ${Math.min(64, memX._walkerRingIdx)} events):`);
+          if (line.trim()) out.push(line);
+          out.push(`  Walker dispatch history (last ${Math.min(64, memX._walkerRingIdx)} events):`);
           const n = Math.min(64, memX._walkerRingIdx);
           for (let h = 0; h < n; h++) {
             const idx = (memX._walkerRingIdx - n + h) & 63;
-            console.warn(`    ${memX._walkerRing[idx] || '(empty)'}`);
+            out.push(`    ${memX._walkerRing[idx] || '(empty)'}`);
           }
-          // Stack near ESP so we can see call frames
           const esp = cpu.reg[4] >>> 0;
           const ssBase = cpu.segBase(cpu.ss);
-          console.warn(`  SS:ESP = ${cpu.ss.toString(16)}:${esp.toString(16)} (lin 0x${((ssBase + (esp & 0xFFFF)) >>> 0).toString(16)}):`);
-          let sline = '';
+          out.push(`  SS:ESP = ${cpu.ss.toString(16)}:${esp.toString(16)} (lin 0x${((ssBase + (esp & 0xFFFF)) >>> 0).toString(16)}):`);
+          let sline = '    ';
           for (let s = 0; s < 16; s++) {
             const addr = (ssBase + ((esp + s * 2) & 0xFFFF)) >>> 0;
             sline += `[+${(s*2).toString(16)}]=${cpu.mem.readU16(addr).toString(16).padStart(4,'0')} `;
-            if ((s+1) % 8 === 0) { console.warn('    ' + sline); sline = ''; }
+            if ((s+1) % 8 === 0) { out.push(sline); sline = '    '; }
           }
+          out.push(`  Chain table entries [0..4]:`);
+          for (let i = 0; i < 5; i++) {
+            const a = 0x2eef0 + i * 8;
+            out.push(`    entry[${i}] type=${cpu.mem.readU8(a)} next=${cpu.mem.readU8(a+1)} off=0x${cpu.mem.readU32(a+2).toString(16)} sel=0x${cpu.mem.readU16(a+6).toString(16)}`);
+          }
+          console.log(out.join('\n'));
         }
       }
     }
