@@ -1165,36 +1165,10 @@ export function emuTick(emu: Emulator): void {
     if (!emu._eipHistory) { emu._eipHistory = new Uint32Array(64); emu._eipHistIdx = 0; }
     emu._eipHistory[emu._eipHistIdx & 63] = eip;
     emu._eipHistIdx++;
-    // Runaway-loop safety net: a tight loop that runs for >10M cpusteps without
-    // escaping is almost certainly an unbounded DEC/JNE where the counter wrapped
-    // past 0 (common cause: function called with uninitialized count arg).
-    // Threshold is high enough that legitimate spin-waits (e.g. `while (tic <
-    // target)`) don't trigger — PIT-IRQ normally unblocks those well under the
-    // limit. Halting here gives a clearer diagnostic than waiting for the
-    // runaway loop to corrupt code bytes and trip #UD on garbage.
-    if ((emu._pitInsnCount & 0x3FFFF) === 0) { // check every 256K insns
-      const histLen = Math.min(32, emu._eipHistIdx);
-      if (histLen === 32) {
-        let lo = 0xFFFFFFFF, hi = 0;
-        for (let h = 0; h < 32; h++) {
-          const e = emu._eipHistory[(emu._eipHistIdx - 1 - h) & 63] >>> 0;
-          if (e < lo) lo = e;
-          if (e > hi) hi = e;
-        }
-        if ((hi - lo) <= 32) {
-          emu._tightLoopCount = (emu._tightLoopCount || 0) + 0x40000;
-          if (emu._tightLoopCount > 10_000_000) {
-            const bytes: string[] = [];
-            for (let b = 0; b < 16; b++) bytes.push(emu.memory.readU8((lo + b) >>> 0).toString(16).padStart(2, '0'));
-            console.warn(`[TIGHT-LOOP] CPU stuck in ${(hi-lo)}-byte range at 0x${lo.toString(16)}..0x${hi.toString(16)} for >${emu._tightLoopCount} insns. Bytes: ${bytes.join(' ')}. Halting to prevent memory corruption.`);
-            emu.cpu.halted = true;
-            emu.cpu.haltReason = `runaway tight loop at 0x${lo.toString(16)}`;
-          }
-        } else {
-          emu._tightLoopCount = 0;
-        }
-      }
-    }
+    // (Tight-loop detector removed — produced false positives on legitimate
+    // demo scroll loops (Second Reality) and VBL waits. The original DOOM
+    // mixer corruption it was designed to catch is now prevented upstream
+    // by the proper SB Pro mixer register implementation.)
     try {
       emu.cpu.step();
     } catch (e) {
