@@ -484,18 +484,21 @@ export class GUS {
       }
     }
 
-    // Update the DMA address register with the post-transfer position and
-    // capture the 4-bit remainder so the next transfer lines up correctly.
-    const newFlatAddr = ((startGusAddr + byteCount) & 0xFFFFF);
-    this.dmaAddrNibble = newFlatAddr & 0x0F;
-    // Reverse the address transform to store back into dma_addr.
-    let newAdjusted = (newFlatAddr >> 4) & 0xFFFF;
+    // Update the DMA address register with the post-transfer position.
+    // Matches DOSBox UpdateDmaAddr (gus.cpp:638): for 8-bit, the paragraph
+    // address is (offset & 0xFFFF0) >> 4 and the nibble is zero; for 16-bit,
+    // the non-linear transform is (upper | (lower >> 1)).
+    const newOffset = (startGusAddr + byteCount) & 0xFFFFF;
+    let adjusted: number;
     if (xfer16) {
-      const upper = newAdjusted & 0xC000;
-      const lower = (newAdjusted & 0x3FFE) >> 1;
-      newAdjusted = (upper | lower) & 0xFFFF;
+      const upper = newOffset & 0xC0000;
+      const lower = newOffset & 0x3FFFE;
+      adjusted = upper | (lower >>> 1);
+    } else {
+      adjusted = newOffset & 0xFFFF0;
     }
-    this.dmaAddr = newAdjusted;
+    this.dmaAddr = (adjusted >>> 4) & 0xFFFF;
+    this.dmaAddrNibble = adjusted & 0xF;
 
     // Set terminal count flag. Bit 6 on read of reg 0x41 means "TC IRQ
     // pending" (separate from the "samples are 16-bit" write meaning we
