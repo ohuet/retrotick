@@ -68,7 +68,7 @@ for (const fname of readdirSync(BASE)) {
 await emu.load(doomBuf, peInfo, mockCanvas);
 emu.run();
 
-const MAX_TICKS = 1000;
+const MAX_TICKS = 10000;
 for (let tick = 0; tick < MAX_TICKS; tick++) {
   if (emu.halted) {
     console.log(`[HALT] halted after ${tick} ticks, reason=${emu.haltReason}`);

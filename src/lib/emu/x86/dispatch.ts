@@ -277,26 +277,29 @@ export function cpuStep(cpu: CPU): void {
           const eax = cpu.reg[0] >>> 0;
           memX._walkerRing[memX._walkerRingIdx & 63] = `  DISPATCH sel:off = ${edx.toString(16)}:${eax.toString(16)} (from DI=0x${(cpu.reg[7]>>>0).toString(16)})`;
           memX._walkerRingIdx++;
-          // MITIGATION — walker about to dispatch the 1001-error thunk
+          // MITIGATION — walker about to RETFD into the 1001-error thunk
           // (entry[0] of DOS/4GW's chain table). That means we arrived here
           // with DI=0, because the caller at cs=1569:0x0d77 reads a chain
           // head byte from the ISR frame ([SI+0x38]) which is the high word
           // of EFLAGS popped at cs=1569:0x5f5 — always 0 in normal PM. On a
           // real machine this produces the same DI=0, yet DOOM works; there
           // must be a subtler state-init difference we haven't isolated.
-          // Workaround: redirect the dispatch to our safe terminator stub
-          // (0x38:0x700 = XOR EAX, EAX; RETF) so the handler "returns"
-          // EAX=0 and the walker takes its normal success exit at 0x0c50.
-          // No other walker dispatch is affected — only the exact (sel:off)
-          // match of the 1001-error thunk.
+          // Workaround: patch the stack (not the registers) so RETFD jumps
+          // to our safe terminator stub (XOR EAX,EAX; RETF). The walker at
+          // 0x0c34/0x0c36 already did PUSH EDX / PUSH EAX (32-bit via 66h),
+          // so modifying reg[2]/reg[0] now has no effect — RETFD pops IP
+          // from [ESP] and CS from [ESP+4]. We overwrite those instead.
           if (edx === 0x1569 && eax === 0x0f68) {
             const termSel = memX._dpmiTerminatorSel || 0x38;
             const termOff = memX._dpmiTerminatorOff || 0x700;
-            cpu.reg[2] = termSel;
-            cpu.reg[0] = termOff;
+            const esp = cpu.reg[4] >>> 0;
+            const ssBase = cpu.segBase(cpu.ss);
+            const stackLin = (ssBase + (esp & 0xFFFF)) >>> 0;
+            cpu.mem.writeU32(stackLin, termOff);
+            cpu.mem.writeU32((stackLin + 4) >>> 0, termSel);
             if (!memX._1001AvoidLogged) {
               memX._1001AvoidLogged = true;
-              console.log(`[1001-AVOID] chain walker would dispatch cs=1569:0x0f68 (1001-error thunk). Redirecting to safe terminator stub ${termSel.toString(16)}:${termOff.toString(16)} at step ${(cpu.emu as any).cpuSteps}. Further redirects (if any) will not log.`);
+              console.log(`[1001-AVOID] chain walker would dispatch cs=1569:0x0f68 (1001-error thunk). Patched stack at SS:SP=${cpu.ss.toString(16)}:${(esp&0xFFFF).toString(16)} (lin 0x${stackLin.toString(16)}) to redirect RETFD to safe terminator ${termSel.toString(16)}:${termOff.toString(16)} at step ${(cpu.emu as any).cpuSteps}. Further redirects (if any) will not log.`);
             }
           }
         } else if (off === 0x0c45) {
