@@ -647,7 +647,7 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           cpu.ss = 0;
           cpu.ds = 0;
           cpu.es = 0;
-          cpu.fs = 0;
+          cpu.loadFS(0);
           cpu.gs = 0;
           cpu.eip = (cpu.segBase(newCS) + newEIP) >>> 0;
           // Clear IF, VM, NT; set IOPL=3
@@ -750,7 +750,7 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       cpu.ds = newDS;
       cpu.es = newES;
       cpu.ss = newSS;
-      cpu.fs = newFS;
+      cpu.loadFS(newFS);
       cpu.gs = newGS;
       cpu.reg[ESP] = newESP;
       cpu.eip = ((newCS * 16) + (newEIP & 0xFFFF)) >>> 0;

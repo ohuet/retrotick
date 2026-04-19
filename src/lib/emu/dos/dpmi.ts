@@ -262,7 +262,7 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
   cpu.ds = 0x10;
   cpu.es = 0x20;      // PSP selector (base = PSP * 16)
   cpu.ss = 0x18;
-  cpu.fs = 0;
+  cpu.loadFS(0);
   cpu.gs = 0;
 
   // ESP stays as the 16-bit SP (initial code is always 16-bit)
@@ -915,7 +915,7 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
   cpu.ds = savedDS;
   cpu.es = savedES;
   cpu.ss = savedSS;
-  cpu.fs = savedFS;
+  cpu.loadFS(savedFS);
   cpu.gs = savedGS;
   cpu.eip = asyncPending ? (savedEIP - 2) >>> 0 : savedEIP;
   cpu.realMode = savedRealMode;

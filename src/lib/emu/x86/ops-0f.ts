@@ -73,7 +73,7 @@ export function exec0F(
         cpu.reg[d.regField] = offset;
       }
       if (op2 === 0xB2) cpu.ss = selector;
-      else if (op2 === 0xB4) cpu.fs = selector;
+      else if (op2 === 0xB4) cpu.loadFS(selector);
       else cpu.gs = selector;
       break;
     }

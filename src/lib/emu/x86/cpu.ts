@@ -165,6 +165,14 @@ export class CPU {
     }
   }
 
+  /** Load FS and refresh cached fsBase. In real mode fsBase = sel*16;
+   *  in protected mode it comes from the GDT descriptor. */
+  loadFS(selector: number): void {
+    this.fs = selector & 0xFFFF;
+    if (this.realMode) this.fsBase = (this.fs * 16) >>> 0;
+    else this.fsBase = this.segBase(this.fs);
+  }
+
   /** Get linear base address for a segment selector */
   segBase(sel: number): number {
     if (this.realMode) {

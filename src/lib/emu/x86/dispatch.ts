@@ -1084,7 +1084,7 @@ export function cpuStep(cpu: CPU): void {
         case 1: cpu.loadCS(sel); break;
         case 2: cpu.ss = sel; cpu._inhibitTF = true; cpu._inhibitIRQ = true; break; // MOV SS suppresses TF + IRQ
         case 3: cpu.ds = sel; break;
-        case 4: cpu.fs = sel; break;
+        case 4: cpu.loadFS(sel); break;
         case 5: cpu.gs = sel; break;
       }
       break;
@@ -1589,7 +1589,7 @@ export function cpuStep(cpu: CPU): void {
           cpu.ds = newDS;
           cpu.es = newES;
           cpu.ss = newSS;
-          cpu.fs = newFS;
+          cpu.loadFS(newFS);
           cpu.gs = newGS;
           cpu.reg[ESP] = newESP;
           cpu.eip = (cs2 * 16 + eip2) >>> 0;
