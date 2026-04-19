@@ -95,6 +95,7 @@ export class GUS {
   private dmaAddr = 0;       // DMA address register (GUS RAM target)
   private dmaAddrNibble = 0; // 4-bit remainder for 16-bit DMA alignment
   private dmaPending = false; // DMA transfer pending
+  private sampleCtrl = 0;    // reg 0x49 — DMA sampling control
   /** Play-DMA channel (default 1; parsed from ULTRASND at load time).
    *  A channel >= 4 enables the 16-bit non-linear dma_addr transform. */
   dmaChannel = 1;
@@ -259,6 +260,7 @@ export class GUS {
       }
       case 0x42: return this.dmaAddr;
       case 0x45: return this.timerCtrl << 8;
+      case 0x49: return this.dmaCtrl << 8; // DOSBox mirrors dma_control_register
       case 0x4C: return this.resetReg << 8;
       case 0x8F: { // Voice IRQ status — matches DOSBox gus.cpp:982-994.
         // Bit layout: low 5 bits = current voice index, bit 5 always set,
@@ -338,6 +340,10 @@ export class GUS {
         return;
       case 0x47: // Timer 2
         this.timer2Value = hi;
+        return;
+      case 0x49: // DMA sampling control (DOSBox gus.cpp:1386)
+        this.sampleCtrl = hi;
+        if (hi & 0x01) this.startDma();
         return;
       case 0x4C: // Reset
         this.resetReg = hi;
@@ -449,24 +455,24 @@ export class GUS {
     let gusAddr = this.getDmaOffset();
     const startGusAddr = gusAddr;
 
-    // For a 16-bit DMA channel, the host counter is in words; bytes = words*2.
-    const wordCount = (this.dma.currentCount[ch] + 1) & 0xFFFF;
-    const byteCount = xfer16 ? wordCount * 2 : wordCount;
-
-    for (let i = 0; i < byteCount; i++) {
+    // The DMA controller's count is in transfer units (bytes on an 8-bit
+    // channel, words on a 16-bit channel). getPhysicalAddr already reflects
+    // the per-transfer address; each iteration moves one byte into GUS RAM
+    // for 8-bit channels, or one byte of the current word for 16-bit. The
+    // 16-bit path (dmaChannel >= 4) isn't exercised by typical ULTRASND
+    // configs (DMA=1) but the scaffolding is here for completeness.
+    const count = (this.dma.currentCount[ch] + 1) & 0xFFFF;
+    const bytesPerUnit = xfer16 ? 2 : 1;
+    for (let i = 0; i < count; i++) {
       const physAddr = this.dma.getPhysicalAddr(ch);
-      const byte = this.readMemory(physAddr);
-      this.ram[gusAddr & 0xFFFFF] = byte;
-      gusAddr++;
-      // 16-bit DMA channels advance the host address by 2 per word; 8-bit
-      // channels advance by 1 per byte. We advance by bytes here but the
-      // hardware counter on a 16-bit channel is in words, so we only tick it
-      // once per pair.
-      if (!xfer16 || (i & 1)) {
-        this.dma.currentAddr[ch] = (this.dma.currentAddr[ch] + (xfer16 ? 2 : 1)) & 0xFFFF;
-        this.dma.currentCount[ch] = (this.dma.currentCount[ch] - 1) & 0xFFFF;
+      for (let b = 0; b < bytesPerUnit; b++) {
+        this.ram[gusAddr & 0xFFFFF] = this.readMemory(physAddr + b);
+        gusAddr++;
       }
+      this.dma.currentAddr[ch] = (this.dma.currentAddr[ch] + bytesPerUnit) & 0xFFFF;
+      this.dma.currentCount[ch] = (this.dma.currentCount[ch] - 1) & 0xFFFF;
     }
+    const byteCount = count * bytesPerUnit;
 
     if (invertMsb) {
       const skip = is16bitSamples ? 2 : 1;
@@ -709,19 +715,38 @@ export class GUS {
 
   // ── Reset ───────────────────────────────────────────────────────
 
+  /** Matches DOSBox Gus::Reset (gus.cpp:1082-1118). */
   private reset(): void {
+    this.irqStatus = 0;
+    this.dmaCtrl = 0;
+    this.dmaTcIrqPending = false;
+    this.dmaAddrNibble = 0;
+    this.sampleCtrl = 0;
+    this.timerCtrl = 0;
+    this.timer1Value = 0;
+    this.timer2Value = 0;
+    this.timer1Count = 0;
+    this.timer2Count = 0;
+
+    // ResetCtrls: DOSBox writes wave.state and vol.state to 0x1 (RESET bit)
     for (const v of this.voices) {
-      v.wave.state = CTRL_STOPPED;
+      v.wave.state = CTRL_RESET;
       v.wave.pos = v.wave.start = v.wave.end = v.wave.inc = 0;
-      v.vol.state = CTRL_STOPPED;
+      v.vol.state = CTRL_RESET;
       v.vol.pos = v.vol.start = v.vol.end = v.vol.inc = 0;
       v.pan = 7;
+      v.volRate = 0;
     }
-    this.irqStatus = 0;
     this.voiceIrqWave = 0;
     this.voiceIrqVol = 0;
     this.voiceIrqStatus = 0;
-    this.dmaTcIrqPending = false;
+
+    this.voiceIndex = 0;
+    this.activeVoiceCount = 14;
+    this.dmaAddr = 0;
+    this.dramAddr = 0;
+    this.registerData = 0;
+    this.selectedRegister = 0;
   }
 }
 
