@@ -86,14 +86,25 @@ export class GUS {
   private dramAddr = 0;
 
   // DMA state
-  private dmaCtrl = 0;       // DMA control register
+  //   dmaCtrl bits (write meaning): 0=enable, 1=direction, 2=channel-16bit,
+  //     3-4=rate, 5=want-IRQ-on-TC, 6=samples-are-16bit, 7=invert-MSB
+  //   On read, bit 6 instead reports "TC IRQ pending" — we track that
+  //   separately (dmaTcIrqPending) and OR it in on read.
+  private dmaCtrl = 0;
+  private dmaTcIrqPending = false;
   private dmaAddr = 0;       // DMA address register (GUS RAM target)
+  private dmaAddrNibble = 0; // 4-bit remainder for 16-bit DMA alignment
   private dmaPending = false; // DMA transfer pending
+  /** Play-DMA channel (default 1; parsed from ULTRASND at load time).
+   *  A channel >= 4 enables the 16-bit non-linear dma_addr transform. */
+  dmaChannel = 1;
 
-  // IRQ state
+  // IRQ state — bit layout of irqStatus matches DOSBox:
+  //   0x04 Timer 1, 0x08 Timer 2, 0x20 voice wave IRQ, 0x40 voice vol IRQ, 0x80 DMA TC
   private irqStatus = 0;
-  private voiceIrqWave = 0;  // bitmask of voices with pending wave IRQ
-  private voiceIrqVol = 0;   // bitmask of voices with pending vol IRQ
+  private voiceIrqWave = 0;   // per-voice bitmask of pending wave IRQ
+  private voiceIrqVol = 0;    // per-voice bitmask of pending vol IRQ
+  private voiceIrqStatus = 0; // rotating voice index reported via reg 0x8F
 
   // Timer state
   private timerCtrl = 0;
@@ -188,18 +199,14 @@ export class GUS {
       case 0x102: // Voice select
         this.voiceIndex = value & 0x1F;
         break;
-      case 0x103: // Register select
+      case 0x103: // Register select — DOSBox clears registerData here
         this.selectedRegister = value;
+        this.registerData = 0;
         break;
-      case 0x104: // Register data — word or low byte
-        if (value > 0xFF) {
-          // Word write (from OUTSW or direct 16-bit access): full value, trigger
-          this.registerData = value & 0xFFFF;
-          this.writeRegister();
-        } else {
-          // Byte write (from OUT DX,AX split): store low byte, wait for high byte
-          this.registerData = (this.registerData & 0xFF00) | (value & 0xFF);
-        }
+      case 0x104: // Register data low byte — waits for high byte at 0x105.
+        // DOSBox zeroes the high byte here (gus.cpp:1282). Word writes are
+        // routed through portWrite16 so they never reach this byte path.
+        this.registerData = value & 0xFF;
         break;
       case 0x105: // Register data high byte — triggers register write
         this.registerData = (this.registerData & 0x00FF) | ((value & 0xFF) << 8);
@@ -211,17 +218,29 @@ export class GUS {
     }
   }
 
-  /** Handle 16-bit port write (OUT DX, AX) */
+  /** Handle an atomic 16-bit port write (OUT DX,AX / OUTSW).
+   *  Port 0x304/0x344 is the register-data port — a word write stores the
+   *  full 16-bit payload and triggers WriteToRegister in one shot (matches
+   *  DOSBox gus.cpp:1278). Any other port falls back to two byte writes. */
   portWrite16(port: number, value: number): void {
-    const off = port < 0x300 ? port - 0x200 : port - 0x300 + 0x100;
+    const off = port < 0x300 ? port - 0x240 : port - 0x340 + 0x100;
     if (off === 0x104) {
       this.registerData = value & 0xFFFF;
       this.writeRegister();
-    } else {
-      // Split into two byte writes
-      this.portWrite(port, value & 0xFF);
-      this.portWrite(port + 1, (value >> 8) & 0xFF);
+      return;
     }
+    this.portWrite(port, value & 0xFF);
+    this.portWrite((port + 1) & 0xFFFF, (value >> 8) & 0xFF);
+  }
+
+  /** Handle an atomic 16-bit port read (IN AX,DX / INSW).
+   *  Port 0x304/0x344 returns ReadFromRegister's 16-bit payload directly. */
+  portRead16(port: number): number {
+    const off = port < 0x300 ? port - 0x240 : port - 0x340 + 0x100;
+    if (off === 0x104) return this.readRegister() & 0xFFFF;
+    const lo = this.portRead(port) & 0xFF;
+    const hi = this.portRead((port + 1) & 0xFFFF) & 0xFF;
+    return ((hi << 8) | lo) & 0xFFFF;
   }
 
   // ── Register read/write ─────────────────────────────────────────
@@ -230,9 +249,10 @@ export class GUS {
     const v = this.target;
     switch (this.selectedRegister) {
       // General registers
-      case 0x41: { // DMA control — read acknowledges DMA IRQ
-        const r = this.dmaCtrl;
-        this.dmaCtrl &= ~0x40; // clear TC IRQ pending
+      case 0x41: { // DMA control — read acknowledges DMA IRQ.
+        // Bit 6 on read = TC-IRQ-pending (different meaning than write).
+        const r = (this.dmaCtrl & ~0x40) | (this.dmaTcIrqPending ? 0x40 : 0);
+        this.dmaTcIrqPending = false;
         this.irqStatus &= 0x7F;
         this.checkIrq();
         return r << 8;
@@ -240,43 +260,44 @@ export class GUS {
       case 0x42: return this.dmaAddr;
       case 0x45: return this.timerCtrl << 8;
       case 0x4C: return this.resetReg << 8;
-      case 0x8F: { // Voice IRQ status
-        let status = 0x20; // bit 5 always set
-        // Find first voice with pending IRQ
-        for (let i = 0; i < this.activeVoiceCount; i++) {
-          if (this.voiceIrqWave & (1 << i)) {
-            status = i | 0x20 | 0x80; // wave IRQ
-            this.voiceIrqWave &= ~(1 << i);
-            break;
-          }
-          if (this.voiceIrqVol & (1 << i)) {
-            status = i | 0x20 | 0x40; // vol IRQ
-            this.voiceIrqVol &= ~(1 << i);
-            break;
-          }
-        }
-        if (!this.voiceIrqWave && !this.voiceIrqVol) {
-          this.irqStatus &= ~0x20;
-          this.checkIrq();
-        }
-        return status << 8;
+      case 0x8F: { // Voice IRQ status — matches DOSBox gus.cpp:982-994.
+        // Bit layout: low 5 bits = current voice index, bit 5 always set,
+        // bit 6 SET if no vol IRQ for that voice, bit 7 SET if no wave IRQ.
+        // (Inverted — bit clear means IRQ pending.)
+        let reg = this.voiceIrqStatus | 0x20;
+        const mask = 1 << this.voiceIrqStatus;
+        if (!(this.voiceIrqVol & mask)) reg |= 0x40;
+        if (!(this.voiceIrqWave & mask)) reg |= 0x80;
+        this.voiceIrqVol &= ~mask;
+        this.voiceIrqWave &= ~mask;
+        this.checkVoiceIrq();
+        return reg << 8;
       }
 
-      // Voice registers (read-back)
-      case 0x80: return v ? (v.wave.state << 8) : 0x0300;
+      // Voice registers (read-back). Bit 7 echoes this voice's bit in
+      // voiceIrqWave — matches DOSBox Voice::ReadCtrlState (gus.cpp:200-206).
+      case 0x80: {
+        if (!v) return 0x0300;
+        const bit7 = this.voiceIrqWave & (1 << this.voiceIndex) ? 0x80 : 0;
+        return (v.wave.state | bit7) << 8;
+      }
       case 0x82: return v ? (v.wave.start >> 16) : 0;
       case 0x83: return v ? (v.wave.start & 0xFFFF) : 0;
       case 0x84: return v ? (v.wave.end >> 16) : 0;
       case 0x85: return v ? (v.wave.end & 0xFFFF) : 0;
-      case 0x89: { // Current volume
+      case 0x89: { // Current volume — DOSBox uses ceil_sdivide (gus.cpp:1018)
         if (!v) return 0;
         const i = Math.max(0, Math.min(VOLUME_LEVELS - 1,
-          Math.floor(v.vol.pos / VOLUME_INC_SCALAR)));
+          Math.ceil(v.vol.pos / VOLUME_INC_SCALAR)));
         return i << 4;
       }
       case 0x8A: return v ? (v.wave.pos >> 16) : 0;
       case 0x8B: return v ? (v.wave.pos & 0xFFFF) : 0;
-      case 0x8D: return v ? (v.vol.state << 8) : 0x0300;
+      case 0x8D: {
+        if (!v) return 0x0300;
+        const bit7 = this.voiceIrqVol & (1 << this.voiceIndex) ? 0x80 : 0;
+        return (v.vol.state | bit7) << 8;
+      }
       default: return this.registerData;
     }
   }
@@ -296,8 +317,9 @@ export class GUS {
         this.dmaCtrl = hi;
         if (hi & 0x01) this.startDma();
         return;
-      case 0x42: // DMA address
+      case 0x42: // DMA address — invalidate nibble alignment (DOSBox gus.cpp:1354)
         this.dmaAddr = data;
+        this.dmaAddrNibble = 0;
         return;
       case 0x43: // DRAM address LSW
         this.dramAddr = (this.dramAddr & 0xF0000) | data;
@@ -326,9 +348,14 @@ export class GUS {
     // Voice-specific registers
     if (!v) return;
     switch (this.selectedRegister) {
-      case 0x00: // Wave control
+      case 0x00: { // Wave control — matches DOSBox UpdateCtrlState
+        const mask = 1 << this.voiceIndex;
+        if ((hi & 0xA0) === 0xA0) this.voiceIrqWave |= mask;
+        else this.voiceIrqWave &= ~mask;
         v.wave.state = hi & 0x7F;
+        this.checkVoiceIrq();
         break;
+      }
       case 0x01: // Wave rate (frequency control word)
         // DOSBox: inc = ceil(val/2). The /2 accounts for the GUS internal
         // position counter being half-rate relative to the FC register value.
@@ -365,12 +392,17 @@ export class GUS {
       case 0x0B: // Wave position LSW
         v.wave.pos = (v.wave.pos & 0xFFFF0000) | data;
         break;
-      case 0x0C: // Pan
-        v.pan = hi & 0x0F;
+      case 0x0C: // Pan — DOSBox saturates at 15 instead of masking
+        v.pan = hi > 15 ? 15 : hi;
         break;
-      case 0x0D: // Volume control
+      case 0x0D: { // Volume control — matches DOSBox UpdateCtrlState
+        const mask = 1 << this.voiceIndex;
+        if ((hi & 0xA0) === 0xA0) this.voiceIrqVol |= mask;
+        else this.voiceIrqVol &= ~mask;
         v.vol.state = hi & 0x7F;
+        this.checkVoiceIrq();
         break;
+      }
     }
   }
 
@@ -380,33 +412,94 @@ export class GUS {
 
   setDma(dma: DMAController): void { this.dma = dma; }
 
-  private startDma(): void {
-    if (!this.dma || !this.dma.isActive(1)) return;
+  /** True when the DMA transfer uses the non-linear 16-bit address layout.
+   *  Matches DOSBox IsDmaXfer16Bit: requires both dmaCtrl bit 2 (channel-
+   *  16bit) AND the play-DMA channel >= 4. */
+  private isDmaXfer16Bit(): boolean {
+    return !!(this.dmaCtrl & 0x04) && this.dmaChannel >= 4;
+  }
 
-    // Transfer from host memory to GUS RAM
-    const isUpload = !(this.dmaCtrl & 0x02); // bit 1 = direction (0=host→GUS)
+  /** Compute the 20-bit GUS RAM offset for the current DMA transfer.
+   *  Mirrors DOSBox Gus::GetDmaOffset (gus.cpp:624-654). */
+  private getDmaOffset(): number {
+    let adjusted = this.dmaAddr & 0xFFFF;
+    if (this.isDmaXfer16Bit()) {
+      const upper = adjusted & 0xC000; // bits 14-15
+      const lower = adjusted & 0x1FFF; // bits 0-12
+      adjusted = (upper | (lower << 1)) & 0xFFFF;
+    }
+    return ((adjusted << 4) + this.dmaAddrNibble) & 0xFFFFF;
+  }
+
+  private startDma(): void {
+    const ch = this.dmaChannel;
+    if (!this.dma || !this.dma.isActive(ch)) return;
+
+    // DMA control register bit layout (matches DOSBox DmaControlRegister):
+    //   bit 1 = direction (0=host→GUS, 1=GUS→host)
+    //   bit 2 = is_channel_16bit (gates the non-linear address transform)
+    //   bit 6 = are_samples_16bit (write-only; read reports TC-IRQ-pending)
+    //   bit 7 = are_samples_high_bit_inverted (XOR 0x80 on the high byte only)
+    const isUpload = !(this.dmaCtrl & 0x02);
     if (!isUpload) return; // recording not supported
 
-    const invertMsb = !!(this.dmaCtrl & 0x80); // bit 7 = invert MSB (unsigned→signed)
-    let gusAddr = (this.dmaAddr << 4) & 0xFFFFF; // 20-bit GUS RAM address
+    const invertMsb = !!(this.dmaCtrl & 0x80);
+    const is16bitSamples = !!(this.dmaCtrl & 0x40);
+    const xfer16 = this.isDmaXfer16Bit();
+    let gusAddr = this.getDmaOffset();
+    const startGusAddr = gusAddr;
 
-    // Transfer up to DMA count+1 bytes
-    const count = this.dma.currentCount[1] + 1;
-    for (let i = 0; i < count; i++) {
-      const physAddr = this.dma.getPhysicalAddr(1);
-      let byte = this.readMemory(physAddr);
-      if (invertMsb) byte ^= 0x80;
+    // For a 16-bit DMA channel, the host counter is in words; bytes = words*2.
+    const wordCount = (this.dma.currentCount[ch] + 1) & 0xFFFF;
+    const byteCount = xfer16 ? wordCount * 2 : wordCount;
+
+    for (let i = 0; i < byteCount; i++) {
+      const physAddr = this.dma.getPhysicalAddr(ch);
+      const byte = this.readMemory(physAddr);
       this.ram[gusAddr & 0xFFFFF] = byte;
       gusAddr++;
-      this.dma.currentAddr[1] = (this.dma.currentAddr[1] + 1) & 0xFFFF;
-      this.dma.currentCount[1] = (this.dma.currentCount[1] - 1) & 0xFFFF;
+      // 16-bit DMA channels advance the host address by 2 per word; 8-bit
+      // channels advance by 1 per byte. We advance by bytes here but the
+      // hardware counter on a 16-bit channel is in words, so we only tick it
+      // once per pair.
+      if (!xfer16 || (i & 1)) {
+        this.dma.currentAddr[ch] = (this.dma.currentAddr[ch] + (xfer16 ? 2 : 1)) & 0xFFFF;
+        this.dma.currentCount[ch] = (this.dma.currentCount[ch] - 1) & 0xFFFF;
+      }
     }
 
-    // Set terminal count flag
-    this.dma.status |= 0x02;
-    this.dmaCtrl |= 0x40; // TC IRQ pending
-    this.irqStatus |= 0x80;
-    this.checkIrq();
+    if (invertMsb) {
+      const skip = is16bitSamples ? 2 : 1;
+      let p = startGusAddr + (is16bitSamples ? 1 : 0);
+      const end = startGusAddr + byteCount;
+      while (p < end) {
+        this.ram[p & 0xFFFFF] ^= 0x80;
+        p += skip;
+      }
+    }
+
+    // Update the DMA address register with the post-transfer position and
+    // capture the 4-bit remainder so the next transfer lines up correctly.
+    const newFlatAddr = ((startGusAddr + byteCount) & 0xFFFFF);
+    this.dmaAddrNibble = newFlatAddr & 0x0F;
+    // Reverse the address transform to store back into dma_addr.
+    let newAdjusted = (newFlatAddr >> 4) & 0xFFFF;
+    if (xfer16) {
+      const upper = newAdjusted & 0xC000;
+      const lower = (newAdjusted & 0x3FFE) >> 1;
+      newAdjusted = (upper | lower) & 0xFFFF;
+    }
+    this.dmaAddr = newAdjusted;
+
+    // Set terminal count flag. Bit 6 on read of reg 0x41 means "TC IRQ
+    // pending" (separate from the "samples are 16-bit" write meaning we
+    // stored in dmaCtrl itself).
+    this.dma.status |= 1 << ch;
+    this.dmaTcIrqPending = true;
+    if (this.dmaCtrl & 0x20) { // wants_irq_on_terminal_count
+      this.irqStatus |= 0x80;
+      this.checkIrq();
+    }
   }
 
   // ── Audio rendering ─────────────────────────────────────────────
@@ -418,77 +511,100 @@ export class GUS {
   private _gusAccum = 0;
   private _lastMixL = 0;
   private _lastMixR = 0;
+  /** Scratch buffers for voice-by-voice rendering at the GUS internal rate. */
+  private _tickL = new Float32Array(0);
+  private _tickR = new Float32Array(0);
 
 
-  /** Read a sample from GUS RAM — matches DOSBox's GetSample exactly */
+  /** Read an 8-bit sample scaled into 16-bit range (matches DOSBox Read8BitSample) */
+  private read8Bit(addr: number): number {
+    const b = this.ram[addr & 0xFFFFF];
+    return (b > 127 ? b - 256 : b) * 256;
+  }
+
+  /** Read a 16-bit sample with GUS non-linear addressing (matches DOSBox Read16BitSample) */
+  private read16Bit(addr: number): number {
+    const upper = addr & 0xC0000;
+    const lower = addr & 0x1FFFF;
+    const i = (upper | (lower << 1)) & 0xFFFFF;
+    const w = (this.ram[(i + 1) & 0xFFFFF] << 8) | this.ram[i];
+    return w > 32767 ? w - 65536 : w;
+  }
+
+  /** Read a sample from GUS RAM with linear interpolation when inc < WAVE_FRACT.
+   *  Matches DOSBox's Voice::GetSample (gus.cpp:118-139). */
   private getSample(v: GusVoice): number {
     const pos = v.wave.pos;
     const addr = (pos >> WAVE_FRACT_BITS) | 0;
+    const fraction = pos & (WAVE_FRACT - 1);
+    const shouldInterpolate = v.wave.inc < WAVE_FRACT && fraction !== 0;
     const is16bit = !!(v.wave.state & CTRL_16BIT);
 
-    let sample: number;
-    if (is16bit) {
-      // 16-bit: non-linear GUS addressing (upper 2 bits + lower 17 bits shifted)
-      const upper = addr & 0xC0000;
-      const lower = addr & 0x1FFFF;
-      const i = (upper | (lower << 1)) & 0xFFFFF;
-      const lo = this.ram[i];
-      const hi = this.ram[(i + 1) & 0xFFFFF];
-      const w = (hi << 8) | lo;
-      sample = w > 32767 ? w - 65536 : w; // signed int16
-    } else {
-      // 8-bit: direct addressing, scale to 16-bit range (like DOSBox: int8 * 256)
-      const i = addr & 0xFFFFF;
-      const b = this.ram[i];
-      sample = (b > 127 ? b - 256 : b) * 256; // signed int8 → int16 range
+    let sample = is16bit ? this.read16Bit(addr) : this.read8Bit(addr);
+    if (shouldInterpolate) {
+      const nextSample = is16bit ? this.read16Bit(addr + 1) : this.read8Bit(addr + 1);
+      sample += (nextSample - sample) * fraction / WAVE_FRACT;
     }
     return sample;
   }
 
   /** Render mixed GUS audio into stereo buffers (additive).
-   *  DOSBox renders at the GUS internal rate (depends on voice count), then
-   *  upsamples to 44.1kHz via zero-order hold. We replicate this: advance
-   *  voices at the internal rate using unscaled inc, hold the last mix for
-   *  output samples that fall between GUS ticks. */
+   *  DOSBox renders frame-by-frame at the GUS internal rate voice-by-voice
+   *  (`Voice::RenderFrames` emits all frames of one voice before moving on),
+   *  then the mixer resamples to the output device. We replicate that: first
+   *  accumulate every active voice's contribution into GUS-rate tick buffers,
+   *  then ZOH-upsample those ticks into the output buffer. */
   renderSamples(outL: Float32Array, outR: Float32Array, count: number): void {
     if (!(this.resetReg & 0x01) || !(this.resetReg & 0x02)) return;
 
-    // GUS internal rate depends on active voice count (DOSBox: ifloor)
     const gusRate = Math.floor(1000000 / (1.619695497 * this.activeVoiceCount));
-    const step = gusRate / this.outputRate; // GUS ticks per output sample
+    const step = gusRate / this.outputRate;
 
-    for (let s = 0; s < count; s++) {
-      this._gusAccum += step;
+    // Count the GUS ticks that will fire during this output block.
+    const accumEnd = this._gusAccum + count * step;
+    const totalTicks = Math.floor(accumEnd);
 
-      // Process GUS internal ticks (usually 0 or 1 per output sample)
-      while (this._gusAccum >= 1.0) {
-        this._gusAccum -= 1.0;
+    if (totalTicks > 0) {
+      if (this._tickL.length < totalTicks) {
+        this._tickL = new Float32Array(totalTicks);
+        this._tickR = new Float32Array(totalTicks);
+      } else {
+        this._tickL.fill(0, 0, totalTicks);
+        this._tickR.fill(0, 0, totalTicks);
+      }
 
-        let mixL = 0, mixR = 0;
-        for (let vi = 0; vi < this.activeVoiceCount; vi++) {
-          const v = this.voices[vi];
-          if (v.wave.state & v.vol.state & CTRL_DISABLED) continue;
+      // Voice-by-voice: all frames of one voice before the next.
+      for (let vi = 0; vi < this.activeVoiceCount; vi++) {
+        const v = this.voices[vi];
+        if (v.wave.state & v.vol.state & CTRL_DISABLED) continue;
+        const panL = PAN_LEFT[v.pan];
+        const panR = PAN_RIGHT[v.pan];
+        const waveRollover = !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
 
+        for (let t = 0; t < totalTicks; t++) {
           const sample = this.getSample(v);
           const volIdx = Math.max(0, Math.min(VOLUME_LEVELS - 1,
             Math.ceil(v.vol.pos / VOLUME_INC_SCALAR)));
-          const vol = VOL_SCALARS[volIdx];
-          const s1 = (sample / 32768) * vol;
-          mixL += s1 * PAN_LEFT[v.pan];
-          mixR += s1 * PAN_RIGHT[v.pan];
-
-          // Advance wave and volume with original unscaled inc (like DOSBox)
-          const waveRollover = !!(v.vol.state & CTRL_16BIT) && !(v.wave.state & CTRL_LOOP);
+          const s1 = (sample / 32768) * VOL_SCALARS[volIdx];
+          this._tickL[t] += s1 * panL;
+          this._tickR[t] += s1 * panR;
           this.incrementCtrlPos(v.wave, vi, true, waveRollover);
           this.incrementCtrlPos(v.vol, vi, false, false);
+          if (v.wave.state & v.vol.state & CTRL_DISABLED) break;
         }
-
-        // Store last mix for ZOH output
-        this._lastMixL = mixL * 0.7071;
-        this._lastMixR = mixR * 0.7071;
       }
+    }
 
-      // Zero-order hold: output the last computed GUS sample
+    // ZOH upsample tick buffers into the output at the device rate.
+    let tickIdx = 0;
+    for (let s = 0; s < count; s++) {
+      this._gusAccum += step;
+      while (this._gusAccum >= 1.0 && tickIdx < totalTicks) {
+        this._gusAccum -= 1.0;
+        this._lastMixL = this._tickL[tickIdx] * 0.7071;
+        this._lastMixR = this._tickR[tickIdx] * 0.7071;
+        tickIdx++;
+      }
       outL[s] += this._lastMixL;
       outR[s] += this._lastMixR;
     }
@@ -514,8 +630,7 @@ export class GUS {
     if (ctrl.state & CTRL_IRQ) {
       if (isWave) this.voiceIrqWave |= (1 << voiceIdx);
       else this.voiceIrqVol |= (1 << voiceIdx);
-      this.irqStatus |= 0x20;
-      this.checkIrq();
+      this.checkVoiceIrq();
     }
 
     // Allow the current position to move beyond its limit (rollover)
@@ -565,10 +680,31 @@ export class GUS {
 
   // ── IRQ ─────────────────────────────────────────────────────────
 
-  private checkIrq(): void {
-    if (this.irqStatus & (this.resetReg & 0x04 ? 0xFF : 0x00)) {
-      this.onIRQ();
+  /** Recompute voice-IRQ bits in irqStatus and advance voiceIrqStatus to
+   *  the next voice with a pending IRQ. Matches DOSBox's CheckVoiceIrq. */
+  private checkVoiceIrq(): void {
+    this.irqStatus &= 0x9F; // clear voice wave (0x20) and vol (0x40) bits
+    const activeMask = this.activeVoiceCount >= 32 ? 0xFFFFFFFF : ((1 << this.activeVoiceCount) - 1) >>> 0;
+    const totalMask = (this.voiceIrqVol | this.voiceIrqWave) & activeMask;
+    if (!totalMask) {
+      this.checkIrq();
+      return;
     }
+    if (this.voiceIrqVol) this.irqStatus |= 0x40;
+    if (this.voiceIrqWave) this.irqStatus |= 0x20;
+    this.checkIrq();
+    // Rotate voiceIrqStatus to the next voice with a pending IRQ
+    while (!(totalMask & (1 << this.voiceIrqStatus))) {
+      this.voiceIrqStatus++;
+      if (this.voiceIrqStatus >= this.activeVoiceCount) this.voiceIrqStatus = 0;
+    }
+  }
+
+  private checkIrq(): void {
+    // DOSBox: mask is 0xFF when IRQs enabled, 0x9F otherwise (only voice-IRQ
+    // bits 0x20/0x40 are gated by the reset register's IRQ-enable flag).
+    const mask = (this.resetReg & 0x04) ? 0xFF : 0x9F;
+    if (this.irqStatus & mask) this.onIRQ();
   }
 
   // ── Reset ───────────────────────────────────────────────────────
@@ -584,6 +720,8 @@ export class GUS {
     this.irqStatus = 0;
     this.voiceIrqWave = 0;
     this.voiceIrqVol = 0;
+    this.voiceIrqStatus = 0;
+    this.dmaTcIrqPending = false;
   }
 }
 

@@ -1571,6 +1571,26 @@ export class Emulator {
     }
   }
 
+  /** Atomic 16-bit port write (OUT DX,AX / OUTSW / OUT imm8,AX).
+   *  Some devices (e.g. the GUS register-data port 0x304) have word-specific
+   *  semantics that differ from two consecutive byte writes — route those
+   *  through their device handlers first, then fall back to the byte path. */
+  portOutWord(port: number, value: number): void {
+    if (this.dosAudio.portOutWord(port, value)) return;
+    this.portOut(port, value & 0xFF);
+    this.portOut((port + 1) & 0xFFFF, (value >>> 8) & 0xFF);
+  }
+
+  /** Atomic 16-bit port read (IN AX,DX / INSW / IN AX,imm8). Mirrors
+   *  portOutWord's dispatch. */
+  portInWord(port: number): number {
+    const audioVal = this.dosAudio.portInWord(port);
+    if (audioVal >= 0) return audioVal & 0xFFFF;
+    const lo = this.portIn(port) & 0xFF;
+    const hi = this.portIn((port + 1) & 0xFFFF) & 0xFF;
+    return ((hi << 8) | lo) & 0xFFFF;
+  }
+
   /** Write to an I/O port */
   portOut(port: number, value: number): void {
     if (isVGAPort(port)) {

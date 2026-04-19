@@ -797,7 +797,9 @@ export function cpuStep(cpu: CPU): void {
       const rep = prefixF3 || prefixF2;
       const delta = cpu.getFlag(DF) ? -unitSize : unitSize;
       const doOne = () => {
-        const val = cpu.emu?.portIn(port) ?? (unitSize === 2 ? 0xFFFF : 0xFFFFFFFF);
+        const val = unitSize === 2
+          ? (cpu.emu?.portInWord(port) ?? 0xFFFF)
+          : (cpu.emu?.portIn(port) ?? 0xFFFFFFFF);
         let addr: number;
         if (cpu._addrSize16) {
           addr = (cpu.segBase(cpu.es) + (cpu.reg[EDI] & 0xFFFF)) >>> 0;
@@ -885,7 +887,8 @@ export function cpuStep(cpu: CPU): void {
           else if (!cpu.use32) addr = (addr + cpu.segBase(cpu.ds)) >>> 0;
         }
         const val = unitSize === 2 ? cpu.mem.readU16(addr) : cpu.mem.readU32(addr);
-        cpu.emu?.portOut(port, val);
+        if (unitSize === 2) cpu.emu?.portOutWord(port, val);
+        else cpu.emu?.portOut(port, val);
         if (cpu._addrSize16) {
           cpu.reg[ESI] = (cpu.reg[ESI] & ~0xFFFF) | (((cpu.reg[ESI] & 0xFFFF) + delta) & 0xFFFF);
         } else {
@@ -1731,9 +1734,11 @@ export function cpuStep(cpu: CPU): void {
     }
     case 0xE5: {
       const port = cpu.fetch8();
-      const val = cpu.emu?.portIn(port) ?? 0xFFFF;
-      if (opSize === 16) cpu.setReg16(EAX, val & 0xFFFF);
-      else cpu.reg[EAX] = val >>> 0;
+      if (opSize === 16) {
+        cpu.setReg16(EAX, cpu.emu?.portInWord(port) ?? 0xFFFF);
+      } else {
+        cpu.reg[EAX] = (cpu.emu?.portIn(port) ?? 0xFFFFFFFF) >>> 0;
+      }
       break;
     }
 
@@ -1746,10 +1751,7 @@ export function cpuStep(cpu: CPU): void {
     case 0xE7: {
       const port = cpu.fetch8();
       if (opSize === 16) {
-        // 16-bit OUT: write low byte to port, high byte to port+1
-        const val16 = cpu.getReg16(EAX);
-        cpu.emu?.portOut(port, val16 & 0xFF);
-        cpu.emu?.portOut(port + 1, (val16 >> 8) & 0xFF);
+        cpu.emu?.portOutWord(port, cpu.getReg16(EAX));
       } else {
         cpu.emu?.portOut(port, cpu.reg[EAX]);
       }
@@ -1763,10 +1765,7 @@ export function cpuStep(cpu: CPU): void {
     case 0xED: {
       const port = cpu.getReg16(EDX);
       if (opSize === 16) {
-        // 16-bit IN: read low byte from port, high byte from port+1
-        const lo = cpu.emu?.portIn(port) ?? 0xFF;
-        const hi = cpu.emu?.portIn(port + 1) ?? 0xFF;
-        cpu.setReg16(EAX, (hi << 8) | lo);
+        cpu.setReg16(EAX, cpu.emu?.portInWord(port) ?? 0xFFFF);
       } else {
         cpu.reg[EAX] = (cpu.emu?.portIn(port) ?? 0xFFFFFFFF) >>> 0;
       }
@@ -1780,10 +1779,7 @@ export function cpuStep(cpu: CPU): void {
     case 0xEF: {
       const port = cpu.getReg16(EDX);
       if (opSize === 16) {
-        // 16-bit OUT: write low byte to port, high byte to port+1
-        const val16 = cpu.getReg16(EAX);
-        cpu.emu?.portOut(port, val16 & 0xFF);
-        cpu.emu?.portOut(port + 1, (val16 >> 8) & 0xFF);
+        cpu.emu?.portOutWord(port, cpu.getReg16(EAX));
       } else {
         cpu.emu?.portOut(port, cpu.reg[EAX]);
       }

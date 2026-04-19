@@ -331,6 +331,25 @@ if (!globalThis._oplRegistered) {
     return false; // Not an audio port
   }
 
+  /** Atomic 16-bit port write (OUT DX,AX / OUTSW). Returns true if the port
+   *  has device-specific word semantics (GUS register-data trigger). */
+  portOutWord(port: number, value: number): boolean {
+    if ((port >= 0x240 && port <= 0x24F) || (port >= 0x340 && port <= 0x34F)) {
+      this.gus.portWrite16(port, value);
+      return true;
+    }
+    return false;
+  }
+
+  /** Atomic 16-bit port read (IN AX,DX / INSW). Returns -1 if the port has
+   *  no device-specific word semantics. */
+  portInWord(port: number): number {
+    if ((port >= 0x240 && port <= 0x24F) || (port >= 0x340 && port <= 0x34F)) {
+      return this.gus.portRead16(port);
+    }
+    return -1;
+  }
+
   /**
    * Force audio sample generation. Call from the tick loop to ensure audio
    * fills even when scheduleImmediate starves setInterval callbacks.
