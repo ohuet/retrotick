@@ -62,15 +62,22 @@ emu.screenHeight = 600;
 emu.registryStore = new RegistryStore();
 emu.profileStore = new ProfileStore();
 
-// Capture console output for missing API detection
+// Capture console output for missing API detection + Ogg error trigger
 const notFound = new Set();
+let sawOggError = false;
 const origWarn = console.warn.bind(console);
 const origLog = console.log.bind(console);
 console.log = (...args) => {
   const s = args.join(' ');
   const m = s.match(/\[GetProcAddress\] Not found: "([^"]+)"/);
   if (m) notFound.add(m[1]);
+  if (s.includes('Ogg bitstream')) sawOggError = true;
   origLog(...args);
+};
+console.error = (...args) => {
+  const s = args.join(' ');
+  if (s.includes('Ogg bitstream')) sawOggError = true;
+  origWarn(...args);
 };
 
 // Copy demo.dat into the emulator's virtual filesystem so the demo can open it
@@ -80,22 +87,30 @@ emu.additionalFiles.set('demo.dat', demoDatBytes.buffer.slice(demoDatBytes.byteO
 await emu.load(realArrayBuffer, peInfo, mockCanvas);
 emu.run();
 
+// Auto-dismiss config dialog with IDC_OK (1001) to exercise the post-dialog path.
+const IDC_OK = 1001;
+let dismissedDialogs = 0;
+
 const MAX_TICKS = 5_000_000;
 let ticks = 0;
 let stuckCount = 0;
 let lastEip = 0;
-let waitCount = 0;
-while (!emu.halted && ticks < MAX_TICKS) {
-  if (emu.waitingForMessage) {
-    // Feed an idle message so main loop keeps running
-    emu.waitingForMessage = false;
-    waitCount++;
-    if (waitCount > 1000) break;
+while (!emu.halted && ticks < MAX_TICKS && !sawOggError) {
+  if (emu.dialogState && !emu.dialogState.ended) {
+    dismissedDialogs++;
+    console.log(`[TEST] dismiss dialog #${dismissedDialogs}`);
+    emu.dismissDialog(IDC_OK, new Map());
+    // _endDialog schedules the thunk completion via queueMicrotask —
+    // yield to drain microtasks so the DialogBoxParam call actually returns.
+    await Promise.resolve();
+    continue;
   }
+  if (emu.waitingForMessage) emu.waitingForMessage = false;
   emu.tick();
   ticks++;
   if (emu.cpu.eip === lastEip) stuckCount++; else { stuckCount = 0; lastEip = emu.cpu.eip; }
-  if (stuckCount > 500) break;
+  if (stuckCount > 5000) break;
+  if (dismissedDialogs > 5) break;
 }
 
 console.log(`\n[TEST] ticks=${ticks} waiting=${emu.waitingForMessage} halted=${emu.halted} reason=${emu.cpu.haltReason || 'none'}`);
