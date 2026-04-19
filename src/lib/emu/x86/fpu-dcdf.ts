@@ -130,10 +130,14 @@ export function execFPU_DC(cpu: CPU, mod: number, regField: number, rm: number, 
       case 1: fpuSetST(cpu, rm, fpuST(cpu, rm) * fpuST(cpu, 0)); break;
       case 2: fpuCompare(cpu, fpuST(cpu, 0), fpuST(cpu, rm)); break;
       case 3: fpuCompare(cpu, fpuST(cpu, 0), fpuST(cpu, rm)); fpuPop(cpu); break;
-      case 4: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); break;
-      case 5: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); break;
-      case 6: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); break;
-      case 7: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); break;
+      // DC E0+i (/4) = FSUBR ST(i), ST(0) : ST(i) = ST(0) - ST(i)
+      case 4: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); break;
+      // DC E8+i (/5) = FSUB  ST(i), ST(0) : ST(i) = ST(i) - ST(0)
+      case 5: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); break;
+      // DC F0+i (/6) = FDIVR ST(i), ST(0) : ST(i) = ST(0) / ST(i)
+      case 6: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); break;
+      // DC F8+i (/7) = FDIV  ST(i), ST(0) : ST(i) = ST(i) / ST(0)
+      case 7: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); break;
     }
   }
 }
@@ -218,10 +222,14 @@ export function execFPU_DE(cpu: CPU, mod: number, regField: number, rm: number, 
           fpuPop(cpu);
         }
         break;
-      case 4: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); fpuPop(cpu); break;
-      case 5: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); fpuPop(cpu); break;
-      case 6: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); fpuPop(cpu); break;
-      case 7: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); fpuPop(cpu); break;
+      // DE E0+i (/4) = FSUBRP ST(i), ST(0) : ST(i) = ST(0) - ST(i); pop
+      case 4: fpuSetST(cpu, rm, fpuST(cpu, 0) - fpuST(cpu, rm)); fpuPop(cpu); break;
+      // DE E8+i (/5) = FSUBP  ST(i), ST(0) : ST(i) = ST(i) - ST(0); pop
+      case 5: fpuSetST(cpu, rm, fpuST(cpu, rm) - fpuST(cpu, 0)); fpuPop(cpu); break;
+      // DE F0+i (/6) = FDIVRP ST(i), ST(0) : ST(i) = ST(0) / ST(i); pop
+      case 6: fpuSetST(cpu, rm, fpuST(cpu, 0) / fpuST(cpu, rm)); fpuPop(cpu); break;
+      // DE F8+i (/7) = FDIVP  ST(i), ST(0) : ST(i) = ST(i) / ST(0); pop
+      case 7: fpuSetST(cpu, rm, fpuST(cpu, rm) / fpuST(cpu, 0)); fpuPop(cpu); break;
     }
   }
 }
