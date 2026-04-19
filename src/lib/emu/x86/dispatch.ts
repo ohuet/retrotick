@@ -61,8 +61,62 @@ export function dispatchException(
     // still runs afterwards for any additional bookkeeping.
     if (intNum === 0x21) {
       const ah = (cpu.reg[EAX] >>> 8) & 0xFF;
+      const al = cpu.reg[EAX] & 0xFF;
+      // DOS/4GW extension AX=0x2502: Set Protected-Mode Interrupt Vector
+      // and return the OLD handler in ES:EBX. DOOM's chain-to-old-handler
+      // wrapper at cs=168:0x547777 uses this. Convention (confirmed by
+      // Watcom-compiled DOOM.EXE disassembly):
+      //   in : CL = vec, EBX = new_off, DS = new_sel
+      //   out: ES = old_sel, EBX = old_off
+      // Without this, DOS/4GW's PM INT 21h handler processes AX=0x2502
+      // internally and returns a garbage ES:EBX pair (e.g. 0x170:0x3508)
+      // pointing into the DPMI client's data (DOOM's WAD lump directory
+      // region). DOOM later chain-longjmp's to that address, decodes a
+      // BOUND opcode in WAD data, and loops forever on INT 5. Short-circuit
+      // AX=0x2502 here and service it in JS so the client gets a valid
+      // "old handler" that IRETs cleanly.
+      if (ah === 0x25 && al === 0x02 && cpu.use32 && !cpu.realMode) {
+        const vec = cpu.reg[ECX] & 0xFF;
+        const newOff = cpu.reg[EBX] >>> 0;
+        const newSel = cpu.ds;
+        const old = dpmi.pmExcHandlers.get(vec + 256);
+        const memA = cpu.mem as any;
+        const oldSel = old?.sel ?? (memA._dpmiTerminatorSel || 0x38);
+        const oldOff = old?.off ?? (memA._dpmiTerminatorOff || 0x700);
+        cpu.reg[EBX] = oldOff;
+        cpu.es = oldSel;
+        if (newSel !== 0) dpmi.pmExcHandlers.set(vec + 256, { sel: newSel, off: newOff });
+        cpu.setFlag(CF, false);
+        return true;
+      }
+      // Intercept AH=35h (Get Interrupt Vector) in 32-bit PM for IRQ-range
+      // vectors. DOS/4GW's own PM INT 21h handler returns a bogus
+      // "0x170:0x3500+vec" value for these — those linear addresses are
+      // DOOM's WAD data in our flat memory model, since we map selectors
+      // 0x168 (CS) and 0x170 (DS) to the same base=0 (both flat 4GB).
+      // Real DOS/4GW would put reflector trampolines at 0x170:0x3500+vec
+      // with DIFFERENT linear base. Returning the DPMI reflector stubs
+      // at 0x38:(vec*stride) gives DOOM a valid safe handler that
+      // properly IRETs when chained into.
+      if (ah === 0x35 && cpu.use32 && !cpu.realMode) {
+        const vec = al;
+        // Only intercept IRQ-range vectors that DOOM chains to. Leave other
+        // AH=35h calls to DOS/4GW's PM handler (GetEnv, file-related, etc.).
+        const isIrqRange = (vec >= 0x08 && vec <= 0x0F) || (vec >= 0x70 && vec <= 0x77);
+        if (isIrqRange) {
+          const memA = cpu.mem as any;
+          const existing = dpmi.pmExcHandlers.get(vec + 256);
+          const stride = (cpu.emu as any)?._dpmiReflectorStride || 5;
+          const retSel = existing?.sel ?? (memA._dpmiTerminatorSel || 0x38);
+          const retOff = existing?.off ?? (vec * stride);
+          cpu.setReg16(EBX, retOff & 0xFFFF);
+          cpu.es = retSel;
+          cpu.setFlag(CF, false);
+          return true;
+        }
+      }
       if (ah === 0x25) {
-        const vec = cpu.reg[EAX] & 0xFF;
+        const vec = al;
         const ds = cpu.ds;
         const off = cpu.use32 ? (cpu.reg[EDX] >>> 0) : (cpu.reg[EDX] & 0xFFFF);
         // Only install if DS is a *code* selector. DOOM's DMX library also
