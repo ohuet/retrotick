@@ -89,6 +89,24 @@ export function dispatchException(
         cpu.setFlag(CF, false);
         return true;
       }
+      // Intercept AH=4Ch (Terminate with Return Code) in 32-bit PM. DOS/4GW's
+      // PM INT 21h handler at cs=1569:0x84 appears to NOT propagate the
+      // terminate semantics back to our RM AH=4C handler (execution resumes
+      // after INT 21h and the caller's RET pops bogus stack data → derail).
+      // Intercept the exit in PM directly so we halt cleanly with the
+      // client's exit code. Match the RM AH=4C behaviour from int21.ts.
+      if (ah === 0x4C && cpu.use32 && !cpu.realMode) {
+        const retCode = al;
+        if (cpu.emu) {
+          cpu.emu._dosExitCode = retCode;
+          cpu.emu.exitedNormally = true;
+          cpu.emu.halted = true;
+        }
+        cpu.halted = true;
+        cpu.haltReason = `terminated with code ${retCode}`;
+        console.warn(`[AH=4C-PM] exit=0x${retCode.toString(16)} cs=${cpu.cs.toString(16)}:${((cpu.eip-cpu.segBase(cpu.cs))>>>0).toString(16)} step=${(cpu.emu as any)?.cpuSteps}`);
+        return true;
+      }
       // Intercept AH=35h (Get Interrupt Vector) in 32-bit PM for IRQ-range
       // vectors. DOS/4GW's own PM INT 21h handler returns a bogus
       // "0x170:0x3500+vec" value for these — those linear addresses are
