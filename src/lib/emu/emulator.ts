@@ -448,6 +448,11 @@ export class Emulator {
 
   // DOS feature flags (from DosSettings, applied at load time)
   dosEnableDpmi = true;
+  /** Start DOS MZ programs in pseudo-V86 (PE=1, VM=1) so DOS/4GW and
+   *  DOS/4GW Pro detect a V86-under-monitor environment and take their
+   *  VCPI client path. Keeps realMode=true so segment addressing stays
+   *  sel*16 — the CPU is "V86-flavored real mode" like EMM386. */
+  dosEnableV86 = true;
   dosEnableXms = true;
   dosEnableEms = true;
   dosEnableSoundBlaster = true;

@@ -13,7 +13,7 @@ export const VCPI_PM_INT = 0xFA;
 
 // VCPI private area — host PM environment loaded during PM→V86 switch.
 // Layout matches DOSBox's EMM386 implementation.
-const VCPI_PRIVATE_AREA = 0x3E0000; // 16KB area in extended memory
+export const VCPI_PRIVATE_AREA = 0x3E0000; // 16KB area in extended memory
 
 // VCPI page allocator range — 4KB pages between 1.0625 MB and 16 MB.
 // Stays below `_emsNextAddr` (18 MB) so VCPI pages cannot collide with EMS storage.
@@ -21,7 +21,7 @@ const VCPI_FIRST_PAGE = 0x110;  // 1.0625 MB
 const VCPI_LAST_PAGE = 0xFFF;   // 16 MB - 1 page
 
 /** Set up the VCPI private area (GDT, LDT, IDT, TSS) like DOSBox. */
-function setupVcpiPrivateArea(mem: { writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): void {
+export function setupVcpiPrivateArea(mem: { writeU8(a: number, v: number): void; writeU16(a: number, v: number): void; writeU32(a: number, v: number): void }): void {
   const P = VCPI_PRIVATE_AREA;
 
   // === GDT at P+0x0000 (limit=0xFF = 32 entries) ===
@@ -643,6 +643,7 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           }
           // Switch to protected mode (matching DOSBox: zero segment regs, set IOPL=3)
           cpu.realMode = false;
+          cpu._vm86 = false; // leaving pseudo-V86 for real PM
           cpu.loadCS(newCS);
           cpu.ss = 0;
           cpu.ds = 0;
@@ -744,6 +745,7 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       // so EIP must be stored as linear = segBase + offset.
       console.log(`[VCPI-DE0C] PM→V86 cs=${newCS.toString(16)} eip=${newEIP.toString(16)} ss=${newSS.toString(16)} esp=${newESP.toString(16)} ds=${newDS.toString(16)} es=${newES.toString(16)}`);
       cpu.realMode = true;
+      cpu._vm86 = true; // back in pseudo-V86
       cpu.use32 = false;
       cpu._addrSize16 = true;
       cpu.cs = newCS;

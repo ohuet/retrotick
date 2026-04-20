@@ -81,14 +81,14 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
             {/* Memory & PM */}
             <div style={{ marginBottom: '10px' }}>
               <div style={{ font: FONT, marginBottom: '6px', fontWeight: 'bold' }}>{t().labelMemory}</div>
-              {(['xms', 'ems', 'dpmi'] as const).map(key => (
+              {(['xms', 'ems', 'v86', 'dpmi'] as const).map(key => (
                 <label key={key} style={radioStyle}>
                   <input
                     type="checkbox"
                     checked={settings[key]}
                     onChange={() => setSettings(s => ({ ...s, [key]: !s[key] }))}
                   />
-                  {{ xms: 'XMS (Extended Memory)', ems: 'EMS / VCPI (EMM386)', dpmi: 'DPMI 0.9 (experimental)' }[key]}
+                  {{ xms: 'XMS (Extended Memory)', ems: 'EMS / VCPI (EMM386)', v86: 'V86 mode (EMM386-like)', dpmi: 'DPMI 0.9 (experimental)' }[key]}
                 </label>
               ))}
             </div>

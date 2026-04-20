@@ -533,6 +533,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       const dsPre = loadDosSettings();
       emu.wasmJitEnabled = dsPre.jitEnabled;
       emu.dosEnableDpmi = dsPre.dpmi;
+      emu.dosEnableV86 = dsPre.v86;
       emu.dosEnableXms = dsPre.xms;
       emu.dosEnableEms = dsPre.ems;
       emu.dosEnableSoundBlaster = dsPre.soundBlaster;

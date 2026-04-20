@@ -39,7 +39,7 @@ import { registerUxtheme } from './win32/uxtheme';
 import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
 import { setupXmsStub } from './dos/xms';
 import { setupDpmiStub } from './dos/dpmi';
-import { setupEmsDeviceHeader, EMS_DEVICE_SEG } from './dos/ems';
+import { setupEmsDeviceHeader, EMS_DEVICE_SEG, setupVcpiPrivateArea, VCPI_PRIVATE_AREA } from './dos/ems';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
 import { VGA_FONT_8X16_ROM, ROM_FONT_8X16_ADDR, ROM_FONT_8X16_SEG, ROM_FONT_8X16_OFF } from './dos/vga-font-16';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
@@ -253,6 +253,30 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     // Enable flat memory for DOS — shares buffer with WASM JIT (zero-copy)
     emu.flatMemory = new FlatMemory();
     emu.memory.enableFlatMode(emu.flatMemory.wasmMemory.buffer, 0x08000000);
+
+    // Pseudo-V86: start the DOS program with PE=1 + EFLAGS.VM=1 but keep
+    // realMode=true (segment addressing is sel*16 like RM). DOS/4GW(/Pro)
+    // detects V86-under-monitor and takes the VCPI client path — bypassing
+    // the raw PM switch code that currently halts at 442K steps for DOOM.
+    if (emu.dosEnableV86) {
+      setupVcpiPrivateArea(emu.memory);
+      emu._vcpiPrivateArea = VCPI_PRIVATE_AREA;
+      emu._gdtBase = VCPI_PRIVATE_AREA;
+      emu._gdtLimit = 0xFF;
+      emu._idtBase = VCPI_PRIVATE_AREA + 0x2000;
+      emu._idtLimit = 0x7FF;
+      emu._ldtr = 0x08;
+      emu._tr = 0x10;
+      emu._cr0 = (emu._cr0 | 1) >>> 0; // PE bit — SMSW/MOV r,CR0 report protected
+      emu.cpu._vm86 = true;             // getFlags() ORs in bit 17
+      // Snapshot the IVT so VCPI DE00 can restore it on PM↔V86 transitions.
+      if (!emu._vcpiSavedIVT) {
+        emu._vcpiSavedIVT = new Uint16Array(256);
+        for (let i = 0; i < 256; i++) emu._vcpiSavedIVT[i] = emu.memory.readU16(i * 4 + 2);
+      }
+      console.log(`[EMU] Pseudo-V86 enabled: CR0=${emu._cr0.toString(16)} EFLAGS.VM=1 GDT=${emu._gdtBase.toString(16)} IDT=${emu._idtBase.toString(16)}`);
+    }
+
     console.log(`[EMU] MZ loaded: entry CS:IP=${mz.entryCS.toString(16)}:${mz.entryIP.toString(16)} SS:SP=${mz.entrySS.toString(16)}:${mz.entrySP.toString(16)} imageSize=${mz.imageSize}`);
     return;
   }

@@ -8,6 +8,8 @@ export interface DosSettings {
   jitEnabled: boolean;
   /** DPMI 0.9 host (for programs using DPMI directly or via CWSDPMI). */
   dpmi: boolean;
+  /** V86 mode for DOS programs (EMM386-like — DOS/4GW takes its VCPI path). */
+  v86: boolean;
   /** XMS driver (extended memory above 1MB). */
   xms: boolean;
   /** EMS/VCPI driver (expanded memory + V86 PM interface). */
@@ -32,6 +34,7 @@ const DEFAULTS: DosSettings = {
   textRenderer: 'dom',
   jitEnabled: false,
   dpmi: false,
+  v86: true,
   xms: true,
   ems: true,
   soundBlaster: true,

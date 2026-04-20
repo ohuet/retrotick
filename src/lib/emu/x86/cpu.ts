@@ -139,6 +139,12 @@ export class CPU {
   _inhibitTF = false;  // true after INT/IRET/MOV SS/POP SS (suppresses TF trap)
   _inhibitIRQ = false; // true after MOV SS/POP SS (suppresses HW IRQ for 1 instruction)
   _unrealMode = false; // true after PM→RM transition with flat segments (data base=0)
+  /** Pseudo-V86 mode for DOS programs: realMode stays true (segment = sel*16),
+   *  but PUSHF/PUSHFD reports VM=1 and SMSW/MOV r,CR0 reports PE=1. This lets
+   *  DOS/4GW and DOS/4GW Pro detect a V86-under-monitor environment and use
+   *  their VCPI client path instead of raw PM switching. Guest POPF writes to
+   *  the VM bit are ignored (VM bit is kept constant for the session). */
+  _vm86 = false;
 
   constructor(mem: Memory) {
     this.mem = mem;
@@ -376,11 +382,16 @@ export class CPU {
 
   getFlags(): number {
     if (!this.flagsValid) materializeFlags(this);
-    return this.flagsCache;
+    // Expose VM bit (17) when pseudo-V86 is active so guest PUSHF/PUSHFD
+    // and IRETD consumers see EFLAGS.VM=1 (DOS/4GW detection gate).
+    // flagsCache itself never stores VM — we OR it in on every read.
+    return this._vm86 ? (this.flagsCache | 0x00020000) >>> 0 : this.flagsCache;
   }
 
   setFlags(f: number): void {
-    this.flagsCache = f | 0x0002;
+    // Strip VM bit from incoming flags (guest POPF/IRETD cannot flip VM in
+    // pseudo-V86 mode — we keep the session-wide _vm86 flag authoritative).
+    this.flagsCache = ((f | 0x0002) & ~0x00020000) >>> 0;
     this.flagsValid = true;
     this.lazyOp = LazyOp.NONE;
     this._tfActive = !!(f & TF);
