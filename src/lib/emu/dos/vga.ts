@@ -369,23 +369,20 @@ export class VGAState {
   }
 
   /** Visible pixel width derived from CRTC Horizontal Display End (CRTC[0x01]).
-   *  dots_per_char = 9 dots if Seq[0x01] bit 0 == 0 (text), else 8 dots.
-   *  In 256-color mode (ATC[0x10] bit 6 set), two dots combine into one pixel,
-   *  so the effective pixel count is halved. This is what makes mode 13h = 320
-   *  pixels from 80×8 = 640 dots. Mode X tweak to CRTC[0x01]=0x59 gives 360. */
+   *  dots_per_char = 9 dots if Seq[0x01] bit 0 == 0, else 8 dots.
+   *  In 256-color modes each pixel spans 2 dot clocks, so the dot count is
+   *  halved. We detect 256-color via GC[5] bit 6 ("256-color mode enable"):
+   *  it's programmed at mode init by the BIOS and stays stable. We avoid
+   *  ATC[0x10] bit 6 because games transiently rewrite ATC[0x10] for blink
+   *  toggles and palette page select — that caused framebuffer reinit
+   *  oscillation and broke Second Reality. */
   getVisibleWidth(): number {
     const hde = this.crtcRegs[0x01] + 1; // char columns
     const eightDot = !!(this.seqRegs[1] & 0x01);
     const dotsPerChar = eightDot ? 8 : 9;
     let width = hde * dotsPerChar;
-    // 256-color pixel mode: ATC[0x10] bit 6 — halves horizontal resolution
-    if (this.atcRegs[0x10] & 0x40) {
-      width >>= 1;
-    }
-    // Seq[1] bit 3 (dot clock / 2) also halves — rarely used outside tweaks
-    if (this.seqRegs[1] & 0x08) {
-      width >>= 1;
-    }
+    if (this.gcRegs[5] & 0x40) width >>= 1; // 256-color mode
+    if (this.seqRegs[1] & 0x08) width >>= 1; // dot clock / 2
     return width;
   }
 
@@ -747,9 +744,10 @@ export function syncModeX(emu: Emulator): void {
   // Mode 13h/X uses max scan line = 1 (double-scanning): 400 scanlines → 200 rows, 480 → 240
   const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
   const height = Math.floor(totalScanlines / (maxScanLine + 1));
-  // Display width derived from CRTC Horizontal Display End — supports Mode X
-  // tweaks (360x270, 320x240, 400x300, etc). Clamp to multiples of 4 since
-  // unchained mode renders 4 pixels per plane byte.
+  // Display width derived from CRTC Horizontal Display End (stable: computed
+  // from CRTC[0x01] + Seq[1] + currentMode.bpp, none of which games rewrite
+  // mid-gameplay). Supports Mode X tweaks (360x270, 400x300) without the
+  // ATC[0x10]-driven oscillation that broke Second Reality positioning.
   let width = vga.getVisibleWidth();
   if (width <= 0) width = 320;
   width = (width + 3) & ~3;
@@ -880,14 +878,17 @@ export function syncCGA6(emu: Emulator): void {
 }
 
 /** Sync EGA/VGA planar 16-color mode (0D, 0E, 10, 12) from plane buffers.
- *  Supports CRTC start address, line compare split-screen, and pixel panning. */
+ *  Supports CRTC start address, line compare split-screen, and pixel panning.
+ *  Respects CRTC-derived visible height: rows beyond VDE are filled with the
+ *  overscan color (fixes Moktar bottom-line flicker from page flipping with
+ *  a partial 192-row buffer vs the mode's 200-row framebuffer). */
 export function syncPlanar16(emu: Emulator): void {
   const vga = emu.vga;
   if (!vga.framebuffer) return;
 
   const mode = vga.currentMode;
   const width = mode.width;
-  const height = mode.height;
+  const fbHeight = mode.height;
   const bytesPerRow = width >> 3; // 8 pixels per byte
   const lut = buildRGBLookup(vga.palette);
   const buf32 = new Uint32Array(vga.framebuffer.data.buffer, vga.framebuffer.data.byteOffset, vga.framebuffer.data.byteLength >> 2);
@@ -901,8 +902,16 @@ export function syncPlanar16(emu: Emulator): void {
   const displayStart = (vga.crtcRegs[0x0C] << 8) | vga.crtcRegs[0x0D];
   const pitch = (vga.crtcRegs[0x13] || bytesPerRow) * 2;
 
-  // Line Compare: split-screen boundary (row-based after max scan line)
+  // Visible height derived from CRTC Vertical Display End — respects games
+  // that program less than mode.height rows (Moktar uses 192 visible rows).
+  const vdeLow = vga.crtcRegs[0x12];
+  const overflow = vga.crtcRegs[0x07];
+  const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
   const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
+  const visibleRows = Math.floor((vde + 1) / (maxScanLine + 1));
+  const height = Math.min(visibleRows, fbHeight);
+
+  // Line Compare: split-screen boundary (row-based after max scan line)
   const lineCompareRaw = vga.getLineCompare();
   const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
 
@@ -920,6 +929,17 @@ export function syncPlanar16(emu: Emulator): void {
       const colorIdx = ((p0[byteOff] >> bit) & 1) | (((p1[byteOff] >> bit) & 1) << 1) |
         (((p2[byteOff] >> bit) & 1) << 2) | (((p3[byteOff] >> bit) & 1) << 3);
       buf32[pxBase + x] = lut[atcLut[colorIdx]];
+    }
+  }
+
+  // Fill rows beyond the CRTC-visible area with the overscan color so
+  // framebuffer rows 192..199 don't show stale plane data between frames.
+  if (height < fbHeight) {
+    const overscanIdx = vga.atcRegs[0x11] & vga.dacPixelMask;
+    const overscan = lut[overscanIdx];
+    for (let y = height; y < fbHeight; y++) {
+      const pxBase = y * width;
+      buf32.fill(overscan, pxBase, pxBase + width);
     }
   }
 
