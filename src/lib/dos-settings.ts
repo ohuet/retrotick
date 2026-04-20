@@ -31,7 +31,7 @@ const STORAGE_KEY = 'retrotick-dos';
 const DEFAULTS: DosSettings = {
   textRenderer: 'dom',
   jitEnabled: false,
-  dpmi: true,
+  dpmi: false,
   xms: true,
   ems: true,
   soundBlaster: true,

@@ -88,7 +88,7 @@ export function DosSettingsWindow({ onClose, onFocus, onMinimize, zIndex, focuse
                     checked={settings[key]}
                     onChange={() => setSettings(s => ({ ...s, [key]: !s[key] }))}
                   />
-                  {{ xms: 'XMS (Extended Memory)', ems: 'EMS / VCPI (EMM386)', dpmi: 'DPMI 0.9' }[key]}
+                  {{ xms: 'XMS (Extended Memory)', ems: 'EMS / VCPI (EMM386)', dpmi: 'DPMI 0.9 (experimental)' }[key]}
                 </label>
               ))}
             </div>
