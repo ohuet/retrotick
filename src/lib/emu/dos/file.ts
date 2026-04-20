@@ -358,6 +358,20 @@ export function dosIoctl(cpu: CPU, emu: Emulator): void {
     }
   } else if (subFunc === 0x01) {
     cpu.setFlag(CF, false);
+  } else if (subFunc === 0x06 || subFunc === 0x07) {
+    // Get input (06) / output (07) status.
+    // Character device ready: AL=0xFF. Not ready / EOF: AL=0x00.
+    // EOS-based demos probe "EMMXXXX0" with AL=07 to detect the EMS driver;
+    // returning 0xFF is required for them to proceed to the VCPI check.
+    const h = cpu.getReg16(EBX);
+    const df = emu._dosFiles.get(h);
+    let ready = 0xFF;
+    if (df && !df.isDevice) {
+      // Regular file: AL=0xFF unless EOF (for input status only).
+      if (subFunc === 0x06 && df.pos >= df.data.length) ready = 0x00;
+    }
+    cpu.setReg16(EAX, ready);
+    cpu.setFlag(CF, false);
   } else if (subFunc === 0x08) {
     // Check if block device is removable: AX=0 removable, AX=1 fixed
     const drv08 = cpu.reg[EBX] & 0xFF; // BL = drive number (0=default, 1=A, 2=B, 3=C...)
