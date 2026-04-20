@@ -1371,9 +1371,9 @@ export function emuTick(emu: Emulator): void {
   if (emu.isDOS) {
     if (emu.isGraphicsMode) {
       const now = performance.now();
-      // Sync on VBlank (normal path), or every ~15ms as fallback for games
-      // that don't poll 0x3DA (ensures display still updates at ~60Hz).
-      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 15) {
+      // Sync on VBlank (normal path), or every ~14ms as fallback for games
+      // that don't poll 0x3DA (aligns with 70 Hz ≈ 14.28 ms frame time).
+      if (emu.vga.pendingSync || now - emu.vga.lastSyncTime > 14) {
         emu.vga.pendingSync = false;
         emu.vga.lastSyncTime = now;
         syncGraphics(emu);
