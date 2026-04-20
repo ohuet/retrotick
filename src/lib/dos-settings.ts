@@ -34,7 +34,7 @@ const DEFAULTS: DosSettings = {
   textRenderer: 'dom',
   jitEnabled: false,
   dpmi: false,
-  v86: true,
+  v86: false,
   xms: true,
   ems: true,
   soundBlaster: true,

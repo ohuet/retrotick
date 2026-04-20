@@ -258,6 +258,13 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     // realMode=true (segment addressing is sel*16 like RM). DOS/4GW(/Pro)
     // detects V86-under-monitor and takes the VCPI client path — bypassing
     // the raw PM switch code that currently halts at 442K steps for DOOM.
+    //
+    // We intentionally leave _vcpiSavedIVT unset here — HW IRQ dispatch in
+    // emu-exec.ts filters out "PM-modified" IVT entries using that snapshot,
+    // which would erroneously skip RM DOS programs' own timer/keyboard/sound
+    // handlers if installed after V86 init. The VCPI DE00 handler populates
+    // _vcpiSavedIVT lazily only when DOS/4GW actually calls INT 67h DE00,
+    // which is strictly AFTER such handlers are installed.
     if (emu.dosEnableV86) {
       setupVcpiPrivateArea(emu.memory);
       emu._vcpiPrivateArea = VCPI_PRIVATE_AREA;
@@ -269,11 +276,6 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       emu._tr = 0x10;
       emu._cr0 = (emu._cr0 | 1) >>> 0; // PE bit — SMSW/MOV r,CR0 report protected
       emu.cpu._vm86 = true;             // getFlags() ORs in bit 17
-      // Snapshot the IVT so VCPI DE00 can restore it on PM↔V86 transitions.
-      if (!emu._vcpiSavedIVT) {
-        emu._vcpiSavedIVT = new Uint16Array(256);
-        for (let i = 0; i < 256; i++) emu._vcpiSavedIVT[i] = emu.memory.readU16(i * 4 + 2);
-      }
       console.log(`[EMU] Pseudo-V86 enabled: CR0=${emu._cr0.toString(16)} EFLAGS.VM=1 GDT=${emu._gdtBase.toString(16)} IDT=${emu._idtBase.toString(16)}`);
     }
 
