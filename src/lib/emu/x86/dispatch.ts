@@ -2069,6 +2069,14 @@ export function cpuStep(cpu: CPU): void {
           }
           break;
         case 3: { // CALL FAR m16:16/32 (FF /3)
+          if (d.isReg) {
+            // Register-mode operand is INVALID for CALL FAR m — raise #UD.
+            cpu.eip = instrEip;
+            if (dispatchException(cpu, 6, 'exception')) break;
+            cpu.haltReason = 'invalid opcode (FF /3 reg)';
+            cpu.halted = true;
+            break;
+          }
           if (opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);
@@ -2097,6 +2105,18 @@ export function cpuStep(cpu: CPU): void {
           }
           break;
         case 5: { // JMP FAR m16:16/32 (FF /5)
+          if (d.isReg) {
+            // Register-mode is INVALID for JMP FAR m — raise #UD.
+            // (Triton's DOS-extender and some other PM code rely on this
+            // trapping so they can handle it via their own exception
+            // handler. Blindly using reg value as offset + reading ram[2]
+            // as selector would do a wild JMP into the IVT.)
+            cpu.eip = instrEip;
+            if (dispatchException(cpu, 6, 'exception')) break;
+            cpu.haltReason = 'invalid opcode (FF /5 reg)';
+            cpu.halted = true;
+            break;
+          }
           if (opSize === 16) {
             const farOff = d.val & 0xFFFF;
             const farSel = cpu.mem.readU16((d.addr + 2) >>> 0);

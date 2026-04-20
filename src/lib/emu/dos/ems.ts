@@ -691,6 +691,19 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
   // no manual stack walk needed.
 
   switch (fn) {
+    case 0x02: // Maximum Physical Address — same as V86 side
+      cpu.reg[EDX] = 0x00FFFFFF; // 16 MB
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x03: { // Number of Free Pages
+      const next = emu._vcpiNextPage ?? 0x110;
+      const free = next > 0xFFF ? 0 : (0xFFF + 1 - next);
+      cpu.reg[EDX] = free >>> 0;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+
     case 0x04: { // Allocate 4KB Page
       if (!emu._vcpiNextPage) emu._vcpiNextPage = 0x110;
       const page = emu._vcpiNextPage++;
@@ -699,6 +712,32 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       return true;
     }
     case 0x05: // Free 4KB Page
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x06: { // Get Physical Address of Page in 1st MB
+      const cxPage = cpu.getReg16(ECX);
+      if (cxPage >= 0x100) {
+        cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x8B00;
+        return true;
+      }
+      cpu.reg[EDX] = (cxPage << 12) >>> 0;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+    }
+
+    case 0x07: // Read CR0
+      cpu.reg[EBX] = (emu._cr0 ?? 0) >>> 0;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x0A: // Get PIC Vector Mappings
+      cpu.reg[EBX] = (cpu.reg[EBX] & 0xFFFF0000) | 0x08;
+      cpu.reg[ECX] = (cpu.reg[ECX] & 0xFFFF0000) | 0x70;
+      cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
+      return true;
+
+    case 0x0B: // Set PIC Vector Mappings — accept silently
       cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0000;
       return true;
 
