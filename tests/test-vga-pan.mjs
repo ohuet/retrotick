@@ -35,7 +35,8 @@ for (let i = 0; i < 256; i++) {
 const emu = { vga, onVideoFrame: () => {} };
 
 function firstPixelColors(pan) {
-  vga.atcRegs[0x13] = pan & 0x07;
+  // In 256-color mode, ATC[0x13] is halved to get effective pan → write pan*2
+  vga.atcRegs[0x13] = (pan & 0x03) * 2;
   syncModeX(emu);
   const buf = vga.framebuffer.data;
   // Pixel bytes are [R,G,B,A]. Return first 8 pixels' red channel → 6-bit DAC value × (255/63).

@@ -359,13 +359,18 @@ export class VGAState {
     return low | bit8 | bit9;
   }
 
-  /** Horizontal Pixel Panning (ATC[0x13]).
-   *  Bits 0-2: pan amount 0-7. Bit 3 only matters for 9-dot text modes.
-   *  Real BIOS sets the register to 0 on mode set for graphics modes and
-   *  8-dot text; 0x08 (no-pan) only for 9-dot text. initRegsForMode applies
-   *  that default per mode, so simply masking 0-2 is enough here. */
+  /** Horizontal Pixel Panning (ATC[0x13]) — returns effective pixel shift.
+   *  In standard modes: bits 0-2 give pan 0-7 directly.
+   *  In 256-color modes (mode 13h / Mode X): the register is HALVED to obtain
+   *  the real pan (only even values 0,2,4,6 are meaningful → pan 0,1,2,3).
+   *  Second Reality's opening scroll writes `(x & 3) * 2` expecting this
+   *  halving behavior — without it the scroll oscillates. Detection via GC[5]
+   *  bit 6 ("256-color mode enable"), stable at mode init.
+   *  Bit 3 (+0x08) is the 9-dot text "no pan" marker — not relevant here. */
   getPixelPan(): number {
-    return this.atcRegs[0x13] & 0x07;
+    const raw = this.atcRegs[0x13] & 0x0F;
+    if (this.gcRegs[5] & 0x40) return (raw >> 1) & 0x03;
+    return raw & 0x07;
   }
 
   /** Visible pixel width derived from CRTC Horizontal Display End (CRTC[0x01]).
@@ -707,15 +712,17 @@ export function syncMode13h(emu: Emulator): void {
   const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
   const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
 
-  // Horizontal Pixel Panning: shift display left by pan pixels per scanline
+  // Horizontal Pixel Panning: shift display left by pan pixels per scanline.
+  // Below split, pan resets to 0 unless ATC[0x10] bit 5 ("PELPAN Compat") is set.
   const pan = vga.getPixelPan();
+  const keepPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
   const pixelMask = vga.dacPixelMask;
 
   for (let y = 0; y < height; y++) {
-    // Below split, address counter resets to 0 (displayStart ignored)
-    const rowBase = (y < splitRow) ? displayStart : 0;
-    // Row start in VRAM, offset by pan pixels
-    const vramRowStart = rowBase + y * width + pan;
+    const belowSplit = y >= splitRow;
+    const rowBase = belowSplit ? 0 : displayStart;
+    const effPan = (belowSplit && !keepPanBelowSplit) ? 0 : pan;
+    const vramRowStart = rowBase + y * width + effPan;
     const pxBase = y * width;
     for (let x = 0; x < width; x++) {
       buf32[pxBase + x] = lut[mem.readU8(0xA0000 + ((vramRowStart + x) & 0xFFFF)) & pixelMask];
@@ -776,11 +783,15 @@ export function syncModeX(emu: Emulator): void {
   const lineCompareRaw = vga.getLineCompare();
   const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
 
-  // Horizontal Pixel Panning: pan pixels are discarded at start of each scanline.
+  // Horizontal Pixel Panning: shift pixels left by `pan` at scanline start.
+  // Below the split line, pan is reset to 0 unless ATC[0x10] bit 5 ("PELPAN
+  // Compatibility") is set — Second Reality relies on this so the bottom
+  // HUD rows don't follow the scrolling paysage.
   const pan = vga.getPixelPan();
+  const keepPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
 
   if (pan === 0) {
-    // Fast path: 4-pixel unroll, one source byte per 4 output pixels
+    // Fast path: pan=0 everywhere, 4-pixel unroll
     const bytesPerRow = width >> 2;
     for (let y = 0; y < height; y++) {
       const rowBase = (y < splitRow) ? displayStart : 0;
@@ -796,13 +807,15 @@ export function syncModeX(emu: Emulator): void {
       }
     }
   } else {
-    // Slow path: pan non-zero — walk plane-by-plane with rollover
+    // General path: per-row pan + split handling, walk plane-by-plane
     for (let y = 0; y < height; y++) {
-      const rowBase = (y < splitRow) ? displayStart : 0;
+      const belowSplit = y >= splitRow;
+      const rowBase = belowSplit ? 0 : displayStart;
       const rowStart = rowBase + y * pitch;
+      const effPan = (belowSplit && !keepPanBelowSplit) ? 0 : pan;
       const pxBase = y * width;
-      let srcByte = (rowStart + (pan >> 2)) & 0x1FFFF;
-      let plane = pan & 3;
+      let srcByte = (rowStart + (effPan >> 2)) & 0x1FFFF;
+      let plane = effPan & 3;
       let b0 = p0[srcByte], b1 = p1[srcByte], b2 = p2[srcByte], b3 = p3[srcByte];
       for (let x = 0; x < width; x++) {
         const v = (plane === 0 ? b0 : plane === 1 ? b1 : plane === 2 ? b2 : b3) & pixelMask;
@@ -915,15 +928,19 @@ export function syncPlanar16(emu: Emulator): void {
   const lineCompareRaw = vga.getLineCompare();
   const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
 
-  // Pixel Panning (0-8 in EGA, bit 3 of ATC[0x13] is the 9th pixel)
+  // Pixel Panning (0-7 in EGA planar 16-color modes).
+  // Below split, pan resets to 0 unless ATC[0x10] bit 5 ("PELPAN Compat") is set.
   const pan = vga.getPixelPan();
+  const keepPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
 
   for (let y = 0; y < height; y++) {
-    const rowBase = (y < splitRow) ? displayStart : 0;
+    const belowSplit = y >= splitRow;
+    const rowBase = belowSplit ? 0 : displayStart;
     const rowOff = rowBase + y * pitch;
+    const effPan = (belowSplit && !keepPanBelowSplit) ? 0 : pan;
     const pxBase = y * width;
     for (let x = 0; x < width; x++) {
-      const srcPx = x + pan;
+      const srcPx = x + effPan;
       const byteOff = (rowOff + (srcPx >> 3)) & 0x1FFFF;
       const bit = 7 - (srcPx & 7);
       const colorIdx = ((p0[byteOff] >> bit) & 1) | (((p1[byteOff] >> bit) & 1) << 1) |
