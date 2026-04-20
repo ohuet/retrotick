@@ -604,6 +604,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       onSetupEmulator?.(emu);
 
       emuRef.current = emu;
+      (globalThis as typeof globalThis & { __emu?: unknown }).__emu = emu;
       onRegisterCloseHandler?.(() => {
         if (emu.mainWindow) {
           emu.postMessage(emu.mainWindow, WM_SYSCOMMAND, SC_CLOSE, 0);

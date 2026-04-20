@@ -1786,6 +1786,9 @@ export class Emulator {
 
   /** Inject a hardware keyboard event: write scancode to port 0x60 and trigger INT 09h */
   injectHwKey(scancode: number, browserChar?: number): void {
+    if ((this as Emulator & { traceKey?: boolean }).traceKey) {
+      console.log(`[KEY] inject 0x${scancode.toString(16)} char=${browserChar} wait=${this._dosWaitingForKey} waitMsg=${this.waitingForMessage} halt=${this._dosHalted} e0p=${this._injectE0Pending} pend=[${this._pendingHwKeys.map(x=>x.toString(16)).join(',')}] buf=${this.dosKeyBuffer.length}`);
+    }
     // Queue scancodes for sequential delivery — writing directly to port 0x60
     // would lose earlier scancodes when multiple keys are injected in the same JS event.
     // On break code: flush queued repeat make codes so repeat stops immediately.
@@ -1812,39 +1815,53 @@ export class Emulator {
     if (this._pendingHwKeys.length >= MAX_HW_KEY_QUEUE) return;
     this._pendingHwKeys.push(scancode);
     if (browserChar !== undefined) this._pendingHwKeyChars.set(scancode, browserChar);
+    // Fast path: DOS program blocked at INT 21h AH=01/07/08 — deliver straight
+    // to dosKeyBuffer so deliverDosKey can set AL on the next tick. Bypasses
+    // the INT 09h → BDA pipeline, which would require the CPU to run (it's
+    // halted) for the scancode to become readable.
+    // 0xE0 has bit 7 set but is NOT a break code — it's the extended-key
+    // prefix. Treat it as a make code for the purposes of this fast path.
+    const isBreakCode = (scancode & 0x80) !== 0 && scancode !== 0xE0;
+    // Clear the stale E0-pending flag when a break code arrives — it usually
+    // means we just saw an E0-prefixed keyup (e.g. arrow release), and the
+    // pair has no make code to deliver. Leaving it set would make the next
+    // non-extended keypress look extended.
+    if (isBreakCode) this._injectE0Pending = false;
+    if (this._dosWaitingForKey && !isBreakCode) {
+      if (scancode === 0xE0) {
+        // E0 prefix: record for the following make code, leave the program
+        // blocked. Waking the CPU now would let it run past the INT 21h stub
+        // with AL unset — the make code hasn't arrived yet.
+        this._injectE0Pending = true;
+        const e0Idx = this._pendingHwKeys.lastIndexOf(0xE0);
+        if (e0Idx >= 0) this._pendingHwKeys.splice(e0Idx, 1);
+        return;
+      }
+      const SCAN_TO_ASCII: (number|undefined)[] = [
+        undefined,0x1B,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x30,0x2D,0x3D,0x08,0x09,
+        0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70,0x5B,0x5D,0x0D,undefined,0x61,0x73,
+        0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C,0x3B,0x27,0x60,undefined,0x5C,0x7A,0x78,0x63,0x76,
+        0x62,0x6E,0x6D,0x2C,0x2E,0x2F,undefined,0x2A,undefined,0x20,
+      ];
+      const isExtended = this._injectE0Pending || scancode >= 0x3B;
+      const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
+      if (this.dosKeyBuffer.length < 16) {
+        this.dosKeyBuffer.push({ ascii, scan: scancode });
+      }
+      // Remove this scancode (and E0 prefix if present) from _pendingHwKeys
+      // so that INT 09h does not fire and write a duplicate to BDA.
+      if (this._injectE0Pending) {
+        const e0Idx = this._pendingHwKeys.lastIndexOf(0xE0);
+        if (e0Idx >= 0) this._pendingHwKeys.splice(e0Idx, 1);
+      }
+      const scIdx = this._pendingHwKeys.lastIndexOf(scancode);
+      if (scIdx >= 0) this._pendingHwKeys.splice(scIdx, 1);
+      this._pendingHwKeyChars.delete(scancode);
+      this._injectE0Pending = false;
+    }
+
     // Wake promptly on keyboard input from INT 16h waits or DOS HLT idle.
     if ((this.waitingForMessage || this._dosHalted) && this.running && !this.halted) {
-      // If DOS is waiting for a key via INT 21h AH=01/07/08 and this is a make code
-      // (not E0 prefix, not break code), push directly to dosKeyBuffer for immediate delivery
-      if (this._dosWaitingForKey && !(scancode & 0x80)) {
-        if (scancode === 0xE0) {
-          // E0 prefix: mark for next scancode, don't push to buffer yet
-          this._injectE0Pending = true;
-        } else {
-          const SCAN_TO_ASCII: (number|undefined)[] = [
-            undefined,0x1B,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x30,0x2D,0x3D,0x08,0x09,
-            0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70,0x5B,0x5D,0x0D,undefined,0x61,0x73,
-            0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C,0x3B,0x27,0x60,undefined,0x5C,0x7A,0x78,0x63,0x76,
-            0x62,0x6E,0x6D,0x2C,0x2E,0x2F,undefined,0x2A,undefined,0x20,
-          ];
-          const isExtended = this._injectE0Pending || scancode >= 0x3B;
-          const ascii = isExtended ? 0 : (browserChar ?? SCAN_TO_ASCII[scancode] ?? 0);
-          if (this.dosKeyBuffer.length < 16) {
-            this.dosKeyBuffer.push({ ascii, scan: scancode });
-          }
-          // Remove this scancode (and E0 prefix if present) from _pendingHwKeys
-          // so that INT 09h does not fire and write a duplicate to BDA.
-          if (this._injectE0Pending) {
-            // E0 was the previous entry — remove both E0 and this scancode
-            const e0Idx = this._pendingHwKeys.lastIndexOf(0xE0);
-            if (e0Idx >= 0) this._pendingHwKeys.splice(e0Idx, 1);
-          }
-          const scIdx = this._pendingHwKeys.lastIndexOf(scancode);
-          if (scIdx >= 0) this._pendingHwKeys.splice(scIdx, 1);
-          this._pendingHwKeyChars.delete(scancode);
-          this._injectE0Pending = false;
-        }
-      }
       this.waitingForMessage = false;
       this._dosHalted = false;
       requestAnimationFrame(this.tick);
