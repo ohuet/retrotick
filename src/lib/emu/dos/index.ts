@@ -9,6 +9,7 @@ import { handleXms, XMS_INT } from './xms';
 import { handleInt67 } from './ems';
 import { handleDpmiEntry, handleInt31, handleDpmiSwitch, handleDpmiCallback, DPMI_INT, DPMI_SWITCH_INT, DPMI_REFLECTOR_INT } from './dpmi';
 import { handleVcpiPM, VCPI_PM_INT } from './ems';
+import { handleInt4B } from './vds';
 
 export { handleInt21 } from './int21';
 export { syncVideoMemory } from './video';
@@ -156,6 +157,7 @@ export function handleDosInt(cpu: CPU, intNum: number, emu: Emulator): boolean {
     }
     case 0x1A: return handleInt1A(cpu, emu);
     case 0x2F: return handleInt2F(cpu, emu);
+    case 0x4B: return handleInt4B(cpu, emu);
     case 0x25: { // Absolute Disk Read (fake — returns synthetic boot sector)
       // Some programs (KeyMaker 3.0) read the boot sector just to sniff drive
       // geometry or stash copy-protection keys. We don't have a real disk, so

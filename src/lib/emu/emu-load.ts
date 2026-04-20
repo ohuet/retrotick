@@ -1227,6 +1227,10 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.memory.writeU8(0x0417, 0x00);
   emu.memory.writeU8(0x0418, 0x00);
   emu.memory.writeU8(0x0496, 0x10);
+  // BDA 40:7B — feature byte 2. Bit 5 (0x20) = Virtual DMA Services (VDS)
+  // available. FT2 / Triton-bound programs check this before calling INT 4Bh
+  // AX=81xx. We implement a minimal VDS that maps physical=linear (flat mem).
+  emu.memory.writeU8(0x047B, 0x20);
   // BIOS configuration table at F000:0600
   const biosCfg = 0xF0000 + 0x0600;
   emu.memory.writeU8(biosCfg + 0, 0x08);
