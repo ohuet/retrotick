@@ -339,13 +339,24 @@ export class VGAState {
   // Mode X state: true when mode 13h has Chain-4 disabled (unchained 256-color planar)
   unchained = false;
 
-  /** Get actual visible pixel height from CRTC registers (accounts for double-scanning) */
+  /** CRT scanlines per CRTC display row. CRTC[0x09] has two scanline-doubling
+   *  mechanisms that are *alternatives*, not cumulative: bits 0-4 (Maximum
+   *  Scan Line, N+1 scanlines per CRTC row advance) and bit 7 (Scan Doubling
+   *  at the pipeline output). BIOS mode 0x0D defaults to CRTC[09]=0xC1 with
+   *  both set, yet the image is still 200 rows — take whichever halves more
+   *  aggressively rather than multiplying them. */
+  getRowRepeat(): number {
+    const maxScanLine = this.crtcRegs[0x09] & 0x1F;
+    const scanDouble = (this.crtcRegs[0x09] & 0x80) ? 2 : 1;
+    return Math.max(maxScanLine + 1, scanDouble);
+  }
+
+  /** Actual visible pixel height from CRTC registers, accounting for row repeat. */
   getVisibleHeight(): number {
     const vdeLow = this.crtcRegs[0x12];
     const overflow = this.crtcRegs[0x07];
     const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
-    const maxScanLine = this.crtcRegs[0x09] & 0x1F;
-    return Math.floor((vde + 1) / (maxScanLine + 1));
+    return Math.floor((vde + 1) / this.getRowRepeat());
   }
 
   /** Line Compare (10-bit): split-screen boundary scanline.
@@ -707,10 +718,9 @@ export function syncMode13h(emu: Emulator): void {
   const wordMode = !(vga.crtcRegs[0x17] & 0x40); // bit 6 clear = word mode
   const displayStart = wordMode ? startReg * 2 : startReg;
 
-  // Line Compare: split-screen boundary (in display rows, after double-scan)
-  const lineCompareRaw = vga.getLineCompare();
-  const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
-  const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
+  // Line Compare: split-screen boundary in display rows, converted from CRT
+  // scanlines via the same row-repeat factor getVisibleHeight uses.
+  const splitRow = Math.floor(vga.getLineCompare() / vga.getRowRepeat());
 
   // Horizontal Pixel Panning: shift display left by pan pixels per scanline.
   // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
@@ -749,10 +759,9 @@ export function syncModeX(emu: Emulator): void {
   const overflow = vga.crtcRegs[0x07];
   const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
   const totalScanlines = vde + 1;
-  // Max Scan Line register (CRTC 0x09) bits 0-4: each pixel row occupies (maxScanLine+1) scanlines
-  // Mode 13h/X uses max scan line = 1 (double-scanning): 400 scanlines → 200 rows, 480 → 240
-  const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
-  const height = Math.floor(totalScanlines / (maxScanLine + 1));
+  // CRTC row repeat (maxScanLine or Scan Doubling bit). See getRowRepeat().
+  const rowRepeat = vga.getRowRepeat();
+  const height = Math.floor(totalScanlines / rowRepeat);
   // Display width derived from CRTC Horizontal Display End (stable: computed
   // from CRTC[0x01] + Seq[1] + currentMode.bpp, none of which games rewrite
   // mid-gameplay). Supports Mode X tweaks (360x270, 400x300) without the
@@ -802,9 +811,10 @@ export function syncModeX(emu: Emulator): void {
   // CRTC offset register (0x13) = bytes per scanline / 2 in each plane
   const pitch = (vga.crtcRegs[0x13] || 40) * 2;
 
-  // Line Compare: split-screen boundary (in display rows after double-scan)
+  // Line Compare: split-screen boundary, converted from CRT scanlines to
+  // display rows using the same row-repeat we used to derive height.
   const lineCompareRaw = vga.getLineCompare();
-  const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
+  const splitRow = Math.floor(lineCompareRaw / rowRepeat);
 
   // Horizontal Pixel Panning: shift pixels left by `pan` at scanline start.
   // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
@@ -943,13 +953,13 @@ export function syncPlanar16(emu: Emulator): void {
   const vdeLow = vga.crtcRegs[0x12];
   const overflow = vga.crtcRegs[0x07];
   const vde = vdeLow | ((overflow & 0x02) ? 0x100 : 0) | ((overflow & 0x40) ? 0x200 : 0);
-  const maxScanLine = vga.crtcRegs[0x09] & 0x1F;
-  const visibleRows = Math.floor((vde + 1) / (maxScanLine + 1));
+  // CRTC row repeat (maxScanLine or Scan Doubling bit). See getRowRepeat().
+  const rowRepeat = vga.getRowRepeat();
+  const visibleRows = Math.floor((vde + 1) / rowRepeat);
   const height = Math.min(visibleRows, fbHeight);
 
   // Line Compare: split-screen boundary (row-based after max scan line)
-  const lineCompareRaw = vga.getLineCompare();
-  const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
+  const splitRow = Math.floor(vga.getLineCompare() / rowRepeat);
 
   // Pixel Panning (0-7 in EGA planar 16-color modes).
   // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
