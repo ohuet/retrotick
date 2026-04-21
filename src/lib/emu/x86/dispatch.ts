@@ -1202,8 +1202,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       cpu.setReg8(EAX, cpu.mem.readU8(maddr));
       break;
@@ -1220,8 +1219,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       if (opSize === 16) cpu.setReg16(EAX, cpu.mem.readU16(maddr));
       else cpu.reg[EAX] = cpu.mem.readU32(maddr) | 0;
@@ -1239,8 +1237,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       cpu.mem.writeU8(maddr, cpu.getReg8(EAX));
       break;
@@ -1257,8 +1254,7 @@ export function cpuStep(cpu: CPU): void {
         maddr = cpu.fetch32();
         if (cpu._segOverride === 0x64) maddr = (maddr + cpu.fsBase) >>> 0;
         else if (cpu._segOverride) maddr = (maddr + cpu.segBase(cpu.getSegOverrideSel())) >>> 0;
-        else if (!cpu.use32) maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
-        else maddr >>>= 0;
+        else maddr = (maddr + cpu.segBase(cpu.ds)) >>> 0;
       }
       if (opSize === 16) cpu.mem.writeU16(maddr, cpu.getReg16(EAX));
       else cpu.mem.writeU32(maddr, cpu.reg[EAX] >>> 0);
