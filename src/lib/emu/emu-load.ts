@@ -40,6 +40,7 @@ import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16
 import { setupXmsStub } from './dos/xms';
 import { setupDpmiStub } from './dos/dpmi';
 import { setupEmsDeviceHeader, EMS_DEVICE_SEG, setupVcpiPrivateArea, VCPI_PRIVATE_AREA } from './dos/ems';
+import { setupBiosRom } from './dos/bios-rom';
 import { VGA_FONT_8X8_ROM, ROM_FONT_8X8_ADDR, ROM_FONT_8X8_SEG, ROM_FONT_8X8_OFF, ROM_FONT_CGA_ADDR } from './dos/vga-font-data';
 import { VGA_FONT_8X16_ROM, ROM_FONT_8X16_ADDR, ROM_FONT_8X16_SEG, ROM_FONT_8X16_OFF } from './dos/vga-font-16';
 import { buildThunkTable, preloadStrings, verifyIAT, initTEB, initThreadTEB } from './emu-thunks-pe';
@@ -1104,6 +1105,13 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
 
   // Enable Mode X (unchained VGA) detection
   emu.initVgaModeXHook();
+
+  // Minimal ROM BIOS signatures at F0000-FFFFF: date, machine ID, copyright,
+  // reset JMP, default IRET/IRQ0 stubs, 1.44MB floppy parameter table. Runs
+  // before the per-interrupt stubs and BIOS config table below; any overlap
+  // with subsequent writes is intentional (the later, more-specific writes
+  // win).
+  setupBiosRom(emu.memory);
 
   // Set up per-interrupt BIOS stubs at F000:i*5, each containing: INT i; RETF 2
   const IRET_SEG = 0xF000;
