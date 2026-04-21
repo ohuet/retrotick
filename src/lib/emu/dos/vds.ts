@@ -5,9 +5,11 @@
 // virtual/linear address doesn't match the physical DMA address, so the
 // program asks VDS to translate and lock buffer regions.
 //
-// In this emulator memory is flat linear (no paging), so physical == linear.
-// Every service can succeed as a trivial no-op that reports the caller's
-// own linear address back as the physical address.
+// With paging disabled (real/V86 without CR0.PG), linear == physical and
+// every service is a trivial pass-through. With paging enabled (VCPI / DPMI
+// clients), we must walk the current page tables to translate the buffer's
+// linear address before reporting it as physical — otherwise the DMA
+// controller is programmed with a virtual address and reads garbage.
 //
 // Spec reference: Ralf Brown's Interrupt List, INT 4Bh.
 // Presence: BDA byte 40h:7Bh bit 5 set (done in emu-load.ts).
@@ -32,6 +34,16 @@ function ddsLinear(cpu: CPU, ddsAddr: number): number {
   // linear = seg*16 + offset. In PM this is a selector (base from GDT).
   const base = cpu.realMode ? (sel * 16) : cpu.segBase(sel);
   return (base + off) >>> 0;
+}
+
+/** Translate a linear address to its physical mapping when paging is on.
+ *  Falls back to the linear address (identity) when paging is off or when
+ *  the page walker can't resolve the mapping. */
+function toPhysical(cpu: CPU, linear: number): number {
+  const mem = cpu.mem as unknown as { _pagingEnabled?: boolean; translate?: (v: number) => number };
+  if (!mem._pagingEnabled || !mem.translate) return linear >>> 0;
+  const p = mem.translate(linear);
+  return p < 0 ? (linear >>> 0) : (p >>> 0);
 }
 
 export function handleInt4B(cpu: CPU, emu: Emulator): boolean {
@@ -59,8 +71,7 @@ export function handleInt4B(cpu: CPU, emu: Emulator): boolean {
     }
 
     case 0x03: { // Lock DMA Region
-      // Fill DDS.PhysicalAddress with linear (since we have no paging).
-      const phys = ddsLinear(cpu, ddsAddr);
+      const phys = toPhysical(cpu, ddsLinear(cpu, ddsAddr));
       cpu.mem.writeU32(ddsAddr + 0x0C, phys >>> 0);
       cpu.reg[EAX] = cpu.reg[EAX] & 0xFFFF0000;  // AH=0, AL=0 success
       cpu.setFlag(CF, false);
@@ -74,7 +85,7 @@ export function handleInt4B(cpu: CPU, emu: Emulator): boolean {
     }
 
     case 0x05: { // Scatter/Gather Lock Region — same as 0x03 for flat mem
-      const phys = ddsLinear(cpu, ddsAddr);
+      const phys = toPhysical(cpu, ddsLinear(cpu, ddsAddr));
       cpu.mem.writeU32(ddsAddr + 0x0C, phys >>> 0);
       cpu.reg[EAX] = cpu.reg[EAX] & 0xFFFF0000;
       cpu.setFlag(CF, false);
@@ -88,12 +99,13 @@ export function handleInt4B(cpu: CPU, emu: Emulator): boolean {
     }
 
     case 0x07: { // Request DMA Buffer
-      // Simple policy: the DDS already carries a client-provided buffer
-      // (region_size, linear_offset, segment/selector). Confirm it by
-      // reporting physical = linear. Real DMA controllers need buffer in
-      // low (<16 MB) memory; our emulator has flat low memory so this is
-      // always fine for typical DOS buffer sizes.
-      const phys = ddsLinear(cpu, ddsAddr);
+      // Policy: the DDS already carries a client-provided buffer (region_size,
+      // linear_offset, segment/selector). Confirm it by translating to the
+      // physical address — under paging that's a page-walk, otherwise it's
+      // just the linear address. Real DMA controllers require the buffer in
+      // low (<16 MB) memory; our emulator keeps low physical memory flat so
+      // this stays valid for typical DOS buffer sizes.
+      const phys = toPhysical(cpu, ddsLinear(cpu, ddsAddr));
       cpu.mem.writeU32(ddsAddr + 0x0C, phys >>> 0);
       cpu.reg[EAX] = cpu.reg[EAX] & 0xFFFF0000;
       cpu.setFlag(CF, false);

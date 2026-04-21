@@ -1349,7 +1349,11 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
   emu.virtualPtr = emu.virtualBase;
 
   // Wire Sound Blaster DMA
-  emu.dosAudio.readMemory = (addr: number) => emu.memory.readU8(addr);
+  // DMA reads are physical-address reads: real DMA controllers bypass the
+  // CPU's MMU. Under paging (VCPI / DPMI clients), readU8 would walk page
+  // tables and return wrong data whenever the DMA source sits in a non-
+  // identity-mapped page.
+  emu.dosAudio.readMemory = (addr: number) => emu.memory.readPhysicalU8(addr);
   emu.dosAudio.writeMemory = (addr: number, val: number) => emu.memory.writeU8(addr, val);
   emu.dosAudio.onSBIRQ = () => {
     const intNum = emu._picMasterBase + 7; // IRQ 7
@@ -1362,7 +1366,7 @@ function setupDosEnvironment(emu: Emulator, mz: import('./mz-loader').LoadedMZ):
     if (!(emu._picMasterMask & 0x20) && !emu._pendingHwInts.includes(intNum))
       emu._pendingHwInts.push(intNum);
   };
-  emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readU8(addr);
+  emu.dosAudio.gus.readMemory = (addr: number) => emu.memory.readPhysicalU8(addr);
 }
 
 /** Rebuild the thunk page set from current thunkToApi entries. */

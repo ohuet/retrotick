@@ -194,6 +194,95 @@ export class Memory {
   private _flatDV: DataView | null = null;
   private _flatMax = 0; // max address accessible in flat mode
 
+  // 32-bit PM paging (CR0.PG=1). When enabled, readU*/writeU* translate the
+  // given linear virtual address to a physical address via a 2-level walk of
+  // the page directory at _pagingPdBase. Translation results are cached in
+  // _tlb (one entry per 4KB page). _tlb is invalidated on CR3 change or when
+  // paging is disabled.
+  _pagingEnabled = false;
+  _pagingPdBase = 0;
+  private _tlb = new Map<number, number>(); // virtPage → physPage
+
+  /** Enable/disable PM paging with a 4KB-aligned page-directory base. */
+  setPaging(enabled: boolean, pdBase: number): void {
+    const newBase = pdBase & ~0xFFF;
+    if (this._pagingEnabled !== enabled || this._pagingPdBase !== newBase) {
+      this._tlb.clear();
+    }
+    this._pagingEnabled = enabled;
+    this._pagingPdBase = newBase;
+  }
+
+  /** Invalidate the full TLB (call on CR3 write, LTR, etc.). */
+  invalidateTLB(): void { this._tlb.clear(); }
+
+  /** Invalidate a single virtual page from the TLB (INVLPG). */
+  invalidatePage(vaddr: number): void { this._tlb.delete(vaddr >>> 12); }
+
+  /**
+   * Walk PD/PT and return the physical address for `vaddr`, or -1 if the
+   * mapping is not present. Cached per-page in _tlb. Caller is responsible
+   * for calling this only when `_pagingEnabled`.
+   */
+  translate(vaddr: number): number {
+    const vpage = vaddr >>> 12;
+    const cached = this._tlb.get(vpage);
+    if (cached !== undefined) {
+      return cached === -1 ? -1 : ((cached << 12) | (vaddr & 0xFFF));
+    }
+    // Walk page directory at _pagingPdBase; PDE[i] = PD base + i*4.
+    const pdIdx = (vaddr >>> 22) & 0x3FF;
+    const ptIdx = (vaddr >>> 12) & 0x3FF;
+    // Read raw physical memory for the walk — always no-paging access.
+    const pdeAddr = (this._pagingPdBase + pdIdx * 4) >>> 0;
+    const pde = this._readU32Physical(pdeAddr);
+    if (!(pde & 1)) {
+      this._tlb.set(vpage, -1);
+      return -1;
+    }
+    // 4MB-page support (CR4.PSE + PDE.PS). Most VCPI clients use 4KB pages,
+    // but emit the right translation just in case.
+    if (pde & 0x80) {
+      const pbase = pde & 0xFFC00000;
+      const paddr = pbase | (vaddr & 0x3FFFFF);
+      this._tlb.set(vpage, paddr >>> 12);
+      return paddr;
+    }
+    const ptBase = pde & ~0xFFF;
+    const pteAddr = (ptBase + ptIdx * 4) >>> 0;
+    const pte = this._readU32Physical(pteAddr);
+    if (!(pte & 1)) {
+      this._tlb.set(vpage, -1);
+      return -1;
+    }
+    const ppage = pte >>> 12;
+    this._tlb.set(vpage, ppage);
+    return ((ppage << 12) | (vaddr & 0xFFF)) >>> 0;
+  }
+
+  /** Read a u32 from physical memory (bypasses paging; used by the walker). */
+  private _readU32Physical(addr: number): number {
+    addr = (addr & this.a20Mask) >>> 0;
+    if (this._flatDV && addr + 3 < this._flatMax) return this._flatDV.getUint32(addr, true);
+    const off = addr & SEG_MASK;
+    if (off < SEG_SIZE - 3) return this.dv(addr).getUint32(off, true);
+    return (this._readU8Physical(addr) | (this._readU8Physical(addr + 1) << 8) |
+      (this._readU8Physical(addr + 2) << 16) | (this._readU8Physical(addr + 3) << 24)) >>> 0;
+  }
+  private _readU8Physical(addr: number): number {
+    addr = (addr & this.a20Mask) >>> 0;
+    if (this._flat && addr < this._flatMax) return this._flat[addr];
+    return this.seg(addr)[addr & SEG_MASK];
+  }
+
+  /** Read a byte from physical memory, bypassing paging/MMU translation.
+   *  Use this from hardware that reads raw physical addresses (DMA
+   *  controller, bus-mastering devices). A normal CPU access should use
+   *  readU8, which honors the active page tables. */
+  readPhysicalU8(addr: number): number {
+    return this._readU8Physical(addr);
+  }
+
   /** Enable flat memory mode backed by a WebAssembly.Memory's buffer */
   enableFlatMode(buffer: ArrayBuffer, maxAddr: number): void {
     this._flat = new Uint8Array(buffer);
@@ -303,6 +392,11 @@ export class Memory {
 
   readU8(addr: number): number {
     addr = (addr & this.a20Mask) >>> 0;
+    if (this._pagingEnabled) {
+      const p = this.translate(addr);
+      if (p < 0) return 0; // Unmapped page — return 0 (TODO: dispatch #PF)
+      addr = p >>> 0;
+    }
     if (this._hasVga && (addr >>> 16) === 0xA) return this.vgaPlanar!.planarRead(addr & 0xFFFF);
     if (this._flat && addr < this._flatMax) return this._flat[addr];
     return this.seg(addr)[addr & SEG_MASK];
@@ -310,6 +404,15 @@ export class Memory {
 
   readU16(addr: number): number {
     addr = (addr & this.a20Mask) >>> 0;
+    if (this._pagingEnabled) {
+      // Page boundary crossing: translate each byte. Otherwise single translate.
+      if ((addr & 0xFFF) >= 0xFFF) {
+        return this.readU8(addr) | (this.readU8(addr + 1) << 8);
+      }
+      const p = this.translate(addr);
+      if (p < 0) return 0;
+      addr = p >>> 0;
+    }
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return this.readU8(addr) | (this.readU8(addr + 1) << 8);
     }
@@ -323,6 +426,15 @@ export class Memory {
 
   readU32(addr: number): number {
     addr = (addr & this.a20Mask) >>> 0;
+    if (this._pagingEnabled) {
+      if ((addr & 0xFFF) >= 0xFFD) {
+        return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
+          (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
+      }
+      const p = this.translate(addr);
+      if (p < 0) return 0;
+      addr = p >>> 0;
+    }
     if (this._hasVga && (addr >>> 16) === 0xA) {
       return (this.readU8(addr) | (this.readU8(addr + 1) << 8) |
         (this.readU8(addr + 2) << 16) | (this.readU8(addr + 3) << 24)) >>> 0;
@@ -364,6 +476,11 @@ export class Memory {
   writeU8(addr: number, val: number): void {
     addr = (addr & this.a20Mask) >>> 0;
     if (this._ivtProtect && addr >= 0x80 && addr < 0xA0 && this._pmCpu && !this._pmCpu.realMode && val === 0) return;
+    if (this._pagingEnabled) {
+      const p = this.translate(addr);
+      if (p < 0) return; // Unmapped — drop write (TODO: dispatch #PF)
+      addr = p >>> 0;
+    }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.vgaPlanar!.planarWrite(addr & 0xFFFF, val & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
     if (this._flat && addr < this._flatMax) { this._flat[addr] = val & 0xFF; return; }
@@ -382,6 +499,16 @@ export class Memory {
       if (this._dos4gwStackGuards.has(addr) && val < this._dos4gwStackGuardMin) {
         val = this._dos4gwStackGuardMin;
       }
+    }
+    if (this._pagingEnabled) {
+      if ((addr & 0xFFF) >= 0xFFF) {
+        this.writeU8(addr, val & 0xFF);
+        this.writeU8(addr + 1, (val >> 8) & 0xFF);
+        return;
+      }
+      const p = this.translate(addr);
+      if (p < 0) return;
+      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); return; }
     if (this._readOnlyPages.size > 0 && this._isReadOnly(addr)) throw new AccessViolationError(addr);
@@ -435,6 +562,18 @@ export class Memory {
       } else if (this._dos4gwStackGuards.has(addr) && lo < this._dos4gwStackGuardMin) {
         val = (val & 0xFFFF0000) | this._dos4gwStackGuardMin;
       }
+    }
+    if (this._pagingEnabled) {
+      if ((addr & 0xFFF) >= 0xFFD) {
+        this.writeU8(addr, val & 0xFF);
+        this.writeU8(addr + 1, (val >> 8) & 0xFF);
+        this.writeU8(addr + 2, (val >> 16) & 0xFF);
+        this.writeU8(addr + 3, (val >> 24) & 0xFF);
+        return;
+      }
+      const p = this.translate(addr);
+      if (p < 0) return;
+      addr = p >>> 0;
     }
     if (this._hasVga && (addr >>> 16) === 0xA) { this.writeU8(addr, val & 0xFF); this.writeU8(addr + 1, (val >> 8) & 0xFF); this.writeU8(addr + 2, (val >> 16) & 0xFF); this.writeU8(addr + 3, (val >> 24) & 0xFF); return; }
     // DOS/4GW handler-table anchor write: see _dos4gwTableAnchored field
