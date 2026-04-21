@@ -313,7 +313,7 @@ if (!globalThis._oplRegistered) {
     if (port === 0x0B) { this.dma.writeMode(value); return true; }
     if (port === 0x0C) { this.dma.clearFlipFlop(); return true; }
     if (port === 0x0D) { this.dma.masterClear(); return true; }
-    if (port === 0x0E) { this.dma.mask = 0; return true; } // clear all masks
+    if (port === 0x0E) { this.dma.writeAllMask(0); return true; } // clear all masks
     if (port === 0x0F) { this.dma.writeAllMask(value); return true; }
 
     // DMA page registers

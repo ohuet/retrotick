@@ -416,7 +416,18 @@ export class GUS {
 
   private dma?: DMAController;
 
-  setDma(dma: DMAController): void { this.dma = dma; }
+  setDma(dma: DMAController): void {
+    this.dma = dma;
+    // Mirror DOSBox DmaCallback(IsUnmasked) → StartDmaTransfers: if startDma()
+    // bailed earlier because the channel was masked, resume it now. Gated on
+    // dmaPending so we only re-trigger genuinely deferred requests (not every
+    // unrelated unmask that happens after a completed transfer).
+    const prev = dma.onUnmask;
+    dma.onUnmask = (ch: number) => {
+      prev?.(ch);
+      if (ch === this.dmaChannel && this.dmaPending) this.startDma();
+    };
+  }
 
   /** True when the DMA transfer uses the non-linear 16-bit address layout.
    *  Matches DOSBox IsDmaXfer16Bit: requires both dmaCtrl bit 2 (channel-
@@ -439,7 +450,14 @@ export class GUS {
 
   private startDma(): void {
     const ch = this.dmaChannel;
-    if (!this.dma || !this.dma.isActive(ch)) return;
+    if (!this.dma) return;
+    if (!this.dma.isActive(ch)) {
+      // Channel is masked — defer until writeSingleMask clears it (matches
+      // DOSBox DmaCallback(IsUnmasked) behavior).
+      this.dmaPending = true;
+      return;
+    }
+    this.dmaPending = false;
 
     // DMA control register bit layout (matches DOSBox DmaControlRegister):
     //   bit 1 = direction (0=host→GUS, 1=GUS→host)
@@ -505,6 +523,14 @@ export class GUS {
     // stored in dmaCtrl itself).
     this.dma.status |= 1 << ch;
     this.dmaTcIrqPending = true;
+
+    // Real 8237 sets the mask bit after Terminal Count in non-auto-init mode
+    // (DOSBox dma.cpp:452). Without this, reg 0x41 bit 0 stays "live" in our
+    // model, so a spurious re-write of reg 0x41 (with the DMA controller not
+    // reprogrammed) could double-load stale bytes into GUS RAM.
+    const autoInit = !!(this.dma.mode[ch] & 0x10);
+    if (!autoInit) this.dma.mask |= 1 << ch;
+
     if (this.dmaCtrl & 0x20) { // wants_irq_on_terminal_count
       this.irqStatus |= 0x80;
       this.checkIrq();
