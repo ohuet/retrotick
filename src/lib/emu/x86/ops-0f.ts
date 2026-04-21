@@ -377,12 +377,17 @@ export function exec0F(
       const crn = d.regField;
       if (crn === 3 && cpu.emu) {
         cpu.emu._cr3 = d.val >>> 0;
+        // PD base changed — refresh paging state from current CR0.PG.
+        const pg = (cpu.emu._cr0 & 0x80000000) !== 0;
+        cpu.mem.setPaging(pg && !cpu.realMode, cpu.emu._cr3 & ~0xFFF);
         break;
       }
       if (crn === 0 && cpu.emu) {
         const oldPE = cpu.emu._cr0 & 1;
+        const oldPG = (cpu.emu._cr0 & 0x80000000) !== 0;
         cpu.emu._cr0 = d.val >>> 0;
         const newPE = cpu.emu._cr0 & 1;
+        const newPG = (cpu.emu._cr0 & 0x80000000) !== 0;
         if (!oldPE && newPE) {
           // Transition to protected mode — set up segment bases from GDT
           console.log(`[CR0] RM→PM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)}`);
@@ -398,6 +403,11 @@ export function exec0F(
           cpu.realMode = true;
           cpu.use32 = false;
           cpu._addrSize16 = true;
+        }
+        // Update paging state whenever PG or PE changes. Paging only takes
+        // effect in protected mode (PE=1) and when PG=1.
+        if (oldPG !== newPG || oldPE !== newPE) {
+          cpu.mem.setPaging(newPG && newPE !== 0, (cpu.emu._cr3 ?? 0) & ~0xFFF);
         }
       }
       break;

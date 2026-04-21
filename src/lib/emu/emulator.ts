@@ -364,6 +364,8 @@ export class Emulator {
   _vcpiPmGdtLimit?: number;
   _vcpiPmIdtBase?: number;
   _vcpiPmIdtLimit?: number;
+  _vcpiLastClientGdtBase?: number;  // Last non-empty client GDT seen on DE0C
+  _vcpiLastClientGdtLimit?: number;
   _vcpiDebugRegs?: number[]; // VCPI DR0-3, DR6, DR7, reserved×2 (set/read via INT 67h DE08/DE09)
   _dosPendingSoftwareIret = 0;
   _dosKeyConsumedThisTick = false;

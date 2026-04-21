@@ -618,8 +618,27 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           {
             const gdtrAddr = cpu.mem.readU32(esi + 4);
             const idtrAddr = cpu.mem.readU32(esi + 8);
-            emu._gdtBase = cpu.mem.readU32(gdtrAddr + 2);
-            emu._gdtLimit = cpu.mem.readU16(gdtrAddr);
+            const newGdtBase = cpu.mem.readU32(gdtrAddr + 2);
+            const newGdtLimit = cpu.mem.readU16(gdtrAddr);
+            // Paging is only a partial fix: if the client relocates its GDT
+            // into a virtual address whose page is unmapped (PDE/PTE=0), our
+            // translate() returns -1 and the descriptor read yields all zeros.
+            // On real hardware this would #PF and the client's handler would
+            // populate the missing mapping before retrying the access; we
+            // don't yet dispatch #PF through the IDT, so detect the all-zero
+            // "selector 0x18" case and fall back to the last known good GDT
+            // base instead of swallowing the bogus pointer.
+            const probeLo = cpu.mem.readU32(newGdtBase + 0x18);
+            const probeHi = cpu.mem.readU32(newGdtBase + 0x18 + 4);
+            if (probeLo === 0 && probeHi === 0 && emu._vcpiLastClientGdtBase) {
+              emu._gdtBase = emu._vcpiLastClientGdtBase;
+              emu._gdtLimit = emu._vcpiLastClientGdtLimit ?? 0xFFFF;
+            } else {
+              emu._gdtBase = newGdtBase;
+              emu._gdtLimit = newGdtLimit;
+              emu._vcpiLastClientGdtBase = newGdtBase;
+              emu._vcpiLastClientGdtLimit = newGdtLimit;
+            }
             emu._idtBase = cpu.mem.readU32(idtrAddr + 2);
             emu._idtLimit = cpu.mem.readU16(idtrAddr);
             emu._vcpiPmGdtBase = emu._gdtBase;
@@ -635,6 +654,10 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
           if (newCR3 !== 0) newCR0 = (newCR0 | 0x80000000) >>> 0;
           emu._cr0 = newCR0;
           emu._cr3 = newCR3 >>> 0;
+          // Activate paging for the Memory layer: VCPI clients expect
+          // virtual↔physical translation via the client-supplied CR3 page
+          // directory while in PM.
+          cpu.mem.setPaging(newCR3 !== 0, newCR3 & ~0xFFF);
           // Clear TSS busy bit before loading TR (required for LTR)
           if (newTR && emu._gdtBase) {
             const trDescAddr = emu._gdtBase + (newTR & 0xFFF8) + 5;
@@ -783,6 +806,11 @@ export function handleVcpiPM(cpu: CPU, emu: Emulator): boolean {
       // Switch to V86/real mode. V86 addressing is seg*16 (not flat),
       // so EIP must be stored as linear = segBase + offset.
       console.log(`[VCPI-DE0C] PM→V86 cs=${newCS.toString(16)} eip=${newEIP.toString(16)} ss=${newSS.toString(16)} esp=${newESP.toString(16)} ds=${newDS.toString(16)} es=${newES.toString(16)}`);
+      // In V86 mode, linear addresses (seg*16 + offset) STILL go through
+      // paging when CR0.PG=1. VCPI clients keep paging on across V86↔PM
+      // transitions; only a PM→RM (clear CR0.PE) turns it off. Leave
+      // mem.setPaging alone here — if the client hasn't cleared PG, we
+      // keep translating.
       cpu.realMode = true;
       cpu._vm86 = true; // back in pseudo-V86
       cpu.use32 = false;
