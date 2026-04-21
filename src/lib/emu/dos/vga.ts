@@ -713,15 +713,17 @@ export function syncMode13h(emu: Emulator): void {
   const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
 
   // Horizontal Pixel Panning: shift display left by pan pixels per scanline.
-  // Below split, pan resets to 0 unless ATC[0x10] bit 5 ("PELPAN Compat") is set.
+  // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
+  // compare split (the upper half pans, bottom half stays still). When bit 5
+  // is clear, pan is kept for the whole frame.
   const pan = vga.getPixelPan();
-  const keepPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
+  const resetPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
   const pixelMask = vga.dacPixelMask;
 
   for (let y = 0; y < height; y++) {
     const belowSplit = y >= splitRow;
     const rowBase = belowSplit ? 0 : displayStart;
-    const effPan = (belowSplit && !keepPanBelowSplit) ? 0 : pan;
+    const effPan = (belowSplit && resetPanBelowSplit) ? 0 : pan;
     const vramRowStart = rowBase + y * width + effPan;
     const pxBase = y * width;
     for (let x = 0; x < width; x++) {
@@ -784,11 +786,11 @@ export function syncModeX(emu: Emulator): void {
   const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
 
   // Horizontal Pixel Panning: shift pixels left by `pan` at scanline start.
-  // Below the split line, pan is reset to 0 unless ATC[0x10] bit 5 ("PELPAN
-  // Compatibility") is set — Second Reality relies on this so the bottom
-  // HUD rows don't follow the scrolling paysage.
+  // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
+  // compare split (upper half pans, bottom half stays still). When bit 5 is
+  // clear, pan applies to the whole frame.
   const pan = vga.getPixelPan();
-  const keepPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
+  const resetPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
 
   if (pan === 0) {
     // Fast path: pan=0 everywhere, 4-pixel unroll
@@ -812,7 +814,7 @@ export function syncModeX(emu: Emulator): void {
       const belowSplit = y >= splitRow;
       const rowBase = belowSplit ? 0 : displayStart;
       const rowStart = rowBase + y * pitch;
-      const effPan = (belowSplit && !keepPanBelowSplit) ? 0 : pan;
+      const effPan = (belowSplit && resetPanBelowSplit) ? 0 : pan;
       const pxBase = y * width;
       let srcByte = (rowStart + (effPan >> 2)) & 0x1FFFF;
       let plane = effPan & 3;
@@ -929,15 +931,16 @@ export function syncPlanar16(emu: Emulator): void {
   const splitRow = Math.floor(lineCompareRaw / (maxScanLine + 1));
 
   // Pixel Panning (0-7 in EGA planar 16-color modes).
-  // Below split, pan resets to 0 unless ATC[0x10] bit 5 ("PELPAN Compat") is set.
+  // Per DOSBox: when ATC[0x10] bit 5 is set, pan resets to 0 below the line
+  // compare split; when bit 5 is clear, pan applies to the whole frame.
   const pan = vga.getPixelPan();
-  const keepPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
+  const resetPanBelowSplit = !!(vga.atcRegs[0x10] & 0x20);
 
   for (let y = 0; y < height; y++) {
     const belowSplit = y >= splitRow;
     const rowBase = belowSplit ? 0 : displayStart;
     const rowOff = rowBase + y * pitch;
-    const effPan = (belowSplit && !keepPanBelowSplit) ? 0 : pan;
+    const effPan = (belowSplit && resetPanBelowSplit) ? 0 : pan;
     const pxBase = y * width;
     for (let x = 0; x < width; x++) {
       const srcPx = x + effPan;
