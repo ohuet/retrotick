@@ -46,6 +46,79 @@ function toPhysical(cpu: CPU, linear: number): number {
   return p < 0 ? (linear >>> 0) : (p >>> 0);
 }
 
+/** Check whether a linear region maps to physically-contiguous pages.
+ *  Under paging a virtually-contiguous buffer can be fragmented across
+ *  non-adjacent physical pages, in which case the DMA controller cannot be
+ *  programmed with a single base + length. Returns the physical address of
+ *  the first page regardless, plus whether the whole region is contiguous. */
+function checkContiguous(cpu: CPU, linear: number, size: number): { contiguous: boolean; firstPhys: number } {
+  const mem = cpu.mem as unknown as { _pagingEnabled?: boolean; translate?: (v: number) => number };
+  if (!mem._pagingEnabled || !mem.translate || size === 0) {
+    return { contiguous: true, firstPhys: linear >>> 0 };
+  }
+  const startPhys = mem.translate(linear);
+  if (startPhys < 0) return { contiguous: true, firstPhys: linear >>> 0 };
+  // Walk one physical page at a time starting at the first page boundary
+  // strictly after `linear`. Any mismatch between expected and actual
+  // physical address means the buffer crosses into a non-adjacent frame.
+  let nextBoundary = (linear + 0x1000) & ~0xFFF;
+  while (nextBoundary < linear + size) {
+    const nextPhys = mem.translate(nextBoundary);
+    if (nextPhys < 0) return { contiguous: false, firstPhys: startPhys >>> 0 };
+    const expectedPhys = (startPhys + (nextBoundary - linear)) >>> 0;
+    if ((nextPhys >>> 0) !== expectedPhys) {
+      return { contiguous: false, firstPhys: startPhys >>> 0 };
+    }
+    nextBoundary += 0x1000;
+  }
+  return { contiguous: true, firstPhys: startPhys >>> 0 };
+}
+
+/** Build an inline scatter-gather table in the DDS for a fragmented region.
+ *  Writes entries starting at DDS+0x10, each entry 8 bytes: DWORD physical
+ *  address then DWORD length. Caps at `maxEntries` which the caller read
+ *  from DDS+0x10 before invocation. Returns the number of entries written. */
+function fillScatterGatherTable(
+  cpu: CPU,
+  ddsAddr: number,
+  linear: number,
+  size: number,
+  maxEntries: number,
+): number {
+  const mem = cpu.mem as unknown as { _pagingEnabled?: boolean; translate?: (v: number) => number };
+  let written = 0;
+  let remaining = size;
+  let cursor = linear;
+  while (remaining > 0 && written < maxEntries) {
+    const fragPhys = mem._pagingEnabled && mem.translate
+      ? mem.translate(cursor)
+      : cursor;
+    // On unmapped page, stop — signals the caller that it ran out of valid
+    // mappings mid-buffer (e.g. client needs to touch those pages first).
+    if (fragPhys < 0) break;
+    // Extend this fragment while subsequent pages are physically adjacent.
+    let fragLen = 0x1000 - (cursor & 0xFFF);
+    if (fragLen > remaining) fragLen = remaining;
+    while (fragLen < remaining) {
+      const probeLinear = cursor + fragLen;
+      const probePhys = mem._pagingEnabled && mem.translate
+        ? mem.translate(probeLinear)
+        : probeLinear;
+      if (probePhys < 0) break;
+      if ((probePhys >>> 0) !== ((fragPhys + fragLen) >>> 0)) break;
+      const step = remaining - fragLen < 0x1000 ? remaining - fragLen : 0x1000;
+      fragLen += step;
+    }
+    const entryAddr = ddsAddr + 0x14 + written * 8;
+    cpu.mem.writeU32(entryAddr + 0, fragPhys >>> 0);
+    cpu.mem.writeU32(entryAddr + 4, fragLen >>> 0);
+    cursor += fragLen;
+    remaining -= fragLen;
+    written++;
+  }
+  return written;
+}
+
 export function handleInt4B(cpu: CPU, emu: Emulator): boolean {
   const ax = cpu.reg[EAX] & 0xFFFF;
   const ah = (ax >>> 8) & 0xFF;
@@ -71,8 +144,19 @@ export function handleInt4B(cpu: CPU, emu: Emulator): boolean {
     }
 
     case 0x03: { // Lock DMA Region
-      const phys = toPhysical(cpu, ddsLinear(cpu, ddsAddr));
-      cpu.mem.writeU32(ddsAddr + 0x0C, phys >>> 0);
+      // DMA controllers need a single physically-contiguous base address +
+      // length. If the virtually-contiguous region spans non-adjacent
+      // physical pages, fail with REGION_NOT_CONTIGUOUS (0x02) so the
+      // caller falls back to SG Lock or a bounce buffer.
+      const size = cpu.mem.readU32(ddsAddr + 0) >>> 0;
+      const linear = ddsLinear(cpu, ddsAddr);
+      const { contiguous, firstPhys } = checkContiguous(cpu, linear, size);
+      if (!contiguous) {
+        cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0200; // AL=02 not contiguous
+        cpu.setFlag(CF, true);
+        return true;
+      }
+      cpu.mem.writeU32(ddsAddr + 0x0C, firstPhys >>> 0);
       cpu.reg[EAX] = cpu.reg[EAX] & 0xFFFF0000;  // AH=0, AL=0 success
       cpu.setFlag(CF, false);
       return true;
@@ -84,9 +168,39 @@ export function handleInt4B(cpu: CPU, emu: Emulator): boolean {
       return true;
     }
 
-    case 0x05: { // Scatter/Gather Lock Region — same as 0x03 for flat mem
-      const phys = toPhysical(cpu, ddsLinear(cpu, ddsAddr));
-      cpu.mem.writeU32(ddsAddr + 0x0C, phys >>> 0);
+    case 0x05: { // Scatter/Gather Lock Region
+      // Extended DDS: +10 WORD available entries, +12 WORD used entries (out),
+      // +14 start of inline fragment table (each entry: DWORD physAddr, DWORD len).
+      // If the region is physically contiguous we also fill +0C with the base
+      // physical address as a convenience (matches how real VDS drivers behave
+      // when a single-fragment lock succeeds).
+      const size = cpu.mem.readU32(ddsAddr + 0) >>> 0;
+      const linear = ddsLinear(cpu, ddsAddr);
+      const availEntries = cpu.mem.readU16(ddsAddr + 0x10);
+      const { contiguous, firstPhys } = checkContiguous(cpu, linear, size);
+      if (contiguous) {
+        cpu.mem.writeU32(ddsAddr + 0x0C, firstPhys >>> 0);
+        if (availEntries > 0) {
+          cpu.mem.writeU32(ddsAddr + 0x14 + 0, firstPhys >>> 0);
+          cpu.mem.writeU32(ddsAddr + 0x14 + 4, size >>> 0);
+          cpu.mem.writeU16(ddsAddr + 0x12, 1);
+        } else {
+          cpu.mem.writeU16(ddsAddr + 0x12, 0);
+        }
+        cpu.reg[EAX] = cpu.reg[EAX] & 0xFFFF0000;
+        cpu.setFlag(CF, false);
+        return true;
+      }
+      const written = fillScatterGatherTable(cpu, ddsAddr, linear, size, availEntries);
+      cpu.mem.writeU16(ddsAddr + 0x12, written);
+      if (written === 0) {
+        // Could not emit even one fragment (probably unmapped page at base)
+        cpu.reg[EAX] = (cpu.reg[EAX] & 0xFFFF00FF) | 0x0500; // AL=05 buffer not available
+        cpu.setFlag(CF, true);
+        return true;
+      }
+      // First fragment's phys also goes to +0C for callers that only look there
+      cpu.mem.writeU32(ddsAddr + 0x0C, firstPhys >>> 0);
       cpu.reg[EAX] = cpu.reg[EAX] & 0xFFFF0000;
       cpu.setFlag(CF, false);
       return true;
