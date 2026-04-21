@@ -761,10 +761,31 @@ export function syncModeX(emu: Emulator): void {
   if (width <= 0) width = 320;
   width = (width + 3) & ~3;
 
-  // Reinit framebuffer if resolution changed
+  // Mode-tweak debounce: SR (and similar demos) reprogram CRTC one register
+  // at a time, and our vblank-triggered syncGraphics can fall between two
+  // writes — capturing e.g. height=200 while pitch is still 176 from the
+  // previous scene. Rendering that snapshot freezes a half-torn frame that
+  // stays on screen until the next dim change. Require the new (width,height)
+  // to stabilise over two consecutive syncs before applying the reshape.
   if (!vga.framebuffer || vga.framebuffer.width !== width || vga.framebuffer.height !== height) {
-    vga.initFramebuffer(width, height);
-    if (!vga.framebuffer) return;
+    const s = vga as any;
+    if (s._pendingFbWidth === width && s._pendingFbHeight === height) {
+      vga.initFramebuffer(width, height);
+      if (!vga.framebuffer) return;
+      s._pendingFbWidth = -1;
+      s._pendingFbHeight = -1;
+    } else {
+      s._pendingFbWidth = width;
+      s._pendingFbHeight = height;
+      // Skip rendering this frame — the framebuffer still reflects the
+      // previous stable geometry, so we'd either under-write (leaving stale
+      // content visible) or read inconsistent CRTC values. Defer until the
+      // dimensions confirm on the next sync.
+      return;
+    }
+  } else {
+    (vga as any)._pendingFbWidth = -1;
+    (vga as any)._pendingFbHeight = -1;
   }
 
   const lut = buildRGBLookup(vga.palette);
