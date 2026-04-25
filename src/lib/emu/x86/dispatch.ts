@@ -5,6 +5,7 @@ import { doShift } from './shift';
 import { doMovs, doStos, doLods, doCmps, doScas } from './string';
 import { handleDosInt } from '../dos/index';
 import { LazyOp } from './lazy-op';
+import { PageFaultError } from '../memory';
 
 // Register indices
 const EAX = 0, ECX = 1, EDX = 2, EBX = 3, ESP = 4, EBP = 5, ESI = 6, EDI = 7;
@@ -233,8 +234,19 @@ export function dispatchException(
   if (!cpu.realMode && cpu.emu && cpu.emu._idtBase) {
     const idtEntry = cpu.emu._idtBase + intNum * 8;
     if (intNum * 8 + 7 <= cpu.emu._idtLimit) {
-      const lo = cpu.mem.readU32(idtEntry);
-      const hi = cpu.mem.readU32(idtEntry + 4);
+      // The IDT may sit on a virtual page the guest hasn't mapped (e.g.,
+      // EMUL5 entering PM with paging on before its loader maps the IDT
+      // region). A PageFaultError here would propagate out of cpu.step()
+      // and crash the tick. Treat an unmapped IDT entry as "no handler"
+      // and let the caller halt cleanly.
+      let lo: number, hi: number;
+      try {
+        lo = cpu.mem.readU32(idtEntry);
+        hi = cpu.mem.readU32(idtEntry + 4);
+      } catch (e) {
+        if (e instanceof PageFaultError) return false;
+        throw e;
+      }
       const offsetLo = lo & 0xFFFF;
       const selector = (lo >>> 16) & 0xFFFF;
       const typeAttr = (hi >>> 8) & 0xFF;

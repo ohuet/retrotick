@@ -219,6 +219,26 @@ export class Memory {
    *  by setPaging — a non-paging client sees no behavior change. */
   _pfDispatchEnabled = false;
 
+  /** Returns true if the guest has installed a PM #PF handler (IDT[0x0E]
+   *  present + non-zero selector). Used to gate PageFaultError throws so PM
+   *  clients without a handler (e.g., DOS/4GW + EMUL5 that hasn't mapped the
+   *  IDT/GDT region in CR3) keep the legacy silent-return-0 behavior instead
+   *  of halting on every IDT/GDT read. IDT is read via `_readU32Physical`
+   *  because the IDT region itself may not be mapped through paging. */
+  hasGuestPfHandler(): boolean {
+    if (!this._pmCpu || this._pmCpu.realMode) return false;
+    const emu = this._pmCpu.emu;
+    if (!emu) return false;
+    const idtBase = (emu as any)._idtBase;
+    if (!idtBase) return false;
+    const entryAddr = (idtBase + 0x0E * 8) >>> 0;
+    const lo = this._readU32Physical(entryAddr);
+    const hi = this._readU32Physical(entryAddr + 4);
+    const present = ((hi >>> 8) & 0x80) !== 0;
+    const selector = (lo >>> 16) & 0xFFFF;
+    return present && selector !== 0;
+  }
+
   /** Enable/disable PM paging with a 4KB-aligned page-directory base. */
   setPaging(enabled: boolean, pdBase: number): void {
     const newBase = pdBase & ~0xFFF;
@@ -412,11 +432,14 @@ export class Memory {
     if (this._pagingEnabled) {
       const p = this.translate(addr);
       if (p < 0) {
-        // Only throw #PF in protected mode. In V86 mode the IDT-based dispatch
-        // path needs a non-trivial PM ring transition that we don't emulate
-        // yet — silently returning 0 matches our pre-paging behavior so V86
-        // guests (e.g. EOS while servicing INT calls) don't halt.
-        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+        // Only throw #PF in PM AND only when the guest has installed a PF
+        // handler in IDT[0x0E]. V86 mode skips because it would require a
+        // ring transition we don't emulate. PM-without-handler stays on the
+        // legacy "return 0" path so DOS/4GW + EMUL5 (which run with paging
+        // on but never map the IDT/GDT region in CR3) don't halt every time
+        // dispatch reads the IDT.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
+            && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, false);
         }
         return 0;
@@ -437,11 +460,14 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // Only throw #PF in protected mode. In V86 mode the IDT-based dispatch
-        // path needs a non-trivial PM ring transition that we don't emulate
-        // yet — silently returning 0 matches our pre-paging behavior so V86
-        // guests (e.g. EOS while servicing INT calls) don't halt.
-        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+        // Only throw #PF in PM AND only when the guest has installed a PF
+        // handler in IDT[0x0E]. V86 mode skips because it would require a
+        // ring transition we don't emulate. PM-without-handler stays on the
+        // legacy "return 0" path so DOS/4GW + EMUL5 (which run with paging
+        // on but never map the IDT/GDT region in CR3) don't halt every time
+        // dispatch reads the IDT.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
+            && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, false);
         }
         return 0;
@@ -468,11 +494,14 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // Only throw #PF in protected mode. In V86 mode the IDT-based dispatch
-        // path needs a non-trivial PM ring transition that we don't emulate
-        // yet — silently returning 0 matches our pre-paging behavior so V86
-        // guests (e.g. EOS while servicing INT calls) don't halt.
-        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+        // Only throw #PF in PM AND only when the guest has installed a PF
+        // handler in IDT[0x0E]. V86 mode skips because it would require a
+        // ring transition we don't emulate. PM-without-handler stays on the
+        // legacy "return 0" path so DOS/4GW + EMUL5 (which run with paging
+        // on but never map the IDT/GDT region in CR3) don't halt every time
+        // dispatch reads the IDT.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
+            && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, false);
         }
         return 0;
@@ -523,8 +552,10 @@ export class Memory {
     if (this._pagingEnabled) {
       const p = this.translate(addr);
       if (p < 0) {
-        // See readU8: V86 #PF path not yet emulated; drop write silently.
-        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+        // See readU8 above — same guard. PM-without-PF-handler drops writes
+        // silently; PM-with-handler throws and dispatches.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
+            && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, true);
         }
         return;
@@ -558,8 +589,10 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // See readU8: V86 #PF path not yet emulated; drop write silently.
-        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+        // See readU8 above — same guard. PM-without-PF-handler drops writes
+        // silently; PM-with-handler throws and dispatches.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
+            && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, true);
         }
         return;
@@ -629,8 +662,10 @@ export class Memory {
       }
       const p = this.translate(addr);
       if (p < 0) {
-        // See readU8: V86 #PF path not yet emulated; drop write silently.
-        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode) {
+        // See readU8 above — same guard. PM-without-PF-handler drops writes
+        // silently; PM-with-handler throws and dispatches.
+        if (this._pfDispatchEnabled && this._pmCpu && !this._pmCpu.realMode
+            && this.hasGuestPfHandler()) {
           throw new PageFaultError(addr, true);
         }
         return;
