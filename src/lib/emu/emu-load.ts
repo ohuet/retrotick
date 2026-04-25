@@ -275,7 +275,10 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       emu._idtLimit = 0x7FF;
       emu._ldtr = 0x08;
       emu._tr = 0x10;
-      emu._cr0 = (emu._cr0 | 1) >>> 0; // PE bit — SMSW/MOV r,CR0 report protected
+      // PE bit is NOT stored in _cr0 — it is shadowed at CR0-read sites
+      // (SMSW / MOV r,CR0) when _vm86 is true. Keeping _cr0.PE=0 lets guest
+      // programs that do their own real→PM switch (e.g. TESTEXT) see a clean
+      // RM→PM transition when they write CR0 with PE=1 and exit pseudo-V86.
       emu.cpu._vm86 = true;             // getFlags() ORs in bit 17
       console.log(`[EMU] Pseudo-V86 enabled: CR0=${emu._cr0.toString(16)} EFLAGS.VM=1 GDT=${emu._gdtBase.toString(16)} IDT=${emu._idtBase.toString(16)}`);
     }

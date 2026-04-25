@@ -627,10 +627,14 @@ export function handleInt67(cpu: CPU, emu: Emulator): boolean {
             // populate the missing mapping before retrying the access; we
             // don't yet dispatch #PF through the IDT, so detect the all-zero
             // "selector 0x18" case and fall back to the last known good GDT
-            // base instead of swallowing the bogus pointer.
-            const probeLo = cpu.mem.readU32(newGdtBase + 0x18);
-            const probeHi = cpu.mem.readU32(newGdtBase + 0x18 + 4);
-            if (probeLo === 0 && probeHi === 0 && emu._vcpiLastClientGdtBase) {
+            // base instead of swallowing the bogus pointer. Only apply when
+            // paging is actually active — otherwise the probe spuriously
+            // triggers whenever a legitimate small GDT has no descriptor at
+            // slot 0x18 (see VCPI test 10).
+            const pagingActive = newCR3 !== 0;
+            const probeLo = pagingActive ? cpu.mem.readU32(newGdtBase + 0x18) : 1;
+            const probeHi = pagingActive ? cpu.mem.readU32(newGdtBase + 0x18 + 4) : 0;
+            if (pagingActive && probeLo === 0 && probeHi === 0 && emu._vcpiLastClientGdtBase) {
               emu._gdtBase = emu._vcpiLastClientGdtBase;
               emu._gdtLimit = emu._vcpiLastClientGdtLimit ?? 0xFFFF;
             } else {

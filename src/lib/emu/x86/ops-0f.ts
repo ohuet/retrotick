@@ -233,7 +233,11 @@ export function exec0F(
         }
         case 4: { // SMSW r/m16 — Store Machine Status Word (low 16 bits of CR0)
           const d = cpu.decodeModRM(16);
-          const cr0 = cpu.emu?._cr0 ?? 0x0000;
+          // Shadow PE=1 in pseudo-V86 so guests see "protected mode" without
+          // actually persisting PE in _cr0 (lets a subsequent PE write trigger
+          // the real RM→PM transition path).
+          const rawCr0 = cpu.emu?._cr0 ?? 0x0000;
+          const cr0 = cpu._vm86 ? (rawCr0 | 1) : rawCr0;
           cpu.writeModRM(d, cr0 & 0xFFFF, 16);
           break;
         }
@@ -246,6 +250,9 @@ export function exec0F(
             cpu.emu._cr0 = (cpu.emu._cr0 & ~0x000E) | (val & 0x000F);
             if (!oldPE && (cpu.emu._cr0 & 1)) {
               cpu.realMode = false;
+              // Guest is entering its own PM — leave pseudo-V86 so far jumps
+              // resolve selectors through the GDT instead of sel*16 paragraphs.
+              cpu._vm86 = false;
             }
           }
           break;
@@ -357,7 +364,11 @@ export function exec0F(
       const d = cpu.decodeModRM(32);
       const crn = d.regField;
       let val = 0;
-      if (crn === 0) val = cpu.emu?._cr0 ?? 0;
+      if (crn === 0) {
+        const rawCr0 = cpu.emu?._cr0 ?? 0;
+        // Shadow PE=1 in pseudo-V86 (see SMSW above).
+        val = cpu._vm86 ? (rawCr0 | 1) >>> 0 : rawCr0;
+      }
       else if (crn === 3) val = cpu.emu?._cr3 ?? 0;
       // CR2 (page fault address), CR4 (extensions) — return 0
       cpu.writeModRM(d, val, 32);
@@ -392,6 +403,9 @@ export function exec0F(
           // Transition to protected mode — set up segment bases from GDT
           console.log(`[CR0] RM→PM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)}`);
           cpu.realMode = false;
+          // Guest is entering its own PM — leave pseudo-V86 so far jumps
+          // resolve selectors through the GDT instead of sel*16 paragraphs.
+          cpu._vm86 = false;
         } else if (oldPE && !newPE) {
           // Back to real mode — enable "unreal mode" if data segments have flat base.
           // DOS4GW sets base=0 for DS/ES/SS in PM, returns to RM, and expects the
