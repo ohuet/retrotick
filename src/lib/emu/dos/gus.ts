@@ -124,6 +124,30 @@ export class GUS {
   // Mix control
   private mixCtrl = 0;
 
+  /** Runtime tracing. When true, log voice starts and DMA uploads via
+   *  console.log with a `[GUS]` prefix. Intended for diagnosing progressive
+   *  sample corruption across long playback (SR demo scenes).
+   *  Enable from the browser console with `emu.dosAudio.gus.traceGus = true`.
+   *  Capped at `_traceMaxEvents` to avoid flooding the console — bump if you
+   *  need a longer window. */
+  traceGus = false;
+  private _traceEventCount = 0;
+  private _traceMaxEvents = 5000;
+
+  /** Compute a cheap 16-byte hash of GUS RAM at `addr`. Exposed for the
+   *  browser console so the user can snapshot content at specific offsets
+   *  and detect later corruption. */
+  hashRam(addr: number, len = 16): string {
+    let hash = 0;
+    const end = Math.min(addr + len, this.ram.length);
+    for (let i = addr; i < end; i++) hash = ((hash * 31) + this.ram[i & 0xFFFFF]) | 0;
+    return '0x' + (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
+  /** Reset the trace event counter so another burst of logs can be captured
+   *  (call from the console between scenes). */
+  resetTrace(): void { this._traceEventCount = 0; }
+
   /** Callback to fire GUS IRQ (set by DosAudio) */
   onIRQ: () => void = () => {};
   /** Callback to read host memory for DMA */
@@ -358,7 +382,29 @@ export class GUS {
         const mask = 1 << this.voiceIndex;
         if ((hi & 0xA0) === 0xA0) this.voiceIrqWave |= mask;
         else this.voiceIrqWave &= ~mask;
+        const prevState = v.wave.state;
         v.wave.state = hi & 0x7F;
+        // Trace voice START transitions: CTRL_DISABLED bits (RESET/STOPPED)
+        // just cleared — the voice is about to begin playing its configured
+        // sample. Captures (start>>9, end>>9, pos>>9) as 20-bit GUS RAM
+        // addresses so the listener can correlate with the last DMA uploads.
+        if (this.traceGus
+            && (prevState & CTRL_DISABLED)
+            && !(v.wave.state & CTRL_DISABLED)
+            && this._traceEventCount < this._traceMaxEvents) {
+          this._traceEventCount++;
+          // eslint-disable-next-line no-console
+          console.log(`[GUS] voice-start v=${this.voiceIndex}`
+            + ` start=0x${(v.wave.start >>> 9).toString(16).padStart(5, '0')}`
+            + ` end=0x${(v.wave.end >>> 9).toString(16).padStart(5, '0')}`
+            + ` pos=0x${(v.wave.pos >>> 9).toString(16).padStart(5, '0')}`
+            + ` inc=0x${v.wave.inc.toString(16)}`
+            + ` state=0x${v.wave.state.toString(16)}`
+            + ` pan=${v.pan}`
+            + ` vol.state=0x${v.vol.state.toString(16)}`
+            + ` vol.pos=0x${v.vol.pos.toString(16)}`
+            + ` 16bit=${!!(v.wave.state & CTRL_16BIT)}`);
+        }
         this.checkVoiceIrq();
         break;
       }
@@ -523,6 +569,25 @@ export class GUS {
     // stored in dmaCtrl itself).
     this.dma.status |= 1 << ch;
     this.dmaTcIrqPending = true;
+
+    if (this.traceGus && this._traceEventCount < this._traceMaxEvents) {
+      this._traceEventCount++;
+      // Hash the first 16 bytes of the uploaded region so the listener can
+      // notice "same GUS RAM offset, different content" (a sample reload
+      // would show a different hash).
+      let hash = 0;
+      const hashLen = Math.min(16, byteCount);
+      for (let i = 0; i < hashLen; i++) {
+        hash = ((hash * 31) + this.ram[(startGusAddr + i) & 0xFFFFF]) | 0;
+      }
+      // eslint-disable-next-line no-console
+      console.log(`[GUS] dma-upload gus=0x${startGusAddr.toString(16).padStart(5, '0')}`
+        + ` bytes=${byteCount}`
+        + ` dmaCtrl=0x${this.dmaCtrl.toString(16)}`
+        + ` invertMsb=${invertMsb}`
+        + ` 16bitSamples=${is16bitSamples}`
+        + ` hash=0x${(hash >>> 0).toString(16).padStart(8, '0')}`);
+    }
 
     // Real 8237 sets the mask bit after Terminal Count in non-auto-init mode
     // (DOSBox dma.cpp:452). Without this, reg 0x41 bit 0 stays "live" in our
