@@ -79,8 +79,19 @@ function handlePageFault(emu: Emulator, e: PageFaultError): boolean {
     cpu.haltReason = `unhandled #PF vaddr=0x${e.vaddr.toString(16)} write=${e.isWrite}`;
     return false;
   }
-  if (cpu._lastDispatchIs32) cpu.push32(errCode);
-  else cpu.push16(errCode);
+  // Error-code push can itself PF if the new stack page is unmapped — bail
+  // cleanly so we don't re-enter dispatch recursively.
+  try {
+    if (cpu._lastDispatchIs32) cpu.push32(errCode);
+    else cpu.push16(errCode);
+  } catch (err) {
+    if (err instanceof PageFaultError) {
+      cpu.halted = true;
+      cpu.haltReason = `unhandled #PF (recursive): vaddr=0x${e.vaddr.toString(16)}`;
+      return false;
+    }
+    throw err;
+  }
   return true;
 }
 

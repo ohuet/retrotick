@@ -257,14 +257,22 @@ export function dispatchException(
         const is32 = (gateType === 0x0E || gateType === 0x0F);
         const offset = is32 ? ((offsetHi << 16) | offsetLo) >>> 0 : offsetLo;
         const returnIP = (cpu.eip - cpu.segBase(cpu.cs)) & (is32 ? 0xFFFFFFFF : 0xFFFF);
-        if (is32) {
-          cpu.push32(cpu.getFlags());
-          cpu.push32(cpu.cs);
-          cpu.push32(returnIP);
-        } else {
-          cpu.push16(cpu.getFlags() & 0xFFFF);
-          cpu.push16(cpu.cs);
-          cpu.push16(returnIP & 0xFFFF);
+        // Stack pushes can themselves PF if the new SS:ESP page is unmapped.
+        // Treat that as "no usable handler" so the caller can fall back to
+        // halt rather than re-entering PF dispatch infinitely.
+        try {
+          if (is32) {
+            cpu.push32(cpu.getFlags());
+            cpu.push32(cpu.cs);
+            cpu.push32(returnIP);
+          } else {
+            cpu.push16(cpu.getFlags() & 0xFFFF);
+            cpu.push16(cpu.cs);
+            cpu.push16(returnIP & 0xFFFF);
+          }
+        } catch (e) {
+          if (e instanceof PageFaultError) return false;
+          throw e;
         }
         if (gateType === 0x06 || gateType === 0x0E) {
           cpu.setFlags(cpu.getFlags() & ~0x0200); // clear IF
