@@ -62,9 +62,9 @@ emu.screenHeight = 600;
 emu.registryStore = new RegistryStore();
 emu.profileStore = new ProfileStore();
 
-// Capture console output for missing API detection + Ogg error trigger
 const notFound = new Set();
 let sawOggError = false;
+let firstMsgBoxText = null, firstMsgBoxCaption = null;
 const origWarn = console.warn.bind(console);
 const origLog = console.log.bind(console);
 console.log = (...args) => {
@@ -80,50 +80,78 @@ console.error = (...args) => {
   origWarn(...args);
 };
 
-// Copy demo.dat into the emulator's virtual filesystem so the demo can open it
 const demoDatBytes = readFileSync('C:/Users/Olivier/Downloads/e_amoeba-final/e_amoeba-final/demo.dat');
 emu.additionalFiles.set('demo.dat', demoDatBytes.buffer.slice(demoDatBytes.byteOffset, demoDatBytes.byteOffset + demoDatBytes.byteLength));
 
 await emu.load(realArrayBuffer, peInfo, mockCanvas);
+
+// Headless-only overrides: Sleep and PeekMessage normally suspend via async rAF
+// callbacks that a synchronous test loop cannot service, so bypass them. MessageBoxA
+// is auto-dismissed and its text captured so the test can assert no demo error fired.
+emu.apiDefs.set('KERNEL32.DLL:Sleep', { handler: () => 0, stackBytes: 4 });
+const realPeek = emu.apiDefs.get('USER32.DLL:PeekMessageA')?.handler;
+emu.apiDefs.set('USER32.DLL:PeekMessageA', {
+  handler: () => {
+    const wasWaiting = emu.waitingForMessage;
+    const r = realPeek(emu);
+    if (r === undefined) { emu.waitingForMessage = wasWaiting; return 0; }
+    return r;
+  },
+  stackBytes: 20,
+});
+emu.apiDefs.set('USER32.DLL:MessageBoxA', {
+  handler: () => {
+    if (firstMsgBoxText === null) {
+      const textPtr = emu.readArg(1);
+      const captionPtr = emu.readArg(2);
+      firstMsgBoxText = textPtr ? emu.memory.readCString(textPtr, 256) : '<null>';
+      firstMsgBoxCaption = captionPtr ? emu.memory.readCString(captionPtr, 64) : '<null>';
+    }
+    return 1;
+  },
+  stackBytes: 16,
+});
+
 emu.run();
 
-// Auto-dismiss config dialog with IDC_OK (1001) to exercise the post-dialog path.
 const IDC_OK = 1001;
 let dismissedDialogs = 0;
-
 const MAX_TICKS = 5_000_000;
 let ticks = 0;
 let stuckCount = 0;
 let lastEip = 0;
+let reachedMsgLoop = false;
 while (!emu.halted && ticks < MAX_TICKS && !sawOggError) {
   if (emu.dialogState && !emu.dialogState.ended) {
     dismissedDialogs++;
     console.log(`[TEST] dismiss dialog #${dismissedDialogs}`);
     emu.dismissDialog(IDC_OK, new Map());
-    // _endDialog schedules the thunk completion via queueMicrotask —
-    // yield to drain microtasks so the DialogBoxParam call actually returns.
     await Promise.resolve();
     continue;
   }
-  if (emu.waitingForMessage) emu.waitingForMessage = false;
+  if (emu.waitingForMessage) { reachedMsgLoop = true; emu.waitingForMessage = false; }
   emu.tick();
   ticks++;
   if (emu.cpu.eip === lastEip) stuckCount++; else { stuckCount = 0; lastEip = emu.cpu.eip; }
   if (stuckCount > 5000) break;
   if (dismissedDialogs > 5) break;
+  if (reachedMsgLoop && ticks > 50_000) break;
 }
 
-console.log(`\n[TEST] ticks=${ticks} waiting=${emu.waitingForMessage} halted=${emu.halted} reason=${emu.cpu.haltReason || 'none'}`);
+console.log(`\n[TEST] ticks=${ticks} reachedMsgLoop=${reachedMsgLoop} halted=${emu.halted} reason=${emu.cpu.haltReason || 'none'}`);
 console.log(`[TEST] Missing APIs: ${notFound.size}`);
 for (const name of notFound) console.log(`  - ${name}`);
+if (firstMsgBoxText !== null) {
+  console.log(`[TEST] MessageBoxA fired: caption="${firstMsgBoxCaption}" text="${firstMsgBoxText}"`);
+}
 
-if (emu.waitingForMessage) {
-  console.log('[TEST] SUCCESS: Reached message loop');
-  process.exit(0);
-} else if (emu.halted) {
-  console.log('[TEST] HALTED');
-  process.exit(1);
-} else {
-  console.log('[TEST] TIMEOUT or stuck');
+if (!reachedMsgLoop) {
+  console.log('[TEST] FAIL: did not reach message loop');
   process.exit(1);
 }
+if (firstMsgBoxText !== null) {
+  console.log('[TEST] FAIL: demo reported an error');
+  process.exit(1);
+}
+console.log('[TEST] SUCCESS: reached message loop, no demo error');
+process.exit(0);
