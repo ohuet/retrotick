@@ -25,7 +25,7 @@ import { Desktop } from './Desktop';
 import { Taskbar } from './win2k/Taskbar';
 import { FOLDER_ICON_16, EXE_ICON_16 } from './DesktopIcon';
 import { MessageBox, MB_OK, MB_YESNO, MB_ICONQUESTION, MB_ICONERROR, IDYES } from './win2k/MessageBox';
-import { exportWorkbench, importWorkbench, downloadWorkbench, pickWorkbenchFile, readWorkbenchFile, type WorkbenchProgress } from '../lib/workbench';
+import { exportWorkbench, importWorkbench, downloadWorkbench, pickWorkbenchFile, type WorkbenchProgress } from '../lib/workbench';
 import { downloadSingleFile, downloadItemsAsZip, shouldDownloadAsZip, type DownloadItem } from '../lib/download';
 import { ProgressDialog } from './win2k/ProgressDialog';
 import { ProcessRegistry } from '../lib/emu/emulator';
@@ -346,10 +346,7 @@ export function App() {
         const caption = t().workbenchImporting;
         setWorkbenchProgress({ caption, progress: { phase: 'loading', current: 0, total: file.size } });
         try {
-          const bytes = await readWorkbenchFile(file, (loaded, total) => {
-            setWorkbenchProgress({ caption, progress: { phase: 'loading', current: loaded, total } });
-          });
-          await importWorkbench(bytes, p => setWorkbenchProgress({ caption, progress: p }));
+          await importWorkbench(file, p => setWorkbenchProgress({ caption, progress: p }));
           location.reload();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
