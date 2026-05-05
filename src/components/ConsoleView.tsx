@@ -312,9 +312,12 @@ interface ConsoleViewProps {
   focused?: boolean;
   /** Display-size multiplier applied to the 640×480 logical surface. */
   zoom?: number;
+  /** Fired when the console's display dimensions change (graphics ↔ text mode
+   *  or text rows / char height change), so the parent can resize the window. */
+  onScreenLayoutChange?: () => void;
 }
 
-export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps) {
+export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChange }: ConsoleViewProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -347,8 +350,12 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
       }
     };
     // Framebuffer reallocated (resolution change) — re-render so the JSX
-    // re-applies width/height props to the canvas DOM element.
-    emu.onVideoModeChange = () => render();
+    // re-applies width/height props to the canvas DOM element, and notify
+    // the parent so it can resize the surrounding window.
+    emu.onVideoModeChange = () => {
+      render();
+      onScreenLayoutChange?.();
+    };
     render();
     inputRef.current?.focus();
     const blinkTimer = setInterval(render, 500);
@@ -839,7 +846,10 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
   const dosTextMouseVisible = !isGfx && dosMouseVisible;
 
   const dispW = 640 * zoom;
-  const dispH = 480 * zoom;
+  // Text modes use their natural pixel height (rows × charH = 400 for 80×25
+  // and 80×50) so there is no fractional vertical stretch. Graphics modes
+  // keep the 480 client area regardless of the underlying framebuffer.
+  const dispH = (isGfx ? 480 : ROWS * lineHeight) * zoom;
   return (
     <div
       style={{ position: 'relative', width: `${dispW}px`, height: `${dispH}px`, background: '#000' }}
@@ -867,8 +877,9 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
           key="text"
           ref={textCanvasRef}
           width={640}
-          height={480}
+          height={ROWS * lineHeight}
           style={{
+            display: 'block',
             width: `${dispW}px`,
             height: `${dispH}px`,
             imageRendering: 'pixelated',

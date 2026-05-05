@@ -407,6 +407,13 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [hasMainWindow, setHasMainWindow] = useState(false);
   const [isConsole, setIsConsole] = useState(false);
   const [consoleZoom, setConsoleZoom] = useState<1 | 2>(1);
+  // Bumped whenever the DOS console's screen layout (graphics ↔ text mode,
+  // text rows × charH) changes — triggers a re-render so consoleClientH
+  // re-reads the up-to-date emu state.
+  const [consoleLayoutBump, setConsoleLayoutBump] = useState(0);
+  const handleScreenLayoutChange = useCallback(() => {
+    setConsoleLayoutBump(b => b + 1);
+  }, []);
   const fsWrapperRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fsScale, setFsScale] = useState(1);
@@ -1565,13 +1572,22 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     );
   }
 
+  // Console window height tracks the active video mode: graphics modes use
+  // the full 480 area, text modes shrink to ROWS × charH (= 400 for 80×25 and
+  // 80×50) so the canvas renders at native size with no fractional stretch.
+  const consoleEmu = emuRef.current;
+  const consoleClientH = consoleEmu && !consoleEmu.isGraphicsMode
+    ? (consoleEmu.screenRows || 25) * (consoleEmu.charHeight || 16) * consoleZoom
+    : 480 * consoleZoom;
+  void consoleLayoutBump; // dependency: re-evaluate when the layout changes
+
   return (
     <div ref={desktopRef} style={{ position: 'absolute', left: `${windowPos.x}px`, top: `${windowPos.y}px`, zIndex, visibility: windowReady ? 'visible' : 'hidden', display: minimizedProp ? 'none' : undefined, touchAction: 'none' }} onPointerDown={onFocus}>
       <Window
         title={windowTitle}
         style={windowStyle}
         clientW={isConsole ? 640 * consoleZoom : canvasSize.w}
-        clientH={isConsole ? 480 * consoleZoom : canvasSize.h}
+        clientH={isConsole ? consoleClientH : canvasSize.h}
         iconUrl={iconUrl}
         iconElement={!iconUrl ? EXE_ICON_16 : undefined}
         focused={parentFocused}
@@ -1622,7 +1638,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
               } : undefined}
             >
               <div style={isFullscreen ? { transform: `scale(${fsScale})`, transformOrigin: 'center' } : undefined}>
-                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} />
+                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} onScreenLayoutChange={handleScreenLayoutChange} />
               </div>
             </div>
           ) : (
