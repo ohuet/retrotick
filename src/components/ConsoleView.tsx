@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'preac
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
-import { injectDosMouseEvent, drawGfxMouseCursor, getTextModeCursorOverride } from '../lib/emu/dos/mouse';
+import { injectDosMouseEvent, drawGfxMouseCursor, getTextModeCursorOverride, getDisplayedTextCursor } from '../lib/emu/dos/mouse';
 import { VGA_FONT_8X8_ROM } from '../lib/emu/dos/vga-font-data';
 import { VGA_FONT_8X16_ROM } from '../lib/emu/dos/vga-font-16';
 
@@ -107,19 +107,20 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
 
   ctx.putImageData(imgData, 0, 0);
 
-  // Cursor
-  const cursorStart = emu.vga.crtcRegs[0x0A] & 0x1F;
-  const cursorEnd = emu.vga.crtcRegs[0x0B] & 0x1F;
-  const cursorOff = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
+  // Cursor (BIOS or hardware mouse cursor — they share the unique CRTC cursor)
+  const cur = getDisplayedTextCursor(emu, COLS, ROWS);
   const blink = Math.floor(Date.now() / 500) % 2 === 0;
-  if (blink && !cursorOff && cursorStart <= cursorEnd) {
-    const cx = emu.consoleCursorX * CHAR_W;
-    const cy = emu.consoleCursorY * charH;
-    const curCell = emu.consoleBuffer[emu.consoleCursorY * COLS + emu.consoleCursorX];
+  // Clamp scanlines to current cell height (e.g. charH=8 in 80x50 mode)
+  const cs = Math.min(cur.start, charH - 1);
+  const ce = Math.min(cur.end, charH - 1);
+  if (blink && !cur.disabled && cs <= ce) {
+    const cx = cur.x * CHAR_W;
+    const cy = cur.y * charH;
+    const curCell = emu.consoleBuffer[cur.y * COLS + cur.x];
     const curFg = curCell ? (curCell.attr & 0x0F) : 7;
     const c = COLORS[curFg === 0 ? 7 : curFg];
     ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
-    ctx.fillRect(cx, cy + cursorStart, CHAR_W, cursorEnd - cursorStart + 1);
+    ctx.fillRect(cx, cy + cs, CHAR_W, ce - cs + 1);
   }
 }
 
@@ -184,18 +185,18 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
     }
   }
 
-  // Cursor
-  const cursorStart = emu.vga.crtcRegs[0x0A] & 0x1F;
-  const cursorEnd = emu.vga.crtcRegs[0x0B] & 0x1F;
-  const cursorOff = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
+  // Cursor (BIOS or hardware mouse cursor)
+  const cur = getDisplayedTextCursor(emu, COLS, ROWS);
   const blink = Math.floor(Date.now() / 500) % 2 === 0;
-  if (blink && !cursorOff && cursorStart <= cursorEnd) {
-    const cx = emu.consoleCursorX * charW;
-    const cy = emu.consoleCursorY * lineH;
-    const curCell = emu.consoleBuffer[emu.consoleCursorY * COLS + emu.consoleCursorX];
+  const cs = Math.min(cur.start, lineH - 1);
+  const ce = Math.min(cur.end, lineH - 1);
+  if (blink && !cur.disabled && cs <= ce) {
+    const cx = cur.x * charW;
+    const cy = cur.y * lineH;
+    const curCell = emu.consoleBuffer[cur.y * COLS + cur.x];
     const curFg = curCell ? (curCell.attr & 0x0F) : 7;
     ctx.fillStyle = COLORS[curFg === 0 ? 7 : curFg];
-    ctx.fillRect(cx, cy + cursorStart, charW, cursorEnd - cursorStart + 1);
+    ctx.fillRect(cx, cy + cs, charW, ce - cs + 1);
   }
 }
 
@@ -357,12 +358,12 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
   const COLORS = emu.isDOS ? getVgaConsoleColors(emu) : DEFAULT_CONSOLE_COLORS;
 
   // Cursor shape from CRTC registers
-  const cursorStartScanline = emu.vga.crtcRegs[0x0A] & 0x1F;
-  const cursorEndScanline = emu.vga.crtcRegs[0x0B] & 0x1F;
-  const cursorDisabled = (emu.vga.crtcRegs[0x0A] & 0x20) !== 0;
   const charH = emu.charHeight || 16;
+  const displayedCursor = getDisplayedTextCursor(emu, COLS, ROWS);
+  const cursorStartScanline = Math.min(displayedCursor.start, charH - 1);
+  const cursorEndScanline = Math.min(displayedCursor.end, charH - 1);
   const cursorBlink = Math.floor(Date.now() / 500) % 2 === 0;
-  const cursorActive = cursorBlink && !cursorDisabled && cursorStartScanline <= cursorEndScanline;
+  const cursorActive = cursorBlink && !displayedCursor.disabled && cursorStartScanline <= cursorEndScanline;
 
   // Build DOM content from console buffer
   const lineHeight = emu.charHeight === 8 ? 8 : 16;
@@ -389,7 +390,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
       const effChar = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0);
       const fg = effAttr & 0x0F;
       const bg = (effAttr >> 4) & 0x0F;
-      const isCursor = row === emu.consoleCursorY && col === emu.consoleCursorX;
+      const isCursor = row === displayedCursor.y && col === displayedCursor.x;
       const charCode = effChar;
       const ch = (charCode > 0 && charCode !== 0x20)
         ? (emu.isDOS && charCode <= 0xFF ? cp437ToChar(charCode) : String.fromCharCode(charCode))
@@ -824,7 +825,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
   const gfxWidth = fb ? fb.width : emu.vga.currentMode.width;
   const gfxHeight = fb ? fb.height : emu.vga.currentMode.height;
   const dosMouseVisible = emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0;
-  const dosTextMouseVisible = !isGfx && dosMouseVisible && emu.dosMouse.textCursorType === 0;
+  const dosTextMouseVisible = !isGfx && dosMouseVisible;
 
   const dispW = 640 * zoom;
   const dispH = 480 * zoom;

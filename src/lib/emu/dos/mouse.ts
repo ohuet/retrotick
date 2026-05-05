@@ -390,6 +390,45 @@ export function updateMouseRangeForMode(emu: Emulator): void {
 }
 
 /**
+ * Compute the effective text-mode cursor (position + scanlines + visible flag).
+ *
+ * In hardware mouse-cursor mode (INT 33h AX=0Ah BX=1) the mouse driver steals
+ * the unique CRTC text cursor: it is moved to the mouse cell and uses the
+ * scanlines configured by the program. The application's own BIOS cursor is
+ * suppressed while the mouse cursor is visible.
+ *
+ * Otherwise this returns the regular BIOS cursor (CRTC registers + console
+ * cursor position).
+ */
+export function getDisplayedTextCursor(emu: Emulator, COLS: number, ROWS: number): {
+  x: number;
+  y: number;
+  start: number;
+  end: number;
+  disabled: boolean;
+} {
+  const m = emu.dosMouse;
+  if (m.installed && m.cursorVisible >= 0 && !emu.isGraphicsMode && m.textCursorType === 1) {
+    const col = Math.floor(m.x * COLS / (m.maxX + 1));
+    const row = Math.floor(m.y * ROWS / (m.maxY + 1));
+    return {
+      x: Math.max(0, Math.min(COLS - 1, col)),
+      y: Math.max(0, Math.min(ROWS - 1, row)),
+      start: m.textCursorStart,
+      end: m.textCursorEnd,
+      disabled: false,
+    };
+  }
+  return {
+    x: emu.consoleCursorX,
+    y: emu.consoleCursorY,
+    start: emu.vga.crtcRegs[0x0A] & 0x1F,
+    end: emu.vga.crtcRegs[0x0B] & 0x1F,
+    disabled: (emu.vga.crtcRegs[0x0A] & 0x20) !== 0,
+  };
+}
+
+/**
  * Compute the text-mode mouse cursor cell override.
  * Returns the modified char/attr to draw at the mouse position, or null if
  * no cursor should be drawn (mouse not installed, hidden, in graphics mode,
