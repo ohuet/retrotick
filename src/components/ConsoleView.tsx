@@ -144,25 +144,40 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
 
   const COLORS = DEFAULT_CONSOLE_COLORS;
   const lineH = 16;
+  const cellW = 8;
   const font = `${lineH}px ${TEXT_FONT}`;
   ctx.font = font;
-  const charW = ctx.measureText('0').width;
+  const naturalCharW = ctx.measureText('0').width;
+  // Compress the natural-width font into 8-pixel cells so the canvas backing
+  // dimensions match the CSS box (640×400 for 80×25). Without this scale, the
+  // canvas was sized to ceil(COLS×naturalCharW) ≈ 768 and the browser
+  // downsampled 768→640 with a non-integer ratio, making some columns lose a
+  // pixel and producing visibly uneven vertical strokes (e.g. on '0' or '||').
+  const xScale = cellW / naturalCharW;
 
-  // Size canvas to natural font metrics — CSS scales to 640×480
-  const cw = Math.ceil(COLS * charW);
+  // Size canvas to match its CSS box exactly — every cell column is 1 css pixel.
+  const cw = COLS * cellW;
   const ch = ROWS * lineH;
   if (canvas.width !== cw || canvas.height !== ch) {
     canvas.width = cw;
     canvas.height = ch;
-    ctx.font = font; // Resizing clears context state
-    ctx.textBaseline = 'top';
   }
+  // Re-apply state every frame: a canvas-width assignment clears it, but the
+  // <canvas> element may also have been mounted by JSX at exactly (cw, ch),
+  // in which case the if above never runs and the context still carries its
+  // default textBaseline='alphabetic' — fillText would then draw glyphs ~12 px
+  // above their intended top, hiding row 0 off-screen.
+  ctx.font = font;
+  ctx.textBaseline = 'top';
 
-  // Clear
+  // Clear (canvas coords, no scale)
   ctx.fillStyle = COLORS[0];
   ctx.fillRect(0, 0, cw, ch);
 
   const mouseOverride = getTextModeCursorOverride(emu, COLS, ROWS);
+
+  ctx.save();
+  ctx.scale(xScale, 1);
 
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
@@ -175,13 +190,13 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
       const effAttr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
       const fg = effAttr & 0x0F;
       const bg = (effAttr >> 4) & 0x0F;
-      const x = col * charW;
+      const x = col * naturalCharW;
       const y = row * lineH;
       const wide = !isMouseCell && cell && cell.char > 0x20 && isFullwidth(cell.char);
 
-      // Background — +1px overlap to prevent fractional pixel gaps
+      // Background — +1px overlap (in scaled coords) to prevent fractional gaps
       ctx.fillStyle = COLORS[bg];
-      ctx.fillRect(x, y, (wide ? charW * 2 : charW) + 1, lineH);
+      ctx.fillRect(x, y, (wide ? naturalCharW * 2 : naturalCharW) + 1, lineH);
 
       // Character
       const c = effChar > 0x20 ? String.fromCharCode(effChar) : '';
@@ -192,18 +207,21 @@ function drawTextMode(canvas: HTMLCanvasElement, emu: Emulator, COLS: number, RO
     }
   }
 
-  // Cursor (BIOS or hardware mouse cursor)
+  ctx.restore();
+
+  // Cursor (BIOS or hardware mouse cursor) — drawn outside ctx.scale so the
+  // rectangle is exactly cellW wide in canvas pixels.
   const cur = getDisplayedTextCursor(emu, COLS, ROWS);
   const blink = Math.floor(Date.now() / 500) % 2 === 0;
   const cs = Math.min(cur.start, lineH - 1);
   const ce = Math.min(cur.end, lineH - 1);
   if (blink && !cur.disabled && cs <= ce) {
-    const cx = cur.x * charW;
+    const cx = cur.x * cellW;
     const cy = cur.y * lineH;
     const curCell = emu.consoleBuffer[cur.y * COLS + cur.x];
     const curFg = curCell ? (curCell.attr & 0x0F) : 7;
     ctx.fillStyle = COLORS[curFg === 0 ? 7 : curFg];
-    ctx.fillRect(cx, cy + cs, charW, ce - cs + 1);
+    ctx.fillRect(cx, cy + cs, cellW, ce - cs + 1);
   }
 }
 
