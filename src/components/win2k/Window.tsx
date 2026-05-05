@@ -58,6 +58,8 @@ export function capBtnText(label: string, onClick?: () => void, active?: boolean
         font: 'bold 9px/1 "Tahoma",sans-serif',
         color: '#000',
         userSelect: 'none',
+        paddingBottom: sunken ? '0' : '1px',
+        paddingRight: sunken ? '0' : '1px',
         paddingTop: sunken ? '1px' : '0',
         paddingLeft: sunken ? '1px' : '0',
       }}
@@ -271,7 +273,7 @@ export function Window({
               <span style={{ width: '2px' }} />
             </>}
             {onFullscreenToggle && <>
-              {capBtnSvg(svgFullscreen, 'top 2px left 3px', onFullscreenToggle)}
+              {capBtnSvg(svgFullscreen, 'top 1px left 2px', onFullscreenToggle)}
               <span style={{ width: '2px' }} />
             </>}
             {(wStyle & WS_MINIMIZEBOX) ? capBtnSvg(svgMin, 'top 7px left 4px', onMinimize) : null}
