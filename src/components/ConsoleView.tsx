@@ -3,8 +3,6 @@ import { type Emulator, isFullwidth } from '../lib/emu/emulator';
 import { cp437ToChar } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
 import { injectDosMouseEvent, drawGfxMouseCursor, getTextModeCursorOverride, getDisplayedTextCursor } from '../lib/emu/dos/mouse';
-import { VGA_FONT_8X8_ROM } from '../lib/emu/dos/vga-font-data';
-import { VGA_FONT_8X16_ROM } from '../lib/emu/dos/vga-font-16';
 
 // Default Windows console 16-color palette (fallback for Win32 programs)
 const DEFAULT_CONSOLE_COLORS = [
@@ -58,7 +56,8 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
   if (!ctx) return;
 
   const charH = emu.charHeight === 8 ? 8 : 16;
-  const fontData = charH === 8 ? VGA_FONT_8X8_ROM : VGA_FONT_8X16_ROM;
+  const fontRAM = emu.vga.fontRAM;
+  const banks = emu.vga.getCharMapBanks();
   const COLORS = getVgaConsoleColorsRGB(emu);
   const CHAR_W = 8;
   const w = COLS * CHAR_W;
@@ -81,16 +80,24 @@ function drawTextModeBitmap(canvas: HTMLCanvasElement, emu: Emulator, COLS: numb
       const isMouseCell = !!mouseOverride && mouseOverride.row === row && mouseOverride.col === col;
       const ch = isMouseCell ? (mouseOverride!.char || 0x20) : (cell ? cell.char : 0x20);
       const attr = isMouseCell ? mouseOverride!.attr : (cell ? cell.attr : 0x07);
-      const fg = attr & 0x0F;
+      let fg: number;
+      let bank: number;
+      if (banks.fontSwitchActive) {
+        fg = attr & 0x07;
+        bank = (attr & 0x08) ? banks.mapA : banks.mapB;
+      } else {
+        fg = attr & 0x0F;
+        bank = banks.mapA;
+      }
       const bg = (attr >> 4) & 0x0F;
       const fgColor = COLORS[fg];
       const bgColor = COLORS[bg];
-      const fontOffset = (ch & 0xFF) * charH;
+      const fontOffset = (bank & 0x07) * 256 * 32 + (ch & 0xFF) * 32;
       const px = col * CHAR_W;
       const py = row * charH;
 
       for (let y = 0; y < charH; y++) {
-        const bits = fontData[fontOffset + y];
+        const bits = fontRAM[fontOffset + y];
         const rowBase = ((py + y) * w + px) * 4;
         for (let x = 0; x < 8; x++) {
           const isSet = (bits >> (7 - x)) & 1;
