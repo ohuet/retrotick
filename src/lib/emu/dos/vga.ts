@@ -714,10 +714,16 @@ export class VGAState {
     return lut;
   }
 
+  /** Notified when initFramebuffer creates a buffer with new dimensions. */
+  onFramebufferResize?: () => void;
+
   initFramebuffer(width: number, height: number): void {
-    if (typeof ImageData !== 'undefined') {
-      this.framebuffer = new ImageData(width, height);
-    }
+    if (typeof ImageData === 'undefined') return;
+    const dimsChanged = !this.framebuffer
+      || this.framebuffer.width !== width
+      || this.framebuffer.height !== height;
+    this.framebuffer = new ImageData(width, height);
+    if (dimsChanged) this.onFramebufferResize?.();
   }
 }
 

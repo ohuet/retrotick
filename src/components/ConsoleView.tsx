@@ -346,6 +346,9 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
         render();
       }
     };
+    // Framebuffer reallocated (resolution change) — re-render so the JSX
+    // re-applies width/height props to the canvas DOM element.
+    emu.onVideoModeChange = () => render();
     render();
     inputRef.current?.focus();
     const blinkTimer = setInterval(render, 500);
@@ -353,6 +356,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
       clearInterval(blinkTimer);
       emu.onConsoleOutput = undefined;
       emu.onVideoFrame = undefined;
+      emu.onVideoModeChange = undefined;
     };
   }, [emu, render]);
 
@@ -846,6 +850,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
     >
       {isGfx ? (
         <canvas
+          key="gfx"
           ref={canvasRef}
           width={gfxWidth}
           height={gfxHeight}
@@ -859,6 +864,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps)
         />
       ) : useCanvas ? (
         <canvas
+          key="text"
           ref={textCanvasRef}
           width={640}
           height={480}
