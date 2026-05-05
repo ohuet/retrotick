@@ -406,6 +406,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [windowReady, setWindowReady] = useState(false);
   const [hasMainWindow, setHasMainWindow] = useState(false);
   const [isConsole, setIsConsole] = useState(false);
+  const [consoleZoom, setConsoleZoom] = useState<1 | 2>(1);
   const [crashInfo, setCrashInfo] = useState<{ eip: string; description: string } | null>(null);
   const [messageBoxes, setMessageBoxes] = useState<{ id: number; caption: string; text: string; type: number; isExit?: boolean }[]>([]);
   const [commonDialog, setCommonDialog] = useState<CommonDialogRequest | null>(null);
@@ -441,6 +442,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     setHasMainWindow(false);
     setCrashInfo(null);
     setMessageBoxes([]);
+    setConsoleZoom(1);
     preMaxState.current = null;
 
     const canvas = canvasRef.current;
@@ -1479,8 +1481,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       <Window
         title={windowTitle}
         style={windowStyle}
-        clientW={isConsole ? 640 : canvasSize.w}
-        clientH={isConsole ? 480 : canvasSize.h}
+        clientW={isConsole ? 640 * consoleZoom : canvasSize.w}
+        clientH={isConsole ? 480 * consoleZoom : canvasSize.h}
         iconUrl={iconUrl}
         iconElement={!iconUrl ? EXE_ICON_16 : undefined}
         focused={parentFocused}
@@ -1502,6 +1504,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         onTitleBarMouseDown={onTitleBarMouseDown}
         onTitleBarDblClick={handleTitleBarDblClick}
         onResizeStart={onResizeStart}
+        onZoomToggle={isConsole ? () => setConsoleZoom(z => z === 1 ? 2 : 1) : undefined}
+        zoomActive={consoleZoom > 1}
         lang={detectedLang}
       >
         <div
@@ -1516,7 +1520,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
           onContextMenu={(e) => e.preventDefault()}
         >
           {isConsole && emuRef.current ? (
-            <ConsoleView emu={emuRef.current} focused={focused} />
+            <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} />
           ) : (
             <canvas
               ref={canvasRef}

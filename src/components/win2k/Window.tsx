@@ -38,6 +38,35 @@ export function capBtnSvg(svgMarkup: string, bgPos: string, onClick?: () => void
   );
 }
 
+/** Caption-bar text button (e.g. "2×"). `active` renders as sunken. */
+export function capBtnText(label: string, onClick?: () => void, active?: boolean, title?: string) {
+  const [pressed, setPressed] = useState(false);
+  const sunken = pressed || active;
+  return (
+    <span
+      title={title}
+      onPointerDown={(e) => { e.stopPropagation(); setPressed(true); }}
+      onPointerUp={() => { setPressed(false); onClick?.(); }}
+      onPointerLeave={() => setPressed(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: '22px', height: '14px', background: '#D4D0C8',
+        border: '1px solid',
+        borderColor: sunken ? '#404040 #FFF #FFF #404040' : '#FFF #404040 #404040 #FFF',
+        boxShadow: sunken ? 'none' : 'inset 1px 1px 0 #D4D0C8, inset -1px -1px 0 #808080',
+        cursor: 'var(--win2k-cursor)',
+        font: 'bold 9px/1 "Tahoma",sans-serif',
+        color: '#000',
+        userSelect: 'none',
+        paddingTop: sunken ? '1px' : '0',
+        paddingLeft: sunken ? '1px' : '0',
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 export const svgMin = "<svg width='6' height='2' xmlns='http://www.w3.org/2000/svg'><rect width='6' height='2' fill='#000'/></svg>";
 export const svgMax = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/svg'><path fill-rule='evenodd' d='M0 0h9v9H0V0zm1 2h7v6H1V2z' fill='#000'/></svg>";
 export const svgRestore = "<svg width='9' height='9' xmlns='http://www.w3.org/2000/svg'><path fill-rule='evenodd' d='M2 0h7v7H7v2H0V2h2V0zm1 2h4v1H3v3H2V2h1zm-1 2h5v4H1V4h1zm0 1v2h4V5H2z' fill='#000'/></svg>";
@@ -88,6 +117,10 @@ interface WindowProps {
   /** Background color for the client area (default: inherited from frame) */
   clientBg?: string;
   lang?: string;
+  /** When provided, renders a "2×" button in the title bar that toggles zoom. */
+  onZoomToggle?: () => void;
+  /** Reflects current zoom state — button appears sunken when active. */
+  zoomActive?: boolean;
   children?: ComponentChildren;
 }
 
@@ -96,7 +129,8 @@ export function Window({
   focused = true, maximized, minimized,
   menus, onClose, onMinimize, onMaximize,
   onTitleBarMouseDown, onTitleBarDblClick, onResizeStart,
-  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang, children,
+  hasHelp, draggable, initialPos, blocked, onBlockedClick, flashTrigger, clientBg, lang,
+  onZoomToggle, zoomActive, children,
 }: WindowProps) {
   const hasCaption = (wStyle & WS_CAPTION) === WS_CAPTION;
   const hasThickFrame = !!(wStyle & WS_THICKFRAME);
@@ -227,6 +261,10 @@ export function Window({
           <span style={{ display: 'flex', gap: '0px', marginLeft: '2px', flexShrink: 0 }}>
             {hasHelp && !(wStyle & WS_MINIMIZEBOX) && !(wStyle & WS_MAXIMIZEBOX) && <>
               {capBtnSvg(svgHelp, 'top 1px left 4px')}
+              <span style={{ width: '2px' }} />
+            </>}
+            {onZoomToggle && <>
+              {capBtnText('2×', onZoomToggle, zoomActive, zoomActive ? 'Restore 1× zoom' : 'Zoom 2×')}
               <span style={{ width: '2px' }} />
             </>}
             {(wStyle & WS_MINIMIZEBOX) ? capBtnSvg(svgMin, 'top 7px left 4px', onMinimize) : null}

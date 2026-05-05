@@ -295,9 +295,11 @@ function charToVK(ch: number): number {
 interface ConsoleViewProps {
   emu: Emulator;
   focused?: boolean;
+  /** Display-size multiplier applied to the 640×480 logical surface. */
+  zoom?: number;
 }
 
-export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
+export function ConsoleView({ emu, focused = true, zoom = 1 }: ConsoleViewProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -807,9 +809,11 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
   const gfxHeight = fb ? fb.height : emu.vga.currentMode.height;
   const dosMouseVisible = isGfx && emu.dosMouse.installed && emu.dosMouse.cursorVisible >= 0;
 
+  const dispW = 640 * zoom;
+  const dispH = 480 * zoom;
   return (
     <div
-      style={{ position: 'relative', width: '640px', height: '480px', background: '#000' }}
+      style={{ position: 'relative', width: `${dispW}px`, height: `${dispH}px`, background: '#000' }}
       onPointerUp={(e) => { handleMouseEvent(e, 'up'); handleClick(); }}
       onPointerDown={(e) => handleMouseEvent(e, 'down')}
       onPointerMove={(e) => handleMouseEvent(e, 'move')}
@@ -822,8 +826,8 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
           height={gfxHeight}
           style={{
             display: 'block',
-            width: '640px',
-            height: '480px',
+            width: `${dispW}px`,
+            height: `${dispH}px`,
             imageRendering: 'pixelated',
             cursor: dosMouseVisible ? 'none' : 'default',
           }}
@@ -834,8 +838,9 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
           width={640}
           height={480}
           style={{
-            width: '640px',
-            height: '480px',
+            width: `${dispW}px`,
+            height: `${dispH}px`,
+            imageRendering: 'pixelated',
           }}
         />
       ) : (
@@ -856,7 +861,7 @@ export function ConsoleView({ emu, focused = true }: ConsoleViewProps) {
             lineHeight: `${lineHeight}px`,
             letterSpacing: '0px',
             transformOrigin: 'top left',
-            transform: `scaleX(${scaleX}) scaleY(${480 / (ROWS * lineHeight)}) translateZ(0)`,
+            transform: `scaleX(${scaleX * zoom}) scaleY(${dispH / (ROWS * lineHeight)}) translateZ(0)`,
           }}
         >
           {rows}
