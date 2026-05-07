@@ -161,36 +161,34 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
     }
 
     // Locate the file. Win16 LoadLibrary searches: as-given, exe dir, system dir, etc.
-    // For simplicity we try the as-given path resolved against current dir, then by
-    // bare filename anywhere additionalFiles knows it.
+    // additionalFiles is always synchronous; check it first so we never need to take
+    // the async (IDB-fetch) path when the buffer is already in memory.
+    const bareTarget = name.replace(/.*[\\\/]/, '').toLowerCase();
+    let bareBuf: ArrayBuffer | undefined;
+    for (const [key, data] of emu.additionalFiles) {
+      const basename = key.replace(/.*[\\\/]/, '').toLowerCase();
+      if (basename === bareTarget) { bareBuf = data; break; }
+    }
+    if (bareBuf) {
+      const dll = registerLoadedNeDll(emu, bareBuf, baseName);
+      if (!dll) return 0;
+      const handle = state.nextModuleHandle++;
+      state.moduleHandles.set(baseName, handle);
+      state.loadedDlls.set(handle, dll);
+      callDllEntry(emu, dll);
+      console.log(`[KERNEL16] LoadLibrary("${name}") → 0x${handle.toString(16)} (${dll.segments.length} segs, ${dll.resources.length} res)`);
+      return handle;
+    }
+
     const resolved = emu.resolvePath(name);
     const fileInfo = emu.fs.findFile(resolved, emu.additionalFiles);
 
     if (!fileInfo) {
-      // Try bare filename in additionalFiles (case-insensitive)
-      const bareTarget = name.replace(/.*[\\\/]/, '').toLowerCase();
-      let bareBuf: ArrayBuffer | undefined;
-      for (const [key, data] of emu.additionalFiles) {
-        const basename = key.replace(/.*[\\\/]/, '').toLowerCase();
-        if (basename === bareTarget) { bareBuf = data; break; }
-      }
-      if (bareBuf) {
-        const dll = registerLoadedNeDll(emu, bareBuf, baseName);
-        if (!dll) return 0;
-        // Win16 hInstance must be >= 32 — selector values <32 are reserved as
-        // error codes by the LoadLibrary contract. Use a synthetic handle.
-        const handle = state.nextModuleHandle++;
-        state.moduleHandles.set(baseName, handle);
-        state.loadedDlls.set(handle, dll);
-        callDllEntry(emu, dll);
-        console.log(`[KERNEL16] LoadLibrary("${name}") → 0x${handle.toString(16)}`);
-        return handle;
-      }
       console.warn(`[KERNEL16] LoadLibrary("${name}") → file not found`);
       return 2;
     }
 
-    // Try to read the file synchronously.
+    // Try to read the file synchronously (data already in cache).
     const syncData = getSyncFileData(emu.fs, fileInfo, emu, resolved);
     if (syncData) {
       const buf = syncData.buffer.slice(syncData.byteOffset, syncData.byteOffset + syncData.byteLength) as ArrayBuffer;
@@ -204,23 +202,18 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
       return handle;
     }
 
-    // Async path: file is in IndexedDB and not yet cached. Trigger fetch and rewind
-    // EIP so the thunk re-executes after the data lands in virtualFileCache.
-    emu.fs.fetchFileData(fileInfo, emu.additionalFiles, resolved).then(() => {
-      if (emu._loadLibraryPending) {
-        emu._loadLibraryPending = false;
-        emu.waitingForMessage = false;
-        if (emu.running && !emu.halted) setTimeout(emu.tick, 0);
+    // Async path: file is in IndexedDB and not yet cached. Pull it into
+    // additionalFiles for any future LoadLibrary call, but this call has to
+    // fail because we can't suspend the FAR CALL synchronously. Callers that
+    // depend on this DLL must drop it on the desktop before launching the EXE.
+    emu.fs.fetchFileData(fileInfo, emu.additionalFiles, resolved).then((data) => {
+      if (data) {
+        const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+        emu.additionalFiles.set(bareTarget, ab);
       }
     });
-    // Rewind EIP to the thunk address so the FAR CALL replays after the fetch.
-    // The CALL FAR was 5 bytes (9A off off sel sel), and we're currently positioned
-    // just past it on the thunk page; the dispatcher loop reads the EIP each pass,
-    // so leaving EIP at the thunk page address is sufficient — but the thunk
-    // dispatch already happened. We pause via waitingForMessage instead.
-    emu._loadLibraryPending = true;
-    emu.waitingForMessage = true;
-    return undefined as unknown as number;
+    console.warn(`[KERNEL16] LoadLibrary("${name}") → file not yet in cache; pre-load it via additionalFiles`);
+    return 2;
   }, 95);
 
   // --- Ordinal 96: FreeLibrary(hLibModule) — 2 bytes (word) ---
