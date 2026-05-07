@@ -36,7 +36,7 @@ import { registerMsimg32 } from './win32/msimg32';
 import { registerVdmdbg } from './win32/vdmdbg';
 import { registerNetapi32 } from './win32/netapi32';
 import { registerUxtheme } from './win32/uxtheme';
-import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand } from './win16/index';
+import { registerWin16Kernel, registerWin16User, registerWin16Gdi, registerWin16Shell, registerWin16Ddeml, registerWin16Mmsystem, registerWin16Commdlg, registerWin16Keyboard, registerWin16Win87em, registerWin16Sound, registerWin16Ver, registerWin16Commctrl, registerWin16Sconfig, registerWin16Lzexpand, registerWin16Toolhelp } from './win16/index';
 import { setupXmsStub } from './dos/xms';
 import { setupDpmiStub } from './dos/dpmi';
 import { setupEmsDeviceHeader, EMS_DEVICE_SEG, setupVcpiPrivateArea, VCPI_PRIVATE_AREA } from './dos/ems';
@@ -48,6 +48,7 @@ import { Thread } from './thread';
 import { parsePE, extractExports, extractMenus } from '../pe';
 
 import { buildNEThunkTable } from './emu-thunks-ne';
+import { registerLoadedNeDll, resolveExeToDllImports, NE_BUILTIN_MODULES } from './ne-dll-register';
 import { handleSehDispatchReturn } from './emu-window';
 import { loadMZ, loadCOM } from './mz-loader';
 import { ArmCPU, SP as ARM_SP, LR as ARM_LR, PC as ARM_PC } from './arm/cpu';
@@ -355,6 +356,7 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
     registerWin16Commctrl(emu);
     registerWin16Sconfig(emu);
     registerWin16Lzexpand(emu);
+    registerWin16Toolhelp(emu);
 
     // Build thunk table for NE (includes thunks from loaded DLLs)
     buildNEThunkTable(emu);
@@ -437,6 +439,15 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       const result = emu.callWndProc16(dllEntry.entryPoint, 0, 0, 0, 0);
       emu.ne.dataSegSelector = origDataSel;
       console.log(`[NE DLL] ${dllEntry.name} entry returned ${result}`);
+
+      // A crashing DLL entry leaves cpu.halted=true, which would silently
+      // poison the main exe's startup. Clear it so the program can still run;
+      // the warning logged by the dispatch already flagged the issue.
+      if (emu.cpu.halted) {
+        console.warn(`[NE DLL] ${dllEntry.name} entry halted CPU — clearing halt to continue main exe`);
+        emu.cpu.halted = false;
+        emu.cpu.haltReason = '';
+      }
 
       // Restore all CPU state
       emu.cpu.eip = savedEIP;
@@ -916,22 +927,13 @@ async function loadNEDlls(emu: Emulator): Promise<NEDllEntry[]> {
   if (!emu.ne) return [];
 
   const ne = emu.ne;
-  let nextSelector = ne.nextSelector;
-  let thunkAddr = ne.thunkAddrEnd;
   const dllEntries: NEDllEntry[] = [];
-
-  // Built-in modules handled by JS stubs — don't try to load these as DLLs
-  const builtinModules = new Set([
-    'KERNEL', 'USER', 'GDI', 'KEYBOARD', 'WIN87EM',
-    'SHELL', 'COMMDLG', 'DDEML', 'MMSYSTEM', 'LZEXPAND',
-    'SOUND',
-  ]);
 
   // Store loaded DLL info for resolving imports
   const loadedDlls = new Map<string, LoadedNE>();
 
   for (const modName of ne.moduleNames) {
-    if (builtinModules.has(modName)) continue;
+    if (NE_BUILTIN_MODULES.has(modName)) continue;
 
     // Look for the DLL in additionalFiles (case-insensitive, try common extensions)
     // File keys may have path prefixes (e.g. "examples/CODEBRAK/VBRUN300.DLL")
@@ -959,46 +961,12 @@ async function loadNEDlls(emu: Emulator): Promise<NEDllEntry[]> {
       continue;
     }
 
-    console.log(`[NE DLL] Loading ${modName} at selectorBase=${nextSelector}, thunkAddr=0x${thunkAddr.toString(16)}`);
+    console.log(`[NE DLL] Loading ${modName} at selectorBase=${ne.nextSelector}, thunkAddr=0x${ne.thunkAddrEnd.toString(16)}`);
 
-    const dll = loadNE(dllBuf, emu.memory, {
-      selectorBase: nextSelector,
-      thunkStartAddr: thunkAddr,
-      selectorToBase: ne.selectorToBase,  // share the selector map
-    });
+    const dll = registerLoadedNeDll(emu, dllBuf, modName);
+    if (!dll) continue;
 
     loadedDlls.set(modName, dll);
-    nextSelector = dll.nextSelector;
-    thunkAddr = dll.thunkAddrEnd;
-
-    // Store DLL resources for cross-module resource loading (LoadBitmap etc.)
-    if (dll.resources.length > 0) {
-      emu.neDllResources.push({ resources: dll.resources, arrayBuffer: dllBuf });
-    }
-
-    // Record static data end for the DLL's auto-data segment
-    // so LocalInit can avoid clobbering initialized global variables
-    if (dll.dataSegSelector && dll.autoDataStaticSize > 0) {
-      emu.segStaticEnd.set(dll.dataSegSelector, dll.autoDataStaticSize);
-    }
-
-    // Track DLL data segment selectors for correct DS in wndProc dispatch
-    if (dll.dataSegSelector) {
-      emu.neDllDataSegs.add(dll.dataSegSelector);
-    }
-
-    // Merge DLL's API thunks (its imports from KERNEL/USER/etc) into the main apiMap
-    for (const [addr, info] of dll.apiMap) {
-      ne.apiMap.set(addr, info);
-    }
-
-    // Add DLL segments to the main segment list (for WILD EIP validation)
-    for (const seg of dll.segments) {
-      ne.segments.push(seg);
-      emu.cpu.segLimits.set(seg.selector, seg.minAlloc - 1);
-    }
-
-    console.log(`[NE DLL] ${modName}: ${dll.segments.length} segments, ${dll.entryPoints.size} exports, ${dll.apiMap.size} imports`);
 
     // Collect DLL entry point for calling LibMain/LibEntry later
     if (dll.entryPoint) {
@@ -1013,7 +981,7 @@ async function loadNEDlls(emu: Emulator): Promise<NEDllEntry[]> {
 
     // Recursively load DLLs that this DLL imports (if any non-builtin)
     for (const subMod of dll.moduleNames) {
-      if (!builtinModules.has(subMod) && !loadedDlls.has(subMod)) {
+      if (!NE_BUILTIN_MODULES.has(subMod) && !loadedDlls.has(subMod)) {
         // Add to moduleNames for processing in next iteration if needed
         // For now, just warn
         console.warn(`[NE DLL] ${modName} imports ${subMod} — nested DLL loading not yet supported`);
@@ -1021,57 +989,10 @@ async function loadNEDlls(emu: Emulator): Promise<NEDllEntry[]> {
     }
   }
 
-  // Resolve exe→DLL imports: for thunks that reference loaded DLLs,
-  // register thunk handlers that perform a FAR JMP to the DLL's actual code.
-  let resolved = 0;
-  for (const [addr, info] of ne.apiMap) {
-    const dll = loadedDlls.get(info.dll);
-    if (!dll) continue;
-
-    let ordinal = info.ordinal;
-    // Resolve named imports (ordinal=0) via the DLL's resident name table
-    if (ordinal === 0 && info.name) {
-      const resolved = dll.nameToOrdinal.get(info.name.toUpperCase());
-      if (resolved !== undefined) ordinal = resolved;
-    }
-    const entry = dll.entryPoints.get(ordinal);
-    if (!entry) {
-      console.warn(`[NE DLL] ${info.dll}:ord_${info.ordinal} not found in DLL entry table`);
-      continue;
-    }
-
-    const seg = dll.segments[entry.seg - 1];
-    if (!seg) {
-      console.warn(`[NE DLL] ${info.dll}:ord_${info.ordinal} references invalid segment ${entry.seg}`);
-      continue;
-    }
-
-    const linearAddr = seg.linearBase + entry.offset;
-    const targetSelector = seg.selector;
-    const targetOffset = entry.offset;
-
-    // Register a thunk handler that jumps to the DLL code (FAR JMP)
-    const key = `${info.dll}:${info.name}`;
-    emu.apiDefs.set(key, {
-      handler: () => {
-        // The FAR CALL pushed IP/CS on the stack — leave them for the DLL's RETF
-        emu.cpu.cs = targetSelector;
-        emu.cpu.eip = linearAddr;
-        return undefined; // don't complete thunk — DLL code will RETF itself
-      },
-      stackBytes: 0,
-    });
-
-    resolved++;
-  }
-
+  const resolved = resolveExeToDllImports(emu, loadedDlls);
   if (resolved > 0) {
     console.log(`[NE DLL] Resolved ${resolved} exe→DLL imports as FAR JMP thunks`);
   }
-
-  // Update the ne object with new state
-  ne.thunkAddrEnd = thunkAddr;
-  ne.nextSelector = nextSelector;
 
   return dllEntries;
 }

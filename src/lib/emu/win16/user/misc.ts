@@ -13,9 +13,11 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // ───────────────────────────────────────────────────────────────────────────
   user.register('MessageBox', 12, () => {
     const [hWnd, lpText, lpCaption, uType] = emu.readPascalArgs16([2, 4, 4, 2]);
-    const text = lpText ? emu.memory.readCString(lpText) : '';
-    const caption = lpCaption ? emu.memory.readCString(lpCaption) : '';
-    // console.log(`[WIN16] MessageBox(0x${hWnd.toString(16)}, "${text}", "${caption}", 0x${uType.toString(16)})`);
+    const textLin = lpText ? emu.resolveFarPtr(lpText) : 0;
+    const capLin = lpCaption ? emu.resolveFarPtr(lpCaption) : 0;
+    const text = textLin ? emu.memory.readCString(textLin) : '';
+    const caption = capLin ? emu.memory.readCString(capLin) : '';
+    if (emu.traceApi) console.log(`[WIN16] MessageBox(0x${hWnd.toString(16)}, "${text}", "${caption}", 0x${uType.toString(16)})`);
     const stackBytes = emu._currentThunkStackBytes;
     emu.waitingForMessage = true;
     emu.showMessageBox(caption, text, uType, result => {

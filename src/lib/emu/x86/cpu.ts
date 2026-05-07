@@ -107,13 +107,13 @@ export class CPU {
   private _fsVal = 0;
   private _gsVal = 0;
   get ds(): number { return this._dsVal; }
-  set ds(val: number) { this._dsVal = val; this.segBases.delete(val); }
+  set ds(val: number) { this._dsVal = val; if (this.emu?._gdtBase) this.segBases.delete(val); }
   get es(): number { return this._esVal; }
-  set es(val: number) { this._esVal = val; this.segBases.delete(val); }
+  set es(val: number) { this._esVal = val; if (this.emu?._gdtBase) this.segBases.delete(val); }
   get fs(): number { return this._fsVal; }
-  set fs(val: number) { this._fsVal = val; this.segBases.delete(val); }
+  set fs(val: number) { this._fsVal = val; if (this.emu?._gdtBase) this.segBases.delete(val); }
   get gs(): number { return this._gsVal; }
-  set gs(val: number) { this._gsVal = val; this.segBases.delete(val); }
+  set gs(val: number) { this._gsVal = val; if (this.emu?._gdtBase) this.segBases.delete(val); }
   // SS is exposed via getter/setter so every assignment updates `_ssB32` —
   // Intel determines stack addressing size from the CURRENT SS descriptor's
   // B/D bit (loaded at MOV SS time), not from CS.D. When DOS extenders run
@@ -131,7 +131,7 @@ export class CPU {
   get ss(): number { return this._ssVal; }
   set ss(val: number) {
     this._ssVal = val;
-    this.segBases.delete(val); // invalidate cached base for the new SS
+    if (this.emu?._gdtBase) this.segBases.delete(val); // invalidate cached base for the new SS (PM only)
     this._recomputeSsB32();
   }
   get _ssB32(): boolean { return this._ssB32Cache; }
@@ -185,7 +185,10 @@ export class CPU {
   loadCS(selector: number): void {
     // Invalidate the cached base so segBase(CS) re-reads the descriptor (the
     // program may have rewritten the GDT slot since we last cached it).
-    this.segBases.delete(selector);
+    // Skip when there is no GDT (Win16 NE): the segBases map IS the source of
+    // truth there, so deleting it would lose the bind (notably the thunk
+    // selector 0xFE → linear 0xF0000, which is not sel*0x10000).
+    if (this.emu?._gdtBase) this.segBases.delete(selector);
     this.cs = selector;
     if (!this.realMode) {
       const is32 = this.loadGdtDescriptorIs32(selector);

@@ -397,6 +397,7 @@ export class Emulator {
   _dosMcbFirstSeg = 0;
   _dosFindState: { entries: { name: string; size: number; isDir: boolean }[]; index: number; pattern: string } | null = null;
   _dosFileOpenPending = false;
+  _loadLibraryPending = false;
   _dosLastTimerTick = 0;
   _dosHalted = false;
   _dosVerifyFlag = false;
@@ -711,6 +712,8 @@ export class Emulator {
   private timers = new Map<string, number>();
   /** Multimedia timers (timeSetEvent) — callback invoked during tick */
   _mmTimers = new Map<number, { callback: number; dwUser: number; delay: number; periodic: boolean; nextFire: number }>();
+  /** Deferred Win16 Pascal callbacks (waveOut buffer-done etc.) — drained in tick. */
+  _pendingCb16: Array<{ addr: number; args: number[]; sizes: number[] }> = [];
 
   // CBT hooks (WH_CBT = 5)
   cbtHooks: { lpfn: number; hMod: number }[] = [];

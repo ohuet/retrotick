@@ -1,5 +1,42 @@
 import type { Emulator, Win16Module } from '../../emulator';
 import type { KernelState } from './index';
+import { registerLoadedNeDll, NE_BUILTIN_MODULES } from '../../ne-dll-register';
+import { getSyncFileData } from '../../dos/file';
+import type { LoadedNE } from '../../ne-loader';
+
+/** Invoke a runtime-loaded NE DLL's LibEntry / LibMain. The standard LIBENTRY
+ *  stub expects DI=hInstance, CX=heapSize, DS=autoDataSeg, ES:SI=cmdLine. */
+function callDllEntry(emu: Emulator, dll: LoadedNE): void {
+  if (!dll.entryPoint || !emu.ne) return;
+  const savedDS = emu.cpu.ds;
+  const savedES = emu.cpu.es;
+  const savedECX = emu.cpu.reg[1];
+  const savedEDI = emu.cpu.reg[7];
+  const savedESI = emu.cpu.reg[6];
+  const origDataSel = emu.ne.dataSegSelector;
+
+  emu.cpu.ds = dll.dataSegSelector;
+  emu.cpu.es = emu.ne.dataSegSelector;
+  emu.cpu.reg[1] = (emu.cpu.reg[1] & 0xFFFF0000) | (dll.heapSize & 0xFFFF);
+  emu.cpu.reg[7] = (emu.cpu.reg[7] & 0xFFFF0000) | (dll.dataSegSelector & 0xFFFF);
+  emu.cpu.reg[6] = (emu.cpu.reg[6] & 0xFFFF0000) | 0;
+
+  emu.ne.dataSegSelector = dll.dataSegSelector;
+  emu.callWndProc16(dll.entryPoint, 0, 0, 0, 0);
+  emu.ne.dataSegSelector = origDataSel;
+
+  if (emu.cpu.halted) {
+    console.warn(`[NE DLL] Runtime LibMain halted CPU — clearing halt`);
+    emu.cpu.halted = false;
+    emu.cpu.haltReason = '';
+  }
+
+  emu.cpu.ds = savedDS;
+  emu.cpu.es = savedES;
+  emu.cpu.reg[1] = savedECX;
+  emu.cpu.reg[7] = savedEDI;
+  emu.cpu.reg[6] = savedESI;
+}
 
 export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: KernelState): void {
   // --- Ordinal 27: GetModuleName(word ptr word) — 8 bytes (word+ptr+word) ---
@@ -49,36 +86,33 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
   }, 49);
 
   // --- Ordinal 50: GetProcAddress(hModule, lpProcName_str) — 6 bytes (word+dword) ---
+  // Returns: far pointer (selector:offset packed as DWORD) to the export, or 0.
   kernel.register('GetProcAddress', 6, () => {
     const [hModule, lpProcName] = emu.readPascalArgs16([2, 4]);
-    // lpProcName can be a far pointer to a string OR MAKEINTRESOURCE (high word = 0 → ordinal)
     const seg = (lpProcName >>> 16) & 0xFFFF;
     const off = lpProcName & 0xFFFF;
     let name = '';
     let ordinal = 0;
     if (seg === 0) {
-      // Integer ordinal
-      ordinal = off;
+      ordinal = off; // MAKEINTRESOURCE-style numeric ordinal
     } else {
-      const linear = emu.resolveFarPtr(lpProcName);
-      name = emu.memory.readCString(linear);
+      name = emu.memory.readCString(emu.resolveFarPtr(lpProcName));
     }
-    // Look up in loaded NE DLLs
-    if (emu.ne) {
-      for (const seg2 of emu.ne.segments) {
-        // Check if this segment belongs to the module with handle hModule
-      }
-      // Search entry points for the ordinal/name
-      if (ordinal > 0) {
-        for (const [addr, info] of emu.ne.apiMap) {
-          if (info.ordinal === ordinal) {
-            // This is a thunk address, return it as a far pointer
-            return addr;
-          }
-        }
-      }
+
+    const dll = state.loadedDlls.get(hModule);
+    if (!dll) return 0;
+
+    if (ordinal === 0 && name) {
+      const r = dll.nameToOrdinal.get(name.toUpperCase());
+      if (r === undefined) return 0;
+      ordinal = r;
     }
-    return 0;
+    const entry = dll.entryPoints.get(ordinal);
+    if (!entry) return 0;
+    const segInfo = dll.segments[entry.seg - 1];
+    if (!segInfo) return 0;
+    // Far pointer: high word = selector, low word = offset
+    return ((segInfo.selector & 0xFFFF) << 16) | (entry.offset & 0xFFFF);
   }, 50);
 
   // --- Ordinal 51: MakeProcInstance(lpProc_segptr, hInstance) — 6 bytes (segptr+word) ---
@@ -106,11 +140,87 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
   kernel.register('DefineHandleTable', 2, () => 1, 94);
 
   // --- Ordinal 95: LoadLibrary(lpLibFileName) — 4 bytes (str) ---
+  // Returns: hInstance (>= 32 on success, < 32 = error code).
   kernel.register('LoadLibrary', 4, () => {
     const lpLibFileName = emu.readArg16DWord(0);
     const name = lpLibFileName ? emu.memory.readCString(emu.resolveFarPtr(lpLibFileName)) : '';
-    console.log(`[KERNEL16] LoadLibrary("${name}") → stub`);
-    return 32;
+    if (!name) return 2; // ERROR_FILE_NOT_FOUND
+
+    // Module name = base filename stripped of extension, uppercase
+    const baseName = name.replace(/.*[\\\/]/, '').replace(/\.\w+$/, '').toUpperCase();
+
+    // Already loaded? Return existing handle.
+    const existingHandle = state.moduleHandles.get(baseName);
+    if (existingHandle !== undefined && existingHandle !== 0) return existingHandle;
+
+    // Built-in module → return synthetic handle without loading.
+    if (NE_BUILTIN_MODULES.has(baseName)) {
+      const handle = state.nextModuleHandle++;
+      state.moduleHandles.set(baseName, handle);
+      return handle;
+    }
+
+    // Locate the file. Win16 LoadLibrary searches: as-given, exe dir, system dir, etc.
+    // For simplicity we try the as-given path resolved against current dir, then by
+    // bare filename anywhere additionalFiles knows it.
+    const resolved = emu.resolvePath(name);
+    const fileInfo = emu.fs.findFile(resolved, emu.additionalFiles);
+
+    if (!fileInfo) {
+      // Try bare filename in additionalFiles (case-insensitive)
+      const bareTarget = name.replace(/.*[\\\/]/, '').toLowerCase();
+      let bareBuf: ArrayBuffer | undefined;
+      for (const [key, data] of emu.additionalFiles) {
+        const basename = key.replace(/.*[\\\/]/, '').toLowerCase();
+        if (basename === bareTarget) { bareBuf = data; break; }
+      }
+      if (bareBuf) {
+        const dll = registerLoadedNeDll(emu, bareBuf, baseName);
+        if (!dll) return 0;
+        // Win16 hInstance must be >= 32 — selector values <32 are reserved as
+        // error codes by the LoadLibrary contract. Use a synthetic handle.
+        const handle = state.nextModuleHandle++;
+        state.moduleHandles.set(baseName, handle);
+        state.loadedDlls.set(handle, dll);
+        callDllEntry(emu, dll);
+        console.log(`[KERNEL16] LoadLibrary("${name}") → 0x${handle.toString(16)}`);
+        return handle;
+      }
+      console.warn(`[KERNEL16] LoadLibrary("${name}") → file not found`);
+      return 2;
+    }
+
+    // Try to read the file synchronously.
+    const syncData = getSyncFileData(emu.fs, fileInfo, emu, resolved);
+    if (syncData) {
+      const buf = syncData.buffer.slice(syncData.byteOffset, syncData.byteOffset + syncData.byteLength) as ArrayBuffer;
+      const dll = registerLoadedNeDll(emu, buf, baseName);
+      if (!dll) return 0;
+      const handle = state.nextModuleHandle++;
+      state.moduleHandles.set(baseName, handle);
+      state.loadedDlls.set(handle, dll);
+      callDllEntry(emu, dll);
+      console.log(`[KERNEL16] LoadLibrary("${name}") → 0x${handle.toString(16)} (${dll.segments.length} segs, ${dll.resources.length} res)`);
+      return handle;
+    }
+
+    // Async path: file is in IndexedDB and not yet cached. Trigger fetch and rewind
+    // EIP so the thunk re-executes after the data lands in virtualFileCache.
+    emu.fs.fetchFileData(fileInfo, emu.additionalFiles, resolved).then(() => {
+      if (emu._loadLibraryPending) {
+        emu._loadLibraryPending = false;
+        emu.waitingForMessage = false;
+        if (emu.running && !emu.halted) setTimeout(emu.tick, 0);
+      }
+    });
+    // Rewind EIP to the thunk address so the FAR CALL replays after the fetch.
+    // The CALL FAR was 5 bytes (9A off off sel sel), and we're currently positioned
+    // just past it on the thunk page; the dispatcher loop reads the EIP each pass,
+    // so leaving EIP at the thunk page address is sufficient — but the thunk
+    // dispatch already happened. We pause via waitingForMessage instead.
+    emu._loadLibraryPending = true;
+    emu.waitingForMessage = true;
+    return undefined as unknown as number;
   }, 95);
 
   // --- Ordinal 96: FreeLibrary(hLibModule) — 2 bytes (word) ---
