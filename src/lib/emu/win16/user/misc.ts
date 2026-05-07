@@ -20,7 +20,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
     if (emu.traceApi) console.log(`[WIN16] MessageBox(0x${hWnd.toString(16)}, "${text}", "${caption}", 0x${uType.toString(16)})`);
     // Stack-trace any user-visible error so we can locate the caller in the binary.
     if (/integrity|altered|tampered|corrupt|invalid/i.test(text)) {
-      const sp = emu.cpu.esp & 0xFFFF;
+      const sp = emu.cpu.reg[4] & 0xFFFF;
       const ss = emu.cpu.ss;
       const ssBase = (emu.cpu.segBases.get(ss) ?? ss * 16) >>> 0;
       const lines: string[] = [];
@@ -28,7 +28,7 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
         const w = emu.memory.readU16(ssBase + ((sp + off) & 0xFFFF));
         lines.push(`SS:${(sp + off).toString(16).padStart(4, '0')}=${w.toString(16).padStart(4, '0')}`);
       }
-      console.warn(`[WIN16] MessageBox error text="${text}" CS:IP=${emu.cpu.cs.toString(16)}:${emu.cpu.eip.toString(16)} SS:SP=${ss.toString(16)}:${sp.toString(16)}\n  ${lines.join(' ')}`);
+      console.warn(`[WIN16] MessageBox error text="${text}" CS:IP=${emu.cpu.cs.toString(16)}:${(emu.cpu.eip & 0xFFFF).toString(16)} SS:SP=${ss.toString(16)}:${sp.toString(16)}\n  ${lines.join(' ')}`);
     }
     const stackBytes = emu._currentThunkStackBytes;
     emu.waitingForMessage = true;
