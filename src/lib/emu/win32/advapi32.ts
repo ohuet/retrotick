@@ -785,6 +785,21 @@ export function registerAdvapi32(emu: Emulator): void {
 
   advapi32.register('AdjustTokenPrivileges', 6, () => 1);
 
+  // BOOL SetFileSecurityA(LPCSTR lpFileName, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR) — succeed
+  advapi32.register('SetFileSecurityA', 3, () => 1);
+  advapi32.register('SetFileSecurityW', 3, () => 1);
+  // BOOL GetFileSecurityA(LPCSTR, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, DWORD, LPDWORD) — fail
+  advapi32.register('GetFileSecurityA', 5, () => {
+    const lengthNeeded = emu.readArg(4);
+    if (lengthNeeded) emu.memory.writeU32(lengthNeeded, 0);
+    return 0;
+  });
+  advapi32.register('GetFileSecurityW', 5, () => {
+    const lengthNeeded = emu.readArg(4);
+    if (lengthNeeded) emu.memory.writeU32(lengthNeeded, 0);
+    return 0;
+  });
+
   // Service Control Manager stubs
   advapi32.register('OpenSCManagerA', 3, () => 0x4000);
   advapi32.register('OpenServiceA', 3, () => 0x4001);

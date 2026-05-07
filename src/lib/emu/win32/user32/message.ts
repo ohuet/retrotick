@@ -2006,6 +2006,7 @@ export function registerMessage(emu: Emulator): void {
   user32.register('PostMessageW', 4, emu.apiDefs.get('USER32.DLL:PostMessageA')?.handler!);
 
   user32.register('PostThreadMessageW', 4, () => 1); // pretend success
+  user32.register('PostThreadMessageA', 4, () => 1);
 
   user32.register('GetMessageTime', 0, () => (Date.now() & 0xFFFFFFFF) >>> 0);
   user32.register('GetMessagePos', 0, () => 0); // (0,0)

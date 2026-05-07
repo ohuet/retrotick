@@ -631,11 +631,6 @@ export function registerMisc(emu: Emulator): void {
   // AllowSetForegroundWindow(dwProcessId) → BOOL
   user32.register('AllowSetForegroundWindow', 1, () => 1);
 
-  // CreateAcceleratorTableW: return a fake handle
-  user32.register('CreateAcceleratorTableW', 2, () => {
-    return emu.handles.alloc('accel', {});
-  });
-
   // RegisterHotKey: return TRUE (success)
   user32.register('RegisterHotKey', 4, () => 1);
 

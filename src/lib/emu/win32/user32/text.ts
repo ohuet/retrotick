@@ -517,6 +517,72 @@ export function registerText(emu: Emulator): void {
     return totalH;
   });
 
+  // DrawTextExA — same as DrawTextExW but ANSI text. Reuses W path via temporary
+  // ANSI-to-Unicode buffer is overkill; just port the layout/draw logic.
+  user32.register('DrawTextExA', 6, () => {
+    const hdc = emu.readArg(0);
+    const textPtr = emu.readArg(1);
+    const count = emu.readArg(2) | 0;
+    const rectPtr = emu.readArg(3);
+    const format = emu.readArg(4);
+    // arg 5 = DRAWTEXTPARAMS*, ignored
+
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+
+    let text: string;
+    if (count === -1) {
+      text = emu.memory.readCString(textPtr);
+    } else {
+      text = '';
+      for (let i = 0; i < count; i++) {
+        const ch = emu.memory.readU8(textPtr + i);
+        if (ch === 0) break;
+        text += String.fromCharCode(ch);
+      }
+    }
+
+    if (!rectPtr) return 0;
+    const left = emu.memory.readI32(rectPtr);
+    const top = emu.memory.readI32(rectPtr + 4);
+    const right = emu.memory.readI32(rectPtr + 8);
+    const bottom = emu.memory.readI32(rectPtr + 12);
+
+    const DT_CALCRECT = 0x0400;
+    const DT_WORDBREAK = 0x10;
+    const DT_SINGLELINE = 0x20;
+
+    const font = emu.handles.get<{ height: number }>(dc.selectedFont);
+    const fontSize = (font && font.height) ? Math.abs(font.height) : 13;
+    const lineH = Math.max(fontSize, 1);
+    let charW = Math.max(Math.round(fontSize * 0.5), 1);
+    if (dc.ctx) {
+      dc.ctx.font = `${fontSize}px Tahoma, sans-serif`;
+      const measured = dc.ctx.measureText('x').width;
+      if (measured > 0) charW = Math.round(measured);
+    }
+    const rectW = Math.max(1, right - left);
+    let lines = 1;
+    if ((format & DT_WORDBREAK) && rectW > 0) {
+      const textLines = text.split('\n');
+      lines = 0;
+      for (const tl of textLines) {
+        const lineChars = Math.max(1, Math.floor(rectW / charW));
+        lines += Math.max(1, Math.ceil((tl.length || 1) / lineChars));
+      }
+    } else if (format & DT_SINGLELINE) {
+      lines = 1;
+    } else {
+      lines = Math.max(1, text.split('\n').length);
+    }
+    const totalH = lines * lineH;
+    if (format & DT_CALCRECT) {
+      emu.memory.writeU32(rectPtr + 12, (top + totalH) | 0);
+      return totalH;
+    }
+    return totalH;
+  });
+
   user32.register('CharLowerA', 1, () => {
     const p = emu.readArg(0);
     // If high word is 0, it's a character, not a pointer

@@ -566,6 +566,11 @@ export class Emulator {
   ]);
   // Loaded DLL modules: dllName → module info
   loadedModules = new Map<string, { base: number; resourceRva: number; imageBase: number; sizeOfImage?: number }>();
+  // Stub-only system DLLs (no real PE) get unique pseudo-handles so GetProcAddress
+  // by ordinal can disambiguate the target DLL. base ↔ dllName (UPPERCASE)
+  stubDllByBase = new Map<number, string>();
+  stubDllHandles = new Map<string, number>();
+  nextStubDllHandle = 0x6FFE0000 >>> 0;
   // Loaded DLL exports: dllName (lowercase) → { base, exports[] }
   // Shared between startup pre-loading (emu-load.ts) and runtime LoadLibrary (kernel32/module.ts)
   loadedDllExports = new Map<string, { base: number; exports: { ordinal: number; name: string | null; rva: number; forwardedTo: string | null }[] }>();

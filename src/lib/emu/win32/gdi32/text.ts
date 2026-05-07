@@ -472,8 +472,43 @@ export function registerText(emu: Emulator): void {
   });
 
   gdi32.register('CreateDCW', 4, () => 0);
+  gdi32.register('CreateDCA', 4, () => 0);
   gdi32.register('LPtoDP', 3, () => 1);
   gdi32.register('StartDocW', 2, () => 1);
+  gdi32.register('StartDocA', 2, () => 1);
+  gdi32.register('GetTextFaceA', 3, () => {
+    const _hdc = emu.readArg(0);
+    const nCount = emu.readArg(1);
+    const bufPtr = emu.readArg(2);
+    const faceName = 'Tahoma';
+    if (bufPtr && nCount > 0) {
+      const len = Math.min(faceName.length, nCount - 1);
+      for (let i = 0; i < len; i++) emu.memory.writeU8(bufPtr + i, faceName.charCodeAt(i) & 0xFF);
+      emu.memory.writeU8(bufPtr + len, 0);
+      return len;
+    }
+    return faceName.length;
+  });
+  gdi32.register('GetCharWidthA', 4, () => {
+    const _hdc = emu.readArg(0);
+    const first = emu.readArg(1);
+    const last = emu.readArg(2);
+    const buf = emu.readArg(3);
+    if (buf) {
+      for (let i = 0; i <= last - first; i++) emu.memory.writeU32(buf + i * 4, 7);
+    }
+    return 1;
+  });
+  gdi32.register('GetCharWidth32A', 4, () => {
+    const _hdc = emu.readArg(0);
+    const first = emu.readArg(1);
+    const last = emu.readArg(2);
+    const buf = emu.readArg(3);
+    if (buf) {
+      for (let i = 0; i <= last - first; i++) emu.memory.writeU32(buf + i * 4, 7);
+    }
+    return 1;
+  });
   gdi32.register('SetAbortProc', 2, () => 1);
   gdi32.register('StartPage', 1, () => 1);
   gdi32.register('EndPage', 1, () => 1);

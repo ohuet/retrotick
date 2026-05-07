@@ -30,8 +30,16 @@ export function registerDialog(emu: Emulator): void {
     return 0;
   }
 
-  // Pre-extract all dialog templates for use by CreateDialogParamW and DialogBoxParamW
-  const allDialogs = extractDialogs(emu.peInfo, emu.arrayBuffer);
+  // Lazy dialog cache. We can't extract eagerly here because for UPX-packed
+  // binaries the on-disk buffer doesn't contain the resource section yet —
+  // the UPX stub populates it at runtime. The first lookup runs the
+  // extraction against whatever `emu.arrayBuffer` is *currently* (which
+  // emu-load swaps to the unpacked snapshot once the stub completes).
+  let allDialogsCache: ReturnType<typeof extractDialogs> | null = null;
+  const getAllDialogs = () => {
+    if (allDialogsCache === null) allDialogsCache = extractDialogs(emu.peInfo, emu.arrayBuffer);
+    return allDialogsCache;
+  };
 
   /**
    * Read a dialog template from emulator memory at the given address.
@@ -59,9 +67,10 @@ export function registerDialog(emu: Emulator): void {
    */
   function findDialogTemplate(hInstance: number, templateId: number | string): DialogTemplate | null {
     // First check main exe
+    const dialogs = getAllDialogs();
     const mainResult = typeof templateId === 'string'
-      ? allDialogs.find(d => d.name?.toUpperCase() === templateId.toUpperCase())
-      : allDialogs.find(d => d.id === templateId);
+      ? dialogs.find(d => d.name?.toUpperCase() === templateId.toUpperCase())
+      : dialogs.find(d => d.id === templateId);
     if (mainResult) return mainResult.dialog;
 
     // Fallback: read the main exe's resource directory from emulator memory.
