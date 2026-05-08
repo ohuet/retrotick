@@ -1861,6 +1861,152 @@ export function registerMessage(emu: Emulator): void {
       if (message === EM_GETTEXTLENGTHEX) return 0;
     }
 
+    // ToolbarWindow32 (TB_*) — minimum stubs so MFC's CToolBar setup succeeds.
+    // Real Windows toolbar tracks button arrays internally and renders them;
+    // we don't need to do that for headless tests but we must return TRUE
+    // for TB_ADDBUTTONS or MFC's CToolBar::SetButtons fails → LoadToolBar
+    // returns FALSE → CMainFrame::OnCreate returns -1.
+    if (cn === 'TOOLBARWINDOW32') {
+      const TB_ENABLEBUTTON       = 0x0401;
+      const TB_CHECKBUTTON        = 0x0402;
+      const TB_PRESSBUTTON        = 0x0403;
+      const TB_HIDEBUTTON         = 0x0404;
+      const TB_INDETERMINATE      = 0x0405;
+      const TB_ISBUTTONENABLED    = 0x0409;
+      const TB_ISBUTTONCHECKED    = 0x040A;
+      const TB_ISBUTTONPRESSED    = 0x040B;
+      const TB_ISBUTTONHIDDEN     = 0x040C;
+      const TB_ISBUTTONINDETERMINATE = 0x040D;
+      const TB_SETSTATE           = 0x0411;
+      const TB_GETSTATE           = 0x0412;
+      const TB_ADDBITMAP          = 0x0413;
+      const TB_ADDBUTTONS         = 0x0414;
+      const TB_INSERTBUTTON       = 0x0415;
+      const TB_DELETEBUTTON       = 0x0416;
+      const TB_GETBUTTON          = 0x0417;
+      const TB_BUTTONCOUNT        = 0x0418;
+      const TB_COMMANDTOINDEX     = 0x0419;
+      const TB_GETITEMRECT        = 0x041D;
+      const TB_BUTTONSTRUCTSIZE   = 0x041E;
+      const TB_SETBUTTONSIZE      = 0x041F;
+      const TB_SETBITMAPSIZE      = 0x0420;
+      const TB_AUTOSIZE           = 0x0421;
+      const TB_GETROWS            = 0x0428;
+      const TB_GETBITMAPFLAGS     = 0x0429;
+      const TB_SETCMDID           = 0x042A;
+      const TB_CHANGEBITMAP       = 0x042B;
+      const TB_GETBITMAP          = 0x042C;
+      const TB_SETINDENT          = 0x042F;
+      const TB_SETIMAGELIST       = 0x0430;
+      const TB_GETIMAGELIST       = 0x0431;
+      const TB_LOADIMAGES         = 0x0432;
+      const TB_GETRECT            = 0x0433;
+      const TB_SETHOTIMAGELIST    = 0x0434;
+      const TB_GETHOTIMAGELIST    = 0x0435;
+      const TB_SETDISABLEDIMAGELIST = 0x0436;
+      const TB_GETDISABLEDIMAGELIST = 0x0437;
+      const TB_SETSTYLE           = 0x0438;
+      const TB_GETSTYLE           = 0x0439;
+      const TB_GETBUTTONSIZE      = 0x043A;
+      const TB_SETBUTTONWIDTH     = 0x043B;
+      const TB_GETMAXSIZE         = 0x0453;
+      const TB_HITTEST            = 0x0445;
+      const TB_SETEXTENDEDSTYLE   = 0x0454;
+      const TB_GETEXTENDEDSTYLE   = 0x0455;
+
+      // Allocate per-toolbar state if needed
+      const tb = wnd as WindowInfo & { tbButtons?: Array<{ iBitmap: number; idCommand: number; fsState: number; fsStyle: number }>; tbButtonStructSize?: number; tbButtonSize?: number; tbBitmapSize?: number };
+      if (!tb.tbButtons) tb.tbButtons = [];
+
+      if (message === TB_BUTTONSTRUCTSIZE) { tb.tbButtonStructSize = wParam; return 0; }
+      if (message === TB_ADDBUTTONS) {
+        const count = wParam | 0;
+        const size = tb.tbButtonStructSize || 20;
+        for (let i = 0; i < count; i++) {
+          const base = lParam + i * size;
+          tb.tbButtons.push({
+            iBitmap: emu.memory.readI32(base),
+            idCommand: emu.memory.readI32(base + 4),
+            fsState: emu.memory.readU8(base + 8),
+            fsStyle: emu.memory.readU8(base + 9),
+          });
+        }
+        return 1; // TRUE = success
+      }
+      if (message === TB_INSERTBUTTON) return 1;
+      if (message === TB_DELETEBUTTON) { tb.tbButtons.splice(wParam, 1); return 1; }
+      if (message === TB_BUTTONCOUNT) return tb.tbButtons.length;
+      if (message === TB_ADDBITMAP) return 0; // bitmap index 0
+      if (message === TB_LOADIMAGES) return 0;
+      if (message === TB_AUTOSIZE) return 0;
+      if (message === TB_SETBUTTONSIZE) { tb.tbButtonSize = lParam; return 1; }
+      if (message === TB_SETBITMAPSIZE) { tb.tbBitmapSize = lParam; return 1; }
+      if (message === TB_GETBUTTONSIZE) return tb.tbButtonSize ?? ((22 << 16) | 24);
+      if (message === TB_GETROWS) return 1;
+      if (message === TB_GETSTYLE) return wnd.style >>> 0;
+      if (message === TB_SETSTYLE) { wnd.style = lParam >>> 0; return 0; }
+      if (message === TB_GETEXTENDEDSTYLE) return 0;
+      if (message === TB_SETEXTENDEDSTYLE) return 0;
+      if (message === TB_SETIMAGELIST) return 0;
+      if (message === TB_GETIMAGELIST) return 0;
+      if (message === TB_SETHOTIMAGELIST) return 0;
+      if (message === TB_GETHOTIMAGELIST) return 0;
+      if (message === TB_SETDISABLEDIMAGELIST) return 0;
+      if (message === TB_GETDISABLEDIMAGELIST) return 0;
+      if (message === TB_SETCMDID) return 1;
+      if (message === TB_SETINDENT) return 1;
+      if (message === TB_SETBUTTONWIDTH) return 1;
+      if (message === TB_GETBITMAP) return 0;
+      if (message === TB_GETBITMAPFLAGS) return 0;
+      if (message === TB_CHANGEBITMAP) return 1;
+      if (message === TB_HITTEST) return -1;
+      if (message === TB_COMMANDTOINDEX) {
+        const idx = tb.tbButtons.findIndex(b => b.idCommand === wParam);
+        return idx;
+      }
+      if (message === TB_GETBUTTON) {
+        const btn = tb.tbButtons[wParam];
+        if (!btn || !lParam) return 0;
+        emu.memory.writeI32(lParam, btn.iBitmap);
+        emu.memory.writeI32(lParam + 4, btn.idCommand);
+        emu.memory.writeU8(lParam + 8, btn.fsState);
+        emu.memory.writeU8(lParam + 9, btn.fsStyle);
+        return 1;
+      }
+      if (message === TB_GETSTATE) {
+        const idx = tb.tbButtons.findIndex(b => b.idCommand === wParam);
+        return idx >= 0 ? tb.tbButtons[idx].fsState : -1;
+      }
+      if (message === TB_SETSTATE) {
+        const idx = tb.tbButtons.findIndex(b => b.idCommand === wParam);
+        if (idx >= 0) tb.tbButtons[idx].fsState = lParam & 0xFF;
+        return 1;
+      }
+      if (message === TB_ENABLEBUTTON || message === TB_CHECKBUTTON || message === TB_PRESSBUTTON ||
+          message === TB_HIDEBUTTON || message === TB_INDETERMINATE) return 1;
+      if (message === TB_ISBUTTONENABLED || message === TB_ISBUTTONCHECKED || message === TB_ISBUTTONPRESSED ||
+          message === TB_ISBUTTONHIDDEN || message === TB_ISBUTTONINDETERMINATE) return 0;
+      if (message === TB_GETITEMRECT || message === TB_GETRECT) {
+        if (lParam) {
+          emu.memory.writeI32(lParam, 0);
+          emu.memory.writeI32(lParam + 4, 0);
+          emu.memory.writeI32(lParam + 8, 22);
+          emu.memory.writeI32(lParam + 12, 22);
+        }
+        return 1;
+      }
+      if (message === TB_GETMAXSIZE) {
+        if (lParam) {
+          emu.memory.writeI32(lParam, tb.tbButtons.length * 22);
+          emu.memory.writeI32(lParam + 4, 22);
+        }
+        return 1;
+      }
+      // Catch-all for other TB_* messages — return 0 (most are queries that
+      // accept 0 as "don't know"; SET-style ops have already been handled above).
+      if (message >= 0x0400 && message < 0x0500) return 0;
+    }
+
     return null; // not handled — proceed to wndProc
   };
 
