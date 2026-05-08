@@ -717,7 +717,7 @@ export class Emulator {
   keyStates = new Set<number>(); // Currently pressed virtual key codes
   configuredLcid = 0x0409; // Set from regional settings at load time
   windowDCs = new Map<number, number>();
-  private timers = new Map<string, number>();
+  private timers = new Map<string, { jsTimer: number; elapse: number; timerFunc: number }>();
   /** Multimedia timers (timeSetEvent) — callback invoked during tick */
   _mmTimers = new Map<number, { callback: number; dwUser: number; delay: number; periodic: boolean; nextFire: number }>();
 
@@ -1257,15 +1257,19 @@ export class Emulator {
   }
 
   // Timer management
-  setWin32Timer(hwnd: number, id: number, jsTimer: number): void {
-    this.timers.set(`${hwnd}:${id}`, jsTimer);
+  setWin32Timer(hwnd: number, id: number, jsTimer: number, elapse = 0, timerFunc = 0): void {
+    this.timers.set(`${hwnd}:${id}`, { jsTimer, elapse, timerFunc });
+  }
+
+  getWin32Timer(hwnd: number, id: number): { jsTimer: number; elapse: number; timerFunc: number } | undefined {
+    return this.timers.get(`${hwnd}:${id}`);
   }
 
   clearWin32Timer(hwnd: number, id: number): void {
     const key = `${hwnd}:${id}`;
     const timer = this.timers.get(key);
     if (timer !== undefined) {
-      clearInterval(timer);
+      clearInterval(timer.jsTimer);
       this.timers.delete(key);
     }
   }
