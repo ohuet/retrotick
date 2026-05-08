@@ -78,6 +78,7 @@ await emu.load(exeBuf, peInfo, mockCanvas);
 emu.traceApi = process.env.TRACE === '1' || process.env.TRACE_API === '1';
 emu.traceDosInt = process.env.TRACE === '1' || process.env.TRACE_FS === '1';
 
+
 // Wrap the FAR call dispatcher to log enters/exits of integrity-related ords
 const originalCs = emu.cpu.cs;
 let lastTrace = -1;

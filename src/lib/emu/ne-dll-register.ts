@@ -37,6 +37,14 @@ export function registerLoadedNeDll(
   ne.nextSelector = dll.nextSelector;
   ne.thunkAddrEnd = dll.thunkAddrEnd;
 
+  // Advance the global heap past the new DLL's segments. NE segments live at
+  // selector*0x10000; without this, a runtime LoadLibrary would assign sel N
+  // for the DLL's data segment and a subsequent GlobalAlloc would hand out
+  // the same linear address (heapPtr also climbs by 64KB per alloc), aliasing
+  // the DLL's code/data with the heap allocation.
+  const dllEnd = (dll.nextSelector + 1) * 0x10000;
+  if (emu.heapPtr < dllEnd) emu.heapPtr = dllEnd;
+
   if (dll.resources.length > 0) {
     emu.neDllResources.push({ resources: dll.resources, arrayBuffer: dllBuf });
   }

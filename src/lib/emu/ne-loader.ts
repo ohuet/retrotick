@@ -11,7 +11,8 @@ export interface NESegmentInfo {
 }
 
 export interface NEResourceEntry {
-  typeID: number;     // resource type (e.g. 2=RT_BITMAP, 6=RT_STRING, 4=RT_MENU)
+  typeID: number;     // resource type (e.g. 2=RT_BITMAP, 6=RT_STRING, 4=RT_MENU). 0 if custom string type.
+  typeName?: string;  // Set instead of typeID when the type is a custom string ("TASKEXE" etc.)
   id: number;         // resource ID (integer, or 0 for string-named)
   name?: string;      // resource name (for string-named resources)
   fileOffset: number; // absolute file offset
@@ -168,7 +169,21 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
       // Skip 4 bytes reserved
       resOff += 8; // past typeID(2) + count(2) + reserved(4)
 
-      const typeID = (rtTypeID & 0x8000) ? (rtTypeID & 0x7FFF) : rtTypeID;
+      // High bit set: numeric standard type. Clear: offset (relative to resource
+      // table base) of a Pascal string holding a custom type name (e.g. "TASKEXE").
+      let typeID = 0;
+      let typeName: string | undefined;
+      if (rtTypeID & 0x8000) {
+        typeID = rtTypeID & 0x7FFF;
+      } else {
+        const strPos = resTableBase + rtTypeID;
+        if (strPos < arrayBuffer.byteLength) {
+          const strLen = data[strPos];
+          let name = '';
+          for (let j = 0; j < strLen; j++) name += String.fromCharCode(data[strPos + 1 + j]);
+          typeName = name;
+        }
+      }
 
       for (let i = 0; i < rtCount; i++) {
         if (resOff + 12 > arrayBuffer.byteLength) break;
@@ -182,6 +197,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
         const fileOffset = rnOffset << rscAlignShift;
         const length = rnLength << rscAlignShift;
         const entry: NEResourceEntry = { typeID, id: 0, fileOffset, length };
+        if (typeName) entry.typeName = typeName;
         if (rnID & 0x8000) {
           entry.id = rnID & 0x7FFF;
         } else {
