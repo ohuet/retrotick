@@ -293,8 +293,13 @@ export function registerMessage(emu: Emulator): void {
       return builtin ?? 0;
     }
 
-    // Call WndProc via stack frame replacement
+    // Call WndProc via stack frame replacement.
+    // DispatchMessage propagates `undefined` correctly, so it's safe to let
+    // callStdcall yield mid-wndProc when this dispatch takes too long.
+    const prevAllow = emu._allowWndProcYield;
+    emu._allowWndProcYield = true;
     const ret = emu.callWndProc(wnd.wndProc, hwnd, message, wParam, lParam);
+    emu._allowWndProcYield = prevAllow;
     if (ret === undefined) return undefined; // deferred — post-processing skipped
 
     // WM_GETMINMAXINFO caching is now handled by clampToMinTrackSize() in _helpers.ts

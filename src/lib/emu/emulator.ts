@@ -575,6 +575,11 @@ export class Emulator {
   // delegates here for control-class messages like TB_*, EM_*, LB_*, CB_*, etc.,
   // which MFC calls via DefWindowProc instead of SendMessage when subclassing.
   dispatchBuiltinMessage: ((hwnd: number, message: number, wParam: number, lParam: number, wide?: boolean) => number | null) | null = null;
+  // True when we're inside a context (e.g. DispatchMessageA) that knows how to
+  // propagate `undefined` from emu.callWndProc to defer wndProc completion.
+  // Init-time JS handlers like CreateWindowExA are NOT async-aware, so they
+  // must run their callWndProc synchronously to completion (yields disabled).
+  _allowWndProcYield = false;
   // Loaded DLL exports: dllName (lowercase) → { base, exports[] }
   // Shared between startup pre-loading (emu-load.ts) and runtime LoadLibrary (kernel32/module.ts)
   loadedDllExports = new Map<string, { base: number; exports: { ordinal: number; name: string | null; rva: number; forwardedTo: string | null }[] }>();
