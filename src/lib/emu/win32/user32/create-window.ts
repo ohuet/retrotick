@@ -141,12 +141,16 @@ export function registerCreateWindow(emu: Emulator): void {
 
     // Fire CBT hooks (HCBT_CREATEWND = 3) before WM_NCCREATE
     // CBT_CREATEWND: { CREATESTRUCT* lpcs; HWND hwndInsertAfter; }
+    // CBTProc takes 3 args (nCode, wParam, lParam) → callCallback (NOT callWndProc,
+    // which expects a 4-arg WndProc and would leave a 4-byte stack imbalance after
+    // the hook's `ret 0xC` runs against our 4-arg push, corrupting the caller's
+    // retAddr slot).
     if (emu.cbtHooks.length > 0) {
       const cbtStruct = emu.allocHeap(8);
       emu.memory.writeU32(cbtStruct, createStructAddr);
       emu.memory.writeU32(cbtStruct + 4, 0); // hwndInsertAfter
       for (const hook of emu.cbtHooks) {
-        emu.callWndProc(hook.lpfn, 3, hwnd, cbtStruct, 0);
+        emu.callCallback(hook.lpfn, [3, hwnd, cbtStruct]);
       }
     }
 
@@ -275,13 +279,14 @@ export function registerCreateWindow(emu: Emulator): void {
     emu.memory.writeU32(createStructAddr + 40, classNamePtr);
     emu.memory.writeU32(createStructAddr + 44, exStyle);
 
-    // Fire CBT hooks (HCBT_CREATEWND = 3) before WM_NCCREATE
+    // Fire CBT hooks (HCBT_CREATEWND = 3) before WM_NCCREATE — see comment in
+    // CreateWindowExA above; CBTProc is 3-arg, must use callCallback.
     if (emu.cbtHooks.length > 0) {
       const cbtStruct = emu.allocHeap(8);
       emu.memory.writeU32(cbtStruct, createStructAddr);
       emu.memory.writeU32(cbtStruct + 4, 0);
       for (const hook of emu.cbtHooks) {
-        emu.callWndProc(hook.lpfn, 3, hwnd, cbtStruct, 0);
+        emu.callCallback(hook.lpfn, [3, hwnd, cbtStruct]);
       }
     }
 
