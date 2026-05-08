@@ -22,6 +22,9 @@ export function registerMisc(emu: Emulator): void {
   // DragObject(hwndParent, hwndFrom, wFmt, dwData, hcur) — 5 args
   user32.register('DragObject', 5, () => 0);
 
+  // NotifyWinEvent(event, hwnd, idObject, idChild) — accessibility notification, no-op
+  user32.register('NotifyWinEvent', 4, () => 0);
+
   // System metrics
   user32.register('GetSystemMetrics', 1, () => {
     const idx = emu.readArg(0);
