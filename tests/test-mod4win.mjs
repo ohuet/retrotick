@@ -85,6 +85,7 @@ let lastTrace = -1;
 
 emu.run();
 
+
 const MAX_TICKS = 1000;
 let ticks = 0;
 while (!emu.waitingForMessage && !emu.halted && ticks < MAX_TICKS) {

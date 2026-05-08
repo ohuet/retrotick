@@ -4,18 +4,56 @@ import type { Emulator } from '../emulator';
 // Reference: Wine dlls/ver.dll16/ver.dll16.spec
 // MOD4WIN uses these for an anti-tamper check (file integrity verification).
 
+/** Parse a NE binary's resource table and return the bytes of its RT_VERSION
+ *  (type 16) resource, or null if absent / file isn't NE. */
+function readNERtVersion(buf: Uint8Array): Uint8Array | null {
+  if (buf.length < 0x40) return null;
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (buf[0] !== 0x4D || buf[1] !== 0x5A) return null; // not MZ
+  const mzNe = dv.getUint16(0x3C, true);
+  if (mzNe + 0x40 > buf.length) return null;
+  if (buf[mzNe] !== 0x4E || buf[mzNe + 1] !== 0x45) return null; // not NE
+  const resTblOff = dv.getUint16(mzNe + 0x24, true);
+  const residentOff = dv.getUint16(mzNe + 0x26, true);
+  if (resTblOff === residentOff) return null; // no resource table
+  const resTableBase = mzNe + resTblOff;
+  const rscShift = dv.getUint16(resTableBase, true);
+  let p = resTableBase + 2;
+  while (p + 8 <= buf.length) {
+    const rtTypeID = dv.getUint16(p, true);
+    if (rtTypeID === 0) return null;
+    const rtCount = dv.getUint16(p + 2, true);
+    p += 8;
+    const typeID = (rtTypeID & 0x8000) ? (rtTypeID & 0x7FFF) : 0;
+    if (typeID === 16) { // RT_VERSION
+      if (rtCount > 0 && p + 12 <= buf.length) {
+        const rnOffset = dv.getUint16(p, true);
+        const rnLength = dv.getUint16(p + 2, true);
+        const fileOffset = rnOffset << rscShift;
+        const length = rnLength << rscShift;
+        return buf.subarray(fileOffset, fileOffset + length);
+      }
+      return null;
+    }
+    p += rtCount * 12;
+  }
+  return null;
+}
+
 /** Locate the RT_VERSION resource bytes for a given filename.
  *
- *  Currently supports:
- *   - The running EXE (matches by path or basename against emu.exePath)
+ *  Searches in this order:
+ *   - The running EXE (PE peInfo path)
  *   - LoadLibrary'd NE DLLs (matches by basename — last segment of the path)
+ *   - additionalFiles (host-supplied buffers, including the running EXE buffer)
+ *   - The virtual filesystem (matches files written via INT 21h)
  *
  *  Returns the raw resource data (typeId=16 in NE/PE resource tree) or null. */
 function findVersionResource(emu: Emulator, filename: string): Uint8Array | null {
   if (!filename) return null;
   const wantBase = filename.replace(/.*[\\\/]/, '').toUpperCase();
 
-  // EXE itself
+  // EXE itself (PE only — NE EXE falls through to additionalFiles below)
   const exeBase = emu.exePath.replace(/.*[\\\/]/, '').toUpperCase();
   if (wantBase === exeBase || filename.toUpperCase() === emu.exePath.toUpperCase()) {
     if (emu.peInfo?.resources) {
@@ -31,9 +69,32 @@ function findVersionResource(emu: Emulator, filename: string): Uint8Array | null
   for (const dllInfo of emu.neDllResources) {
     const versionEntry = dllInfo.resources.find(r => r.typeID === 16);
     if (!versionEntry) continue;
-    // We don't store DLL filenames alongside neDllResources, but the typical case
-    // is the EXE looking up its own version, so this branch is mainly future-proofing.
     return new Uint8Array(dllInfo.arrayBuffer, versionEntry.fileOffset, versionEntry.length);
+  }
+
+  // additionalFiles (host-supplied buffers, keyed by relative path).
+  for (const [key, ab] of emu.additionalFiles) {
+    if (key.replace(/.*[\\\/]/, '').toUpperCase() !== wantBase) continue;
+    const data = readNERtVersion(new Uint8Array(ab));
+    if (data) return data;
+  }
+
+  // Virtual filesystem (e.g. files written by the guest via INT 21h AH=3C/40).
+  const fsAny = emu.fs as { virtualFileCache?: Map<string, ArrayBuffer> };
+  if (fsAny.virtualFileCache) {
+    for (const [key, ab] of fsAny.virtualFileCache) {
+      if (key.replace(/.*[\\\/]/, '').toUpperCase() !== wantBase) continue;
+      const data = readNERtVersion(new Uint8Array(ab));
+      if (data) return data;
+    }
+  }
+
+  // DOS-open file map (catches files written but not yet flushed to virtualFileCache).
+  for (const f of emu._dosFiles.values()) {
+    if (!f.name) continue;
+    if (f.name.replace(/.*[\\\/]/, '').toUpperCase() !== wantBase) continue;
+    const data = readNERtVersion(f.data);
+    if (data) return data;
   }
 
   return null;
@@ -133,6 +194,7 @@ export function registerWin16Ver(emu: Emulator): void {
     const filename = nameLin ? emu.memory.readCString(nameLin) : '';
     const data = findVersionResource(emu, filename);
     if (handleLin) emu.memory.writeU32(handleLin, 0);
+    if (emu.traceApi) console.log(`[VER] GetFileVersionInfoSize("${filename}") → ${data ? data.length : 0}`);
     return data ? data.length : 0;
   }, 6);
 
@@ -194,6 +256,15 @@ export function registerWin16Ver(emu: Emulator): void {
     for (let i = 0; i < wLength; i++) buffer[i] = emu.memory.readU8(pBlockLin + i);
 
     const found = findVerQueryValue(buffer, 0, subBlock);
+    if (emu.traceApi) {
+      let ctx = '';
+      if (found) {
+        for (let i = 0; i < Math.min(24, found.size); i++) {
+          ctx += buffer[found.offset + i].toString(16).padStart(2, '0') + ' ';
+        }
+      }
+      console.log(`[VER] VerQueryValue("${subBlock}") → ${found ? `off=${found.offset} size=${found.size} bytes=[${ctx}]` : 'not found'}`);
+    }
     if (!found) return 0;
 
     // Convert linear-offset-within-buffer back to a far pointer using pBlock's segment
