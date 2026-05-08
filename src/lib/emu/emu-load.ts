@@ -443,10 +443,17 @@ export async function emuLoad(emu: Emulator, arrayBuffer: ArrayBuffer, peInfo: P
       // A crashing DLL entry leaves cpu.halted=true, which would silently
       // poison the main exe's startup. Clear it so the program can still run;
       // the warning logged by the dispatch already flagged the issue.
+      // Exception: if the DLL terminated explicitly (INT 21h AH=4C sets
+      // exitedNormally=true), keep halted so LoadLibrary can report failure
+      // — protected DLLs (e.g. anti-tamper) intentionally call AH=4C to abort.
       if (emu.cpu.halted) {
-        console.warn(`[NE DLL] ${dllEntry.name} entry halted CPU — clearing halt to continue main exe`);
-        emu.cpu.halted = false;
-        emu.cpu.haltReason = '';
+        if (emu.exitedNormally) {
+          console.warn(`[NE DLL] ${dllEntry.name} entry called DOS Terminate — keeping halt`);
+        } else {
+          console.warn(`[NE DLL] ${dllEntry.name} entry halted CPU — clearing halt to continue main exe`);
+          emu.cpu.halted = false;
+          emu.cpu.haltReason = '';
+        }
       }
 
       // Restore all CPU state

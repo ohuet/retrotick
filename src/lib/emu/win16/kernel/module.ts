@@ -5,9 +5,10 @@ import { getSyncFileData } from '../../dos/file';
 import type { LoadedNE } from '../../ne-loader';
 
 /** Invoke a runtime-loaded NE DLL's LibEntry / LibMain. The standard LIBENTRY
- *  stub expects DI=hInstance, CX=heapSize, DS=autoDataSeg, ES:SI=cmdLine. */
-function callDllEntry(emu: Emulator, dll: LoadedNE): void {
-  if (!dll.entryPoint || !emu.ne) return;
+ *  stub expects DI=hInstance, CX=heapSize, DS=autoDataSeg, ES:SI=cmdLine.
+ *  Returns false if LibMain explicitly aborted (DOS Terminate). */
+function callDllEntry(emu: Emulator, dll: LoadedNE): boolean {
+  if (!dll.entryPoint || !emu.ne) return true;
   const savedDS = emu.cpu.ds;
   const savedES = emu.cpu.es;
   const savedECX = emu.cpu.reg[1];
@@ -25,8 +26,15 @@ function callDllEntry(emu: Emulator, dll: LoadedNE): void {
   emu.callWndProc16(dll.entryPoint, 0, 0, 0, 0);
   emu.ne.dataSegSelector = origDataSel;
 
+  let aborted = false;
   if (emu.cpu.halted) {
-    console.warn(`[NE DLL] Runtime LibMain halted CPU — clearing halt`);
+    if (emu.exitedNormally) {
+      console.warn(`[NE DLL] Runtime LibMain called DOS Terminate — DLL load failed`);
+      aborted = true;
+      emu.exitedNormally = false;
+    } else {
+      console.warn(`[NE DLL] Runtime LibMain halted CPU — clearing halt`);
+    }
     emu.cpu.halted = false;
     emu.cpu.haltReason = '';
   }
@@ -36,6 +44,7 @@ function callDllEntry(emu: Emulator, dll: LoadedNE): void {
   emu.cpu.reg[1] = savedECX;
   emu.cpu.reg[7] = savedEDI;
   emu.cpu.reg[6] = savedESI;
+  return !aborted;
 }
 
 export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: KernelState): void {
@@ -175,7 +184,12 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
       const handle = state.nextModuleHandle++;
       state.moduleHandles.set(baseName, handle);
       state.loadedDlls.set(handle, dll);
-      callDllEntry(emu, dll);
+      if (!callDllEntry(emu, dll)) {
+        state.moduleHandles.delete(baseName);
+        state.loadedDlls.delete(handle);
+        console.warn(`[KERNEL16] LoadLibrary("${name}") → 0 (LibMain aborted)`);
+        return 0;
+      }
       console.log(`[KERNEL16] LoadLibrary("${name}") → 0x${handle.toString(16)} (${dll.segments.length} segs, ${dll.resources.length} res)`);
       return handle;
     }
@@ -197,7 +211,12 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
       const handle = state.nextModuleHandle++;
       state.moduleHandles.set(baseName, handle);
       state.loadedDlls.set(handle, dll);
-      callDllEntry(emu, dll);
+      if (!callDllEntry(emu, dll)) {
+        state.moduleHandles.delete(baseName);
+        state.loadedDlls.delete(handle);
+        console.warn(`[KERNEL16] LoadLibrary("${name}") → 0 (LibMain aborted)`);
+        return 0;
+      }
       console.log(`[KERNEL16] LoadLibrary("${name}") → 0x${handle.toString(16)} (${dll.segments.length} segs, ${dll.resources.length} res)`);
       return handle;
     }
