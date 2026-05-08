@@ -75,7 +75,7 @@ emu.additionalFiles.set(dllPrefix + 'MOD4WIN.STA', readToArrayBuffer(baseDir + '
 await emu.load(exeBuf, peInfo, mockCanvas);
 
 // Trace API calls during startup to see what MOD4WIN does
-emu.traceApi = process.env.TRACE === '1';
+emu.traceApi = process.env.TRACE === '1' || process.env.TRACE_API === '1';
 emu.traceDosInt = process.env.TRACE === '1' || process.env.TRACE_FS === '1';
 
 // Wrap the FAR call dispatcher to log enters/exits of integrity-related ords
@@ -84,7 +84,7 @@ let lastTrace = -1;
 
 emu.run();
 
-const MAX_TICKS = 500;
+const MAX_TICKS = 1000;
 let ticks = 0;
 while (!emu.waitingForMessage && !emu.halted && ticks < MAX_TICKS) {
   emu.tick();

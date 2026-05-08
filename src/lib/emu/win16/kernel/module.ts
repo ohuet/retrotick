@@ -23,7 +23,13 @@ function callDllEntry(emu: Emulator, dll: LoadedNE): boolean {
   emu.cpu.reg[6] = (emu.cpu.reg[6] & 0xFFFF0000) | 0;
 
   emu.ne.dataSegSelector = dll.dataSegSelector;
+  // Bump wndProcDepth so callWndProc16's canYield === false: a runtime LibMain
+  // (e.g. RES_USA's anti-tamper checksum loop) can iterate millions of times
+  // and the 40ms yield path would return before LibMain completed, stranding
+  // the CPU mid-LibMain while we restore DS for the caller.
+  emu.wndProcDepth++;
   emu.callWndProc16(dll.entryPoint, 0, 0, 0, 0);
+  emu.wndProcDepth--;
   emu.ne.dataSegSelector = origDataSel;
 
   let aborted = false;
@@ -79,9 +85,25 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
   kernel.register('GetModuleUsage', 2, () => 1, 48);
 
   // --- Ordinal 49: GetModuleFileName(hModule, lpFilename, nSize) — 8 bytes (word+ptr+s_word) ---
+  // hModule may be either a synthetic LoadLibrary handle (>=0x200) or a Win16
+  // hInstance, which by our convention equals the module's auto-data segment
+  // selector (set in DI when LibEntry is invoked). 0/NULL means current task EXE.
   kernel.register('GetModuleFileName', 8, () => {
     const [hModule, lpFilename, nSize] = emu.readPascalArgs16([2, 4, 2]);
-    const name = emu.exePath;
+    let name = emu.exePath;
+    if (hModule !== 0) {
+      const byHandle = state.loadedDlls.get(hModule);
+      if (byHandle?.modulePath) {
+        name = byHandle.modulePath;
+      } else {
+        for (const dll of state.loadedDlls.values()) {
+          if (dll.dataSegSelector === hModule && dll.modulePath) {
+            name = dll.modulePath;
+            break;
+          }
+        }
+      }
+    }
     const buf = emu.resolveFarPtr(lpFilename);
     if (buf && nSize > 0) {
       const maxCopy = Math.min(name.length, nSize - 1);
@@ -181,6 +203,7 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
     if (bareBuf) {
       const dll = registerLoadedNeDll(emu, bareBuf, baseName);
       if (!dll) return 0;
+      dll.modulePath = emu.resolvePath(name);
       const handle = state.nextModuleHandle++;
       state.moduleHandles.set(baseName, handle);
       state.loadedDlls.set(handle, dll);
@@ -208,6 +231,7 @@ export function registerKernelModule(kernel: Win16Module, emu: Emulator, state: 
       const buf = syncData.buffer.slice(syncData.byteOffset, syncData.byteOffset + syncData.byteLength) as ArrayBuffer;
       const dll = registerLoadedNeDll(emu, buf, baseName);
       if (!dll) return 0;
+      dll.modulePath = resolved;
       const handle = state.nextModuleHandle++;
       state.moduleHandles.set(baseName, handle);
       state.loadedDlls.set(handle, dll);

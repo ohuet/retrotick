@@ -39,6 +39,7 @@ export interface LoadedNE {
   nameToOrdinal: Map<string, number>; // export name (uppercase) → ordinal
   nextSelector: number;        // next available selector after this module
   flags: number;               // NE header flags
+  modulePath?: string;         // file path of this module (for GetModuleFileName)
 }
 
 // Thunk segment selector
