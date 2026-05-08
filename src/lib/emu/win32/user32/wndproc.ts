@@ -34,6 +34,14 @@ export function registerWndProc(emu: Emulator): void {
     const wParam = emu.readArg(2);
     const lParam = emu.readArg(3);
 
+    // MFC's CToolBar::SetButtons (and similar control helpers) call
+    // DefWindowProc(TB_*, ...) directly when forwarding to the underlying
+    // built-in control. Route those through the same dispatcher SendMessage uses.
+    if (emu.dispatchBuiltinMessage) {
+      const builtin = emu.dispatchBuiltinMessage(hwnd, message, wParam, lParam, false);
+      if (builtin !== null) return builtin;
+    }
+
     switch (message) {
       case WM_SYSCOMMAND: {
         const scCmd = wParam & 0xFFF0;

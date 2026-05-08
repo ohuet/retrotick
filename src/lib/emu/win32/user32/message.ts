@@ -2010,6 +2010,13 @@ export function registerMessage(emu: Emulator): void {
     return null; // not handled — proceed to wndProc
   };
 
+  // Expose for DefWindowProcA: MFC's CToolBar::SetButtons (and similar control
+  // helpers) call DefWindowProc(TB_*, ...) directly instead of SendMessage,
+  // because they're already inside the control's wndProc and want to fall
+  // through to the original built-in behaviour. Our DefWindowProcA must
+  // therefore consult this dispatcher.
+  emu.dispatchBuiltinMessage = handleBuiltinMessage;
+
   user32.register('SendMessageA', 4, () => {
     const hwnd = emu.readArg(0);
     const message = emu.readArg(1);

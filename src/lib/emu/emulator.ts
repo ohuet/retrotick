@@ -571,6 +571,10 @@ export class Emulator {
   stubDllByBase = new Map<number, string>();
   stubDllHandles = new Map<string, number>();
   nextStubDllHandle = 0x6FFE0000 >>> 0;
+  // Built-in message dispatcher (set by registerMessage in user32). DefWindowProcA
+  // delegates here for control-class messages like TB_*, EM_*, LB_*, CB_*, etc.,
+  // which MFC calls via DefWindowProc instead of SendMessage when subclassing.
+  dispatchBuiltinMessage: ((hwnd: number, message: number, wParam: number, lParam: number, wide?: boolean) => number | null) | null = null;
   // Loaded DLL exports: dllName (lowercase) → { base, exports[] }
   // Shared between startup pre-loading (emu-load.ts) and runtime LoadLibrary (kernel32/module.ts)
   loadedDllExports = new Map<string, { base: number; exports: { ordinal: number; name: string | null; rva: number; forwardedTo: string | null }[] }>();
