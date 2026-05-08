@@ -407,6 +407,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const [hasMainWindow, setHasMainWindow] = useState(false);
   const [isConsole, setIsConsole] = useState(false);
   const [consoleZoom, setConsoleZoom] = useState<1 | 2>(1);
+  const [consoleSmooth, setConsoleSmooth] = useState(true);
   // Bumped whenever the DOS console's screen layout (graphics ↔ text mode,
   // text rows × charH) changes — triggers a re-render so consoleClientH
   // re-reads the up-to-date emu state.
@@ -1572,13 +1573,9 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     );
   }
 
-  // Console window height tracks the active video mode: graphics modes use
-  // the full 480 area, text modes shrink to ROWS × charH (= 400 for 80×25 and
-  // 80×50) so the canvas renders at native size with no fractional stretch.
-  const consoleEmu = emuRef.current;
-  const consoleClientH = consoleEmu && !consoleEmu.isGraphicsMode
-    ? (consoleEmu.screenRows || 25) * (consoleEmu.charHeight || 16) * consoleZoom
-    : 480 * consoleZoom;
+  // Console window is always 640×480 — text modes scale their natural 720×400
+  // (or 640×400) surface up to fill the 4:3 client area, matching real CRTs.
+  const consoleClientH = 480 * consoleZoom;
   void consoleLayoutBump; // dependency: re-evaluate when the layout changes
 
   return (
@@ -1611,6 +1608,8 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         onResizeStart={onResizeStart}
         onZoomToggle={isConsole ? () => setConsoleZoom(z => z === 1 ? 2 : 1) : undefined}
         zoomActive={consoleZoom > 1}
+        onSmoothToggle={isConsole ? () => setConsoleSmooth(s => !s) : undefined}
+        smoothActive={consoleSmooth}
         onFullscreenToggle={isConsole ? handleFullscreenToggle : undefined}
         fullscreenActive={isFullscreen}
         onSystemMove={handleSystemMove}
@@ -1638,7 +1637,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
               } : undefined}
             >
               <div style={isFullscreen ? { transform: `scale(${fsScale})`, transformOrigin: 'center' } : undefined}>
-                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} onScreenLayoutChange={handleScreenLayoutChange} />
+                <ConsoleView emu={emuRef.current} focused={focused} zoom={consoleZoom} smooth={consoleSmooth} onScreenLayoutChange={handleScreenLayoutChange} />
               </div>
             </div>
           ) : (
