@@ -46,7 +46,7 @@ export function registerLoadedNeDll(
   if (emu.heapPtr < dllEnd) emu.heapPtr = dllEnd;
 
   if (dll.resources.length > 0) {
-    emu.neDllResources.push({ resources: dll.resources, arrayBuffer: dllBuf });
+    emu.neDllResources.push({ resources: dll.resources, arrayBuffer: dllBuf, dataSegSelector: dll.dataSegSelector });
   }
 
   if (dll.dataSegSelector && dll.autoDataStaticSize > 0) {

@@ -45,7 +45,11 @@ export function registerKernelDos(kernel: Win16Module, emu: Emulator, state: Ker
   }, 131);
 
   // --- Ordinal 132: GetWinFlags() — 0 bytes ---
-  kernel.register('GetWinFlags', 0, () => 0x0413, 132);
+  // WF_PMODE (0x0001) | WF_CPU486 (0x0008) | WF_ENHANCED (0x0020)
+  // | WF_80x87 (0x0400) | WF_PAGING (0x0800). Mirrors what Wine reports
+  // for a Win 3.1 enhanced-mode session — many apps (Mod4Win, anything
+  // that wants DPMI services) refuse to start in standard mode.
+  kernel.register('GetWinFlags', 0, () => 0x0c29, 132);
 
   // --- Ordinal 134: GetWindowsDirectory(ptr word) — 6 bytes (ptr+word) ---
   kernel.register('GetWindowsDirectory', 6, () => {
