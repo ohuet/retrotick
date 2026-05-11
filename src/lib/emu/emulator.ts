@@ -831,6 +831,7 @@ export class Emulator {
   onCloseDialog?: () => void;
   onControlsChanged?: (controls: ControlOverlay[]) => void;
   onMenuChanged?: () => void;
+  onSetMenu?: (hwnd: number, hMenu: number) => void;
   onCrash?: (eip: string, description: string) => void;
   onExit?: () => void;
   onReboot?: () => void;

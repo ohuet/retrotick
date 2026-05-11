@@ -109,6 +109,10 @@ export function registerMenu(emu: Emulator): void {
     const hMenu = emu.readArg(1);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd) wnd.hMenu = hMenu;
+    // Programs that build their menu at runtime (CreateMenu + AppendMenu, no
+    // RT_MENU resource) only become visible after SetMenu attaches the tree
+    // to a window. Notify the UI so it can re-read the runtime structure.
+    emu.onSetMenu?.(hwnd, hMenu);
     return 1;
   });
 

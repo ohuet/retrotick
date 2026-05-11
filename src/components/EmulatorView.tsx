@@ -584,6 +584,25 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       emu.traceApi = dsPre.traceApi;
 
       await emu.load(arrayBuffer, peInfo, canvas);
+
+      // UPX-packed PEs hide their resources until the decompression stub has
+      // run, which happens inside emu.load(). emu-load.ts repopulates
+      // peInfo.resources / peInfo.sections and stores the unpacked image in
+      // emu.arrayBuffer. Re-extract menus + icons from that view so the UI
+      // gets the real menu bar and app icon for UPX exes (PabloDraw, etc.).
+      if (peInfo.isUpxPacked && emu.arrayBuffer) {
+        const postMenus = extractMenus(peInfo, emu.arrayBuffer);
+        if (postMenus.length > 0) {
+          setMenus(postMenus);
+          emu.menuItems = postMenus[0].menu.items;
+        }
+        const postIcons = extractIcons(peInfo, emu.arrayBuffer);
+        if (postIcons.length > 0) {
+          const url = URL.createObjectURL(postIcons[0].blob);
+          setIconUrl(url);
+          onIconChange?.(url);
+        }
+      }
     };
 
     try {
@@ -689,6 +708,32 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       emu.onCloseDialog = () => setDialogInfo(null);
       emu.onControlsChanged = (controls: ControlOverlay[]) => setControlOverlays(controls);
       emu.onMenuChanged = () => setMenus(prev => [...prev]);
+      // Apps that build their menu at runtime (CreateMenu + AppendMenu, e.g.
+      // PabloDraw) only expose the structure via SetMenu(hwnd, hMenu). Walk
+      // the runtime InternalMenuItem tree once the main window's menu is set
+      // and convert it into the MenuResult[] shape the React MenuBar expects.
+      emu.onSetMenu = (hwnd, hMenu) => {
+        if (!emu.mainWindow || hwnd !== emu.mainWindow || !hMenu) return;
+        const seen = new Set<number>();
+        const toMenuItem = (it: { id: number; text: string; flags: number; hSubMenu: number }): import('../lib/pe/types').MenuItem => {
+          const isSeparator = !!(it.flags & 0x800); // MF_SEPARATOR
+          const isChecked = !!(it.flags & 0x08);
+          const isGrayed = !!(it.flags & 0x03);   // MF_GRAYED | MF_DISABLED
+          let children: import('../lib/pe/types').MenuItem[] | null = null;
+          if (it.hSubMenu && !seen.has(it.hSubMenu)) {
+            seen.add(it.hSubMenu);
+            const sub = emu.handles.get<{ items: { id: number; text: string; flags: number; hSubMenu: number }[] }>(it.hSubMenu);
+            if (sub?.items) children = sub.items.map(toMenuItem);
+          }
+          return { id: it.id, text: it.text || '', isSeparator, isChecked, isGrayed, isDefault: false, children };
+        };
+        const root = emu.handles.get<{ items: { id: number; text: string; flags: number; hSubMenu: number }[] }>(hMenu);
+        if (!root?.items?.length) return;
+        seen.add(hMenu);
+        const items = root.items.map(toMenuItem);
+        setMenus([{ id: null, name: null, languageId: 0, menu: { isExtended: false, items } }]);
+        emu.menuItems = items;
+      };
       emu.onShowCommonDialog = (req) => {
         setCommonDialog(req);
         setWindowReady(prev => { if (!prev) onReady?.(); return true; });
