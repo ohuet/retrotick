@@ -54,16 +54,21 @@ export function registerCreateWindow(emu: Emulator): void {
     }
 
     // Handle CW_USEDEFAULT — when x is CW_USEDEFAULT for an overlapped window,
-    // Windows uses defaults for all of x, y, width, height
+    // Windows uses defaults for all of x, y, width, height. The size default
+    // is ~75% of the work area (Win32 docs: "system default size"), not a
+    // hardcoded 320x240; small apps look right at small sizes, but framed MFC
+    // apps with docked toolbars + a canvas (PabloDraw) need a real default.
+    const defaultW = Math.max(640, Math.floor((emu.screenWidth || 1024) * 0.75));
+    const defaultH = Math.max(480, Math.floor((emu.screenHeight || 768) * 0.75));
     if (x === (CW_USEDEFAULT | 0) && !(style & 0x40000000)) {
       const pos = cls.wndProc ? getNextCascadePos(emu.screenWidth, emu.screenHeight) : { x: 0, y: 0 };
       x = pos.x;
       y = y === (CW_USEDEFAULT | 0) ? pos.y : y;
-      if ((width | 0) === (CW_USEDEFAULT | 0) || width === 0) width = 320;
-      if ((height | 0) === (CW_USEDEFAULT | 0) || height === 0) height = 240;
+      if ((width | 0) === (CW_USEDEFAULT | 0) || width === 0) width = defaultW;
+      if ((height | 0) === (CW_USEDEFAULT | 0) || height === 0) height = defaultH;
     } else {
-      if ((width | 0) === (CW_USEDEFAULT | 0)) width = 320;
-      if ((height | 0) === (CW_USEDEFAULT | 0)) height = 240;
+      if ((width | 0) === (CW_USEDEFAULT | 0)) width = defaultW;
+      if ((height | 0) === (CW_USEDEFAULT | 0)) height = defaultH;
       if (y === (CW_USEDEFAULT | 0)) y = 0;
     }
 
@@ -197,17 +202,21 @@ export function registerCreateWindow(emu: Emulator): void {
     }
 
     // Handle CW_USEDEFAULT — when x is CW_USEDEFAULT for an overlapped window,
-    // Windows uses defaults for all of x, y, width, height
+    // Windows uses defaults for all of x, y, width, height. The size default
+    // is ~75% of the work area (Win32 docs: "system default size"), not a
+    // hardcoded 320x240; framed MFC apps need a real default.
     const WS_CHILD = 0x40000000;
+    const defaultW = Math.max(640, Math.floor((emu.screenWidth || 1024) * 0.75));
+    const defaultH = Math.max(480, Math.floor((emu.screenHeight || 768) * 0.75));
     if (x === (CW_USEDEFAULT | 0) && !(style & WS_CHILD)) {
       const pos = cls.wndProc ? getNextCascadePos(emu.screenWidth, emu.screenHeight) : { x: 0, y: 0 };
       x = pos.x;
       y = y === (CW_USEDEFAULT | 0) ? pos.y : y;
-      if ((width | 0) === (CW_USEDEFAULT | 0) || width === 0) width = 320;
-      if ((height | 0) === (CW_USEDEFAULT | 0) || height === 0) height = 240;
+      if ((width | 0) === (CW_USEDEFAULT | 0) || width === 0) width = defaultW;
+      if ((height | 0) === (CW_USEDEFAULT | 0) || height === 0) height = defaultH;
     } else {
-      if ((width | 0) === (CW_USEDEFAULT | 0)) width = 320;
-      if ((height | 0) === (CW_USEDEFAULT | 0)) height = 240;
+      if ((width | 0) === (CW_USEDEFAULT | 0)) width = defaultW;
+      if ((height | 0) === (CW_USEDEFAULT | 0)) height = defaultH;
       if (y === (CW_USEDEFAULT | 0)) y = 0;
     }
     // Clamp absurd sizes (e.g. from corrupted registry data)
