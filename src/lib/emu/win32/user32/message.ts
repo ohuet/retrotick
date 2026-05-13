@@ -1780,18 +1780,40 @@ export function registerMessage(emu: Emulator): void {
     // StatusBar messages
     if (cn === 'MSCTLS_STATUSBAR32') {
       const WM_SIZE = 0x0005;
+      const WM_NCCREATE = 0x0081;
       const SB_SETTEXTW = 0x040B;
+      const SB_SETTEXTA = 0x0401;
+      const SB_GETTEXTLENGTHA = 0x0403;
+      const SB_GETTEXTA = 0x0402;
+      const SB_GETPARTS = 0x0406;
       const SB_SETPARTS = 0x0404;
       const SB_SIMPLE = 0x0409;
-      // Status bars auto-resize to bottom of parent on WM_SIZE
+      const SB_GETBORDERS = 0x0407;
+      const SB_GETRECT = 0x040A;
+      // CStatusBar::Create passes CW_USEDEFAULT for height; MFC then waits for
+      // the bar to "self-size" before docking. If we leave wnd.height at 0,
+      // CFrameWnd::CalcDynamicLayout reserves 0 px and the status bar never
+      // shows. Seed a reasonable default at NCCREATE so the initial layout
+      // pass already gives the bar some thickness.
+      if (message === WM_NCCREATE) {
+        if (!wnd.height) wnd.height = 22;
+        return 1;
+      }
+      // Status bars auto-resize to bottom of parent on WM_SIZE. Real CStatusBar
+      // measures the font height + padding; we use a flat ~22 px default which
+      // matches Win2k Tahoma. Without assigning the height the bar stays 0 px
+      // tall and CFrameWnd::CalcWindowRect subtracts 0 from the client area —
+      // collapsing the status bar entirely (PabloDraw's "where is my status
+      // bar" bug).
       if (message === WM_SIZE) {
         const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
         if (parentWnd) {
           const { cw, ch } = getClientSize(parentWnd.style, parentWnd.hMenu !== 0, parentWnd.width, parentWnd.height);
-          const statusH = wnd.height || 20;
+          const statusH = wnd.height || 22;
           wnd.x = 0;
           wnd.y = ch - statusH;
           wnd.width = cw;
+          wnd.height = statusH;
         }
         return 0;
       }

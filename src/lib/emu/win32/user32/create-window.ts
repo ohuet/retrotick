@@ -161,9 +161,21 @@ export function registerCreateWindow(emu: Emulator): void {
 
     // Send WM_NCCREATE, WM_NCCALCSIZE, WM_CREATE synchronously
     // Use wnd.wndProc (not cls.wndProc) since WM_NCCREATE handler may subclass the window
-    emu.callWndProc(wnd.wndProc, hwnd, WM_NCCREATE, 0, createStructAddr);
-    emu.callWndProc(wnd.wndProc, hwnd, WM_NCCALCSIZE, 0, 0);
-    const createResult = emu.callWndProc(wnd.wndProc, hwnd, WM_CREATE, 0, createStructAddr);
+    if (wnd.wndProc) {
+      emu.callWndProc(wnd.wndProc, hwnd, WM_NCCREATE, 0, createStructAddr);
+      emu.callWndProc(wnd.wndProc, hwnd, WM_NCCALCSIZE, 0, 0);
+    } else if (emu.dispatchBuiltinMessage) {
+      // Built-in controls (msctls_statusbar32, toolbarwindow32, …) have
+      // wndProc=0; callStdcall(0,…) returns 0 without dispatching, so their
+      // class-specific NCCREATE/NCCALCSIZE setup never ran. Route through the
+      // built-in handler so a status bar can seed its default height, a
+      // toolbar can reset its button list, etc.
+      emu.dispatchBuiltinMessage(hwnd, WM_NCCREATE, 0, createStructAddr, false);
+      emu.dispatchBuiltinMessage(hwnd, WM_NCCALCSIZE, 0, 0, false);
+    }
+    const createResult = wnd.wndProc
+      ? emu.callWndProc(wnd.wndProc, hwnd, WM_CREATE, 0, createStructAddr)
+      : (emu.dispatchBuiltinMessage?.(hwnd, WM_CREATE, 0, createStructAddr, false) ?? 0);
     console.log(`[WND] WM_CREATE result=${createResult} for hwnd=0x${hwnd.toString(16)} class="${className}"`);
 
     if (createResult === -1) {
@@ -299,9 +311,16 @@ export function registerCreateWindow(emu: Emulator): void {
       }
     }
 
-    emu.callWndProc(wnd.wndProc, hwnd, WM_NCCREATE, 0, createStructAddr);
-    emu.callWndProc(wnd.wndProc, hwnd, WM_NCCALCSIZE, 0, 0);
-    const createResult = emu.callWndProc(wnd.wndProc, hwnd, WM_CREATE, 0, createStructAddr);
+    if (wnd.wndProc) {
+      emu.callWndProc(wnd.wndProc, hwnd, WM_NCCREATE, 0, createStructAddr);
+      emu.callWndProc(wnd.wndProc, hwnd, WM_NCCALCSIZE, 0, 0);
+    } else if (emu.dispatchBuiltinMessage) {
+      emu.dispatchBuiltinMessage(hwnd, WM_NCCREATE, 0, createStructAddr, true);
+      emu.dispatchBuiltinMessage(hwnd, WM_NCCALCSIZE, 0, 0, true);
+    }
+    const createResult = wnd.wndProc
+      ? emu.callWndProc(wnd.wndProc, hwnd, WM_CREATE, 0, createStructAddr)
+      : (emu.dispatchBuiltinMessage?.(hwnd, WM_CREATE, 0, createStructAddr, true) ?? 0);
     console.log(`[WND] WM_CREATE result=${createResult} for hwnd=0x${hwnd.toString(16)} class="${className}"`);
     if (createResult === -1) {
       emu.handles.free(hwnd);
