@@ -104,8 +104,33 @@ if (tb) {
   console.log(`bitmapHandle: 0x${(tb.tbBitmapHandle ?? 0).toString(16)}`);
   if (tb.tbBitmapHandle) {
     const bmp = emu.handles.get(tb.tbBitmapHandle);
-    if (bmp) console.log(`  bitmap is ${bmp.width}x${bmp.height}`);
+    if (bmp) {
+      console.log(`  bitmap is ${bmp.width}x${bmp.height}`);
+      console.log(`  bitmap object keys: ${Object.keys(bmp).join(', ')}`);
+      console.log(`  bitmap.canvas type: ${bmp.canvas?.constructor?.name}`);
+      console.log(`  bitmap.dibBitsPtr=0x${(bmp.dibBitsPtr ?? 0).toString(16)}`);
+      console.log(`  bitmap.dibBpp=${bmp.dibBpp}`);
+      console.log(`  bitmap.monochrome=${bmp.monochrome}`);
+    }
     else console.log(`  bitmap handle invalid (released?)`);
+  }
+
+  // Try loading resource 127 directly via loadBitmapResource — does THAT have imageData?
+  console.log(`\n--- Direct loadBitmapResource(127) ---`);
+  const directHandle = emu.loadBitmapResource(127);
+  console.log(`  handle=0x${directHandle.toString(16)}`);
+  const directBmp = emu.handles.get(directHandle);
+  if (directBmp) {
+    console.log(`  keys: ${Object.keys(directBmp).join(', ')}`);
+    console.log(`  ${directBmp.width}x${directBmp.height}`);
+    if (directBmp.imageData) {
+      const d = directBmp.imageData.data;
+      console.log(`  imageData.length=${d.length}`);
+      // First few pixels
+      const px = [];
+      for (let i = 0; i < 32; i += 4) px.push(`(${d[i]},${d[i+1]},${d[i+2]})`);
+      console.log(`  first 8 px: ${px.join(' ')}`);
+    }
   }
   console.log(`buttons: ${tb.tbButtons?.length ?? 0}`);
   for (const b of (tb.tbButtons ?? [])) {
