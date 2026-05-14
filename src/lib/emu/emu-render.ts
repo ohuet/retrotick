@@ -257,6 +257,12 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
     // the bar before our canvas can stamp button glyphs; flipping the order
     // means we paint last and stay visible.
     if (className === 'TOOLBARWINDOW32') {
+      // Pop any save() left dangling by MFC's WM_PAINT (clip/transform stacks)
+      // so the drawImage region lands at the toolbar's world rect, not inside
+      // some leftover scroll clip.
+      if (emu.canvasCtx) {
+        for (let i = 0; i < 20; i++) emu.canvasCtx.restore();
+      }
       renderToolbar(emu, ctx, child, ox, oy);
     }
   }
