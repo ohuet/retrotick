@@ -97,6 +97,7 @@ function findToolbar(hwnd) {
 const tb = findToolbar(emu.mainWindow);
 if (tb) {
   console.log(`\n=== Toolbar state ===`);
+  console.log(`wndProc: 0x${(tb.wndProc ?? 0).toString(16)} (0 = built-in, !0 = subclassed)`);
   console.log(`buttonStructSize: ${tb.tbButtonStructSize}`);
   console.log(`buttonSize: cx=${tb.tbButtonSize & 0xFFFF} cy=${(tb.tbButtonSize >>> 16) & 0xFFFF}`);
   console.log(`bitmapSize: cx=${tb.tbBitmapSize & 0xFFFF} cy=${(tb.tbBitmapSize >>> 16) & 0xFFFF}`);
@@ -111,6 +112,23 @@ if (tb) {
     console.log(`  iBitmap=${b.iBitmap} idCmd=${b.idCommand} fsState=0x${b.fsState.toString(16)} fsStyle=0x${b.fsStyle.toString(16)}`);
   }
 }
+
+// Try renderChildControls to see if toolbar render fires
+console.log('\n=== Simulating renderChildControls ===');
+let mockDrawImageCount = 0;
+let mockFillRectCount = 0;
+emu.canvasCtx = {
+  save: () => {}, restore: () => {},
+  fillRect: () => { mockFillRectCount++; },
+  drawImage: () => { mockDrawImageCount++; },
+  clearRect: () => {}, strokeRect: () => {},
+  fillStyle: '', strokeStyle: '',
+  globalAlpha: 1,
+  beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, stroke: () => {},
+  translate: () => {}, scale: () => {},
+};
+emu.renderChildControls(emu.mainWindow);
+console.log(`renderChildControls: ${mockFillRectCount} fillRect, ${mockDrawImageCount} drawImage calls`);
 
 // Now simulate the overlay collection (same logic as emu-render.ts collectChildren)
 console.log('\n=== Overlays emitted by collectChildren ===');
