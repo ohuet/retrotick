@@ -234,14 +234,6 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
         sendDrawItem(emu, hwnd, wnd, child, childHwnd, controlId);
       }
     }
-    // ToolbarWindow32 has wndProc=0 (built-in) so neither the DOM-overlay
-    // branch nor the WM_PAINT branch fires. Paint buttons directly from the
-    // stored bitmap (TB_ADDBITMAP captured the HBITMAP) onto the parent's
-    // canvas at the toolbar's world position. Without this PabloDraw and
-    // every other CToolBar app shows an empty 26-px strip below the menu.
-    if (className === 'TOOLBARWINDOW32') {
-      renderToolbar(emu, ctx, child, ox, oy);
-    }
     // Custom-class child controls with their own wndProc: send WM_PAINT
     if (child.wndProc && !['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT'].includes(className)) {
       child.needsPaint = true;
@@ -258,6 +250,14 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
         emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win32 stdcall)
       }
       child.needsPaint = false;
+    }
+    // Built-in ToolbarWindow32 paint must run AFTER any MFC subclass WM_PAINT
+    // so our button bitmaps overlay MFC's stock chrome (gripper + grey base).
+    // PabloDraw subclasses the toolbar (wndProc != 0), and MFC's paint clears
+    // the bar before our canvas can stamp button glyphs; flipping the order
+    // means we paint last and stay visible.
+    if (className === 'TOOLBARWINDOW32') {
+      renderToolbar(emu, ctx, child, ox, oy);
     }
   }
 }
