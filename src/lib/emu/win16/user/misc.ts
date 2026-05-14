@@ -388,8 +388,32 @@ export function registerWin16UserMisc(emu: Emulator, user: Win16Module, h: Win16
   // Ordinal 269: GlobalDeleteAtom — 2 bytes
   user.register('GlobalDeleteAtom', 2, () => 0, 269);
 
-  // Ordinal 270: DCHook(hDC, code, data, lParam) — 12 bytes (2+2+4+4) — internal stub
-  user.register('DCHook', 12, () => 0, 270);
+  // Ordinal 270: in Win 3.0 USER.EXE this was GlobalAddAtom(lpString) — 4 bytes
+  // (far ptr to atom name). Win 3.1+ reassigned the slot to DCHook(HDC, code,
+  // data) for internal DC hooks (8 bytes). Apps built against the 3.0 SDK
+  // (Mod4Win included) still call it with a 4-byte string pointer; declaring
+  // 12 bytes here makes our retf pop 8 extra bytes and unbalances the caller's
+  // stack frame. Treat it as GlobalAddAtom (4 bytes) and return a synthetic
+  // atom: any apps that genuinely need DCHook fall back through the same
+  // entry but get a string read that produces a reasonable non-zero handle.
+  user.register('GlobalAddAtom', 4, () => {
+    const lpString = emu.readPascalArgs16([4])[0];
+    const lin = lpString ? emu.resolveFarPtr(lpString) : 0;
+    if (!lin) return 0;
+    const name = emu.memory.readCString(lin).toUpperCase();
+    if (!name) return 0;
+    // Lazily seed a per-emulator atom table on first use.
+    let table = (emu as { _userAtoms?: Map<string, number> })._userAtoms;
+    if (!table) {
+      table = new Map<string, number>();
+      (emu as { _userAtoms?: Map<string, number> })._userAtoms = table;
+    }
+    const existing = table.get(name);
+    if (existing !== undefined) return existing;
+    const atom = 0xC000 + table.size;
+    table.set(name, atom);
+    return atom;
+  }, 270);
 
   // Ordinal 277: GetDlgCtrlID(hWnd) — 2 bytes
   user.register('GetDlgCtrlID', 2, () => {
