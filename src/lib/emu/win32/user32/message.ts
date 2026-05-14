@@ -1894,6 +1894,23 @@ export function registerMessage(emu: Emulator): void {
     // for TB_ADDBUTTONS or MFC's CToolBar::SetButtons fails → LoadToolBar
     // returns FALSE → CMainFrame::OnCreate returns -1.
     if (cn === 'TOOLBARWINDOW32') {
+      // When MFC dispatches WM_PAINT directly to the toolbar (via
+      // UpdateWindow on a child or via the message pump after
+      // InvalidateRect), our DispatchMessage routes here. Built-in
+      // class with wndProc=0 would otherwise return 0 and paint nothing.
+      // Flag the main window for repaint so renderChildControls runs
+      // its renderToolbar() pass.
+      const WM_PAINT_LOC = 0x000F;
+      const WM_ERASEBKGND_LOC = 0x0014;
+      if (message === WM_PAINT_LOC || message === WM_ERASEBKGND_LOC) {
+        if (emu.mainWindow) {
+          const main = emu.handles.get<WindowInfo>(emu.mainWindow);
+          if (main) main.needsPaint = true;
+        }
+        // Validate so the toolbar doesn't keep re-firing WM_PAINT
+        wnd.needsPaint = false;
+        return message === WM_ERASEBKGND_LOC ? 1 : 0;
+      }
       const TB_ENABLEBUTTON       = 0x0401;
       const TB_CHECKBUTTON        = 0x0402;
       const TB_PRESSBUTTON        = 0x0403;
