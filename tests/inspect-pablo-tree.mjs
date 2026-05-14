@@ -81,6 +81,37 @@ function dumpTree(hwnd, depth = 0) {
 console.log(`\n=== Main window 0x${emu.mainWindow.toString(16)} tree ===`);
 dumpTree(emu.mainWindow);
 
+// Find the toolbar and dump its state
+function findToolbar(hwnd) {
+  const w = emu.handles.get(hwnd);
+  if (!w) return null;
+  if (w.classInfo?.className === 'ToolbarWindow32') return w;
+  if (w.childList) {
+    for (const ch of w.childList) {
+      const t = findToolbar(ch);
+      if (t) return t;
+    }
+  }
+  return null;
+}
+const tb = findToolbar(emu.mainWindow);
+if (tb) {
+  console.log(`\n=== Toolbar state ===`);
+  console.log(`buttonStructSize: ${tb.tbButtonStructSize}`);
+  console.log(`buttonSize: cx=${tb.tbButtonSize & 0xFFFF} cy=${(tb.tbButtonSize >>> 16) & 0xFFFF}`);
+  console.log(`bitmapSize: cx=${tb.tbBitmapSize & 0xFFFF} cy=${(tb.tbBitmapSize >>> 16) & 0xFFFF}`);
+  console.log(`bitmapHandle: 0x${(tb.tbBitmapHandle ?? 0).toString(16)}`);
+  if (tb.tbBitmapHandle) {
+    const bmp = emu.handles.get(tb.tbBitmapHandle);
+    if (bmp) console.log(`  bitmap is ${bmp.width}x${bmp.height}`);
+    else console.log(`  bitmap handle invalid (released?)`);
+  }
+  console.log(`buttons: ${tb.tbButtons?.length ?? 0}`);
+  for (const b of (tb.tbButtons ?? [])) {
+    console.log(`  iBitmap=${b.iBitmap} idCmd=${b.idCommand} fsState=0x${b.fsState.toString(16)} fsStyle=0x${b.fsStyle.toString(16)}`);
+  }
+}
+
 // Now simulate the overlay collection (same logic as emu-render.ts collectChildren)
 console.log('\n=== Overlays emitted by collectChildren ===');
 function collect(wnd, ox, oy, out) {
