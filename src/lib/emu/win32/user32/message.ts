@@ -1942,16 +1942,15 @@ export function registerMessage(emu: Emulator): void {
       const TB_GETEXTENDEDSTYLE   = 0x0455;
 
       // Allocate per-toolbar state if needed
-      const tb = wnd as WindowInfo & { tbButtons?: Array<{ iBitmap: number; idCommand: number; fsState: number; fsStyle: number }>; tbButtonStructSize?: number; tbButtonSize?: number; tbBitmapSize?: number };
-      if (!tb.tbButtons) tb.tbButtons = [];
+      if (!wnd.tbButtons) wnd.tbButtons = [];
 
-      if (message === TB_BUTTONSTRUCTSIZE) { tb.tbButtonStructSize = wParam; return 0; }
+      if (message === TB_BUTTONSTRUCTSIZE) { wnd.tbButtonStructSize = wParam; return 0; }
       if (message === TB_ADDBUTTONS) {
         const count = wParam | 0;
-        const size = tb.tbButtonStructSize || 20;
+        const size = wnd.tbButtonStructSize || 20;
         for (let i = 0; i < count; i++) {
           const base = lParam + i * size;
-          tb.tbButtons.push({
+          wnd.tbButtons.push({
             iBitmap: emu.memory.readI32(base),
             idCommand: emu.memory.readI32(base + 4),
             fsState: emu.memory.readU8(base + 8),
@@ -1961,14 +1960,25 @@ export function registerMessage(emu: Emulator): void {
         return 1; // TRUE = success
       }
       if (message === TB_INSERTBUTTON) return 1;
-      if (message === TB_DELETEBUTTON) { tb.tbButtons.splice(wParam, 1); return 1; }
-      if (message === TB_BUTTONCOUNT) return tb.tbButtons.length;
-      if (message === TB_ADDBITMAP) return 0; // bitmap index 0
+      if (message === TB_DELETEBUTTON) { wnd.tbButtons.splice(wParam, 1); return 1; }
+      if (message === TB_BUTTONCOUNT) return wnd.tbButtons.length;
+      if (message === TB_ADDBITMAP) {
+        // TBADDBITMAP at lParam: { HINSTANCE hInst; UINT_PTR nID; }
+        // When hInst is NULL or HINST_COMMCTRL (-1), nID is an HBITMAP we
+        // can render. Otherwise nID is a resource ID inside hInst — skip
+        // for now (most MFC apps pass NULL+HBITMAP).
+        if (lParam) {
+          const hInst = emu.memory.readU32(lParam);
+          const nID = emu.memory.readU32(lParam + 4);
+          if (!hInst && nID && !wnd.tbBitmapHandle) wnd.tbBitmapHandle = nID;
+        }
+        return 0; // bitmap index 0 (we currently render from a single sheet)
+      }
       if (message === TB_LOADIMAGES) return 0;
       if (message === TB_AUTOSIZE) return 0;
-      if (message === TB_SETBUTTONSIZE) { tb.tbButtonSize = lParam; return 1; }
-      if (message === TB_SETBITMAPSIZE) { tb.tbBitmapSize = lParam; return 1; }
-      if (message === TB_GETBUTTONSIZE) return tb.tbButtonSize ?? ((22 << 16) | 24);
+      if (message === TB_SETBUTTONSIZE) { wnd.tbButtonSize = lParam; return 1; }
+      if (message === TB_SETBITMAPSIZE) { wnd.tbBitmapSize = lParam; return 1; }
+      if (message === TB_GETBUTTONSIZE) return wnd.tbButtonSize ?? ((22 << 16) | 24);
       if (message === TB_GETROWS) return 1;
       if (message === TB_GETSTYLE) return wnd.style >>> 0;
       if (message === TB_SETSTYLE) { wnd.style = lParam >>> 0; return 0; }
@@ -1988,11 +1998,11 @@ export function registerMessage(emu: Emulator): void {
       if (message === TB_CHANGEBITMAP) return 1;
       if (message === TB_HITTEST) return -1;
       if (message === TB_COMMANDTOINDEX) {
-        const idx = tb.tbButtons.findIndex(b => b.idCommand === wParam);
+        const idx = wnd.tbButtons.findIndex(b => b.idCommand === wParam);
         return idx;
       }
       if (message === TB_GETBUTTON) {
-        const btn = tb.tbButtons[wParam];
+        const btn = wnd.tbButtons[wParam];
         if (!btn || !lParam) return 0;
         emu.memory.writeI32(lParam, btn.iBitmap);
         emu.memory.writeI32(lParam + 4, btn.idCommand);
@@ -2001,12 +2011,12 @@ export function registerMessage(emu: Emulator): void {
         return 1;
       }
       if (message === TB_GETSTATE) {
-        const idx = tb.tbButtons.findIndex(b => b.idCommand === wParam);
-        return idx >= 0 ? tb.tbButtons[idx].fsState : -1;
+        const idx = wnd.tbButtons.findIndex(b => b.idCommand === wParam);
+        return idx >= 0 ? wnd.tbButtons[idx].fsState : -1;
       }
       if (message === TB_SETSTATE) {
-        const idx = tb.tbButtons.findIndex(b => b.idCommand === wParam);
-        if (idx >= 0) tb.tbButtons[idx].fsState = lParam & 0xFF;
+        const idx = wnd.tbButtons.findIndex(b => b.idCommand === wParam);
+        if (idx >= 0) wnd.tbButtons[idx].fsState = lParam & 0xFF;
         return 1;
       }
       if (message === TB_ENABLEBUTTON || message === TB_CHECKBUTTON || message === TB_PRESSBUTTON ||
@@ -2024,7 +2034,7 @@ export function registerMessage(emu: Emulator): void {
       }
       if (message === TB_GETMAXSIZE) {
         if (lParam) {
-          emu.memory.writeI32(lParam, tb.tbButtons.length * 22);
+          emu.memory.writeI32(lParam, wnd.tbButtons.length * 22);
           emu.memory.writeI32(lParam + 4, 22);
         }
         return 1;

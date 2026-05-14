@@ -217,7 +217,7 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
     }
   }
 
-  for (const { hwnd: childHwnd, info: child } of allChildren) {
+  for (const { hwnd: childHwnd, info: child, ox, oy } of allChildren) {
     const controlId = child.controlId ?? 0;
     const className = child.classInfo.className.toUpperCase();
     const bsType = child.style & 0xF;
@@ -233,6 +233,14 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
       if (wnd.wndProc) {
         sendDrawItem(emu, hwnd, wnd, child, childHwnd, controlId);
       }
+    }
+    // ToolbarWindow32 has wndProc=0 (built-in) so neither the DOM-overlay
+    // branch nor the WM_PAINT branch fires. Paint buttons directly from the
+    // stored bitmap (TB_ADDBITMAP captured the HBITMAP) onto the parent's
+    // canvas at the toolbar's world position. Without this PabloDraw and
+    // every other CToolBar app shows an empty 26-px strip below the menu.
+    if (className === 'TOOLBARWINDOW32') {
+      renderToolbar(emu, ctx, child, ox, oy);
     }
     // Custom-class child controls with their own wndProc: send WM_PAINT
     if (child.wndProc && !['BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR', 'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT'].includes(className)) {
@@ -325,4 +333,91 @@ function renderControl(emu: Emulator, ctx: CanvasRenderingContext2D, child: Wind
       renderEdit(ctx, child);
       break;
   }
+}
+
+/** Paint a CToolBar / ToolbarWindow32 with the standard Win9x flat layout.
+ *  Bitmap source comes from TB_ADDBITMAP (LoadToolBar passes the HBITMAP we
+ *  cached on the WindowInfo). Each button cell is bmpW x bmpH from the sheet,
+ *  centered in a buttonW x buttonH cell, separators get a fixed narrow gap.
+ *  Pressed/checked/disabled state isn't honoured yet — read fsState if you
+ *  add hover/press feedback later.
+ */
+function renderToolbar(emu: Emulator, ctx: CanvasRenderingContext2D, tb: WindowInfo, ox: number, oy: number): void {
+  const buttons = tb.tbButtons;
+  if (!buttons || buttons.length === 0) return;
+
+  // TBSTATE_HIDDEN = 0x08
+  const TBSTATE_HIDDEN = 0x08;
+  const TBSTATE_PRESSED = 0x02;
+  const TBSTATE_CHECKED = 0x01;
+  const TBSTATE_ENABLED = 0x04;
+  // TBSTYLE_SEP = 0x01
+  const TBSTYLE_SEP = 0x01;
+
+  // Bitmap size (cx, cy packed in tbBitmapSize via MAKELONG(cx, cy))
+  let bmpW = 16, bmpH = 15;
+  if (tb.tbBitmapSize !== undefined) {
+    bmpW = tb.tbBitmapSize & 0xFFFF;
+    bmpH = (tb.tbBitmapSize >>> 16) & 0xFFFF;
+  }
+  // Button size — defaults to bmpW+7 / bmpH+7 if not set (Win32 docs)
+  let btnW = bmpW + 7, btnH = bmpH + 7;
+  if (tb.tbButtonSize !== undefined) {
+    btnW = tb.tbButtonSize & 0xFFFF;
+    btnH = (tb.tbButtonSize >>> 16) & 0xFFFF;
+  }
+
+  // Resolve the bitmap from the cached handle
+  const bmp = tb.tbBitmapHandle ? emu.handles.get<{ width: number; height: number; canvas: OffscreenCanvas | HTMLCanvasElement }>(tb.tbBitmapHandle) : null;
+
+  const baseX = tb.x + ox;
+  const baseY = tb.y + oy;
+  let cursorX = baseX + 2;       // small left inset matches CCS_TOP layout
+  const cursorY = baseY + 2;
+
+  ctx.save();
+  // Toolbar background (Win9x dialog face)
+  ctx.fillStyle = '#d4d0c8';
+  ctx.fillRect(baseX, baseY, tb.width, tb.height);
+
+  for (const b of buttons) {
+    if (b.fsState & TBSTATE_HIDDEN) continue;
+    if (b.fsStyle & TBSTYLE_SEP) {
+      cursorX += b.iBitmap > 0 ? b.iBitmap : 6; // separator width (iBitmap doubles as cx for SEP)
+      continue;
+    }
+    const cellX = cursorX;
+    const cellY = cursorY;
+    // Pressed / checked frames
+    const pressed = !!(b.fsState & TBSTATE_PRESSED);
+    const checked = !!(b.fsState & TBSTATE_CHECKED);
+    if (pressed || checked) {
+      ctx.fillStyle = checked && !pressed ? '#dfdcd6' : '#bdbab5';
+      ctx.fillRect(cellX, cellY, btnW, btnH);
+      // Sunken edge
+      ctx.strokeStyle = '#808080';
+      ctx.beginPath();
+      ctx.moveTo(cellX + 0.5, cellY + btnH - 0.5);
+      ctx.lineTo(cellX + 0.5, cellY + 0.5);
+      ctx.lineTo(cellX + btnW - 0.5, cellY + 0.5);
+      ctx.stroke();
+    }
+    // Bitmap glyph
+    if (bmp?.canvas) {
+      const enabled = !!(b.fsState & TBSTATE_ENABLED);
+      const sx = b.iBitmap * bmpW;
+      const dx = cellX + Math.floor((btnW - bmpW) / 2);
+      const dy = cellY + Math.floor((btnH - bmpH) / 2);
+      if (!enabled) ctx.globalAlpha = 0.45;
+      // OffscreenCanvas works as drawImage source in modern browsers
+      ctx.drawImage(bmp.canvas as CanvasImageSource, sx, 0, bmpW, bmpH, dx, dy, bmpW, bmpH);
+      if (!enabled) ctx.globalAlpha = 1;
+    } else {
+      // No bitmap loaded yet — outline placeholder so the user sees buttons exist
+      ctx.strokeStyle = '#808080';
+      ctx.strokeRect(cellX + 0.5, cellY + 0.5, btnW - 1, btnH - 1);
+    }
+    cursorX += btnW;
+  }
+  ctx.restore();
 }

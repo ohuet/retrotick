@@ -73,6 +73,12 @@ export interface WindowInfo {
   statusTexts?: string[];
   // Toolbar button checked state (command IDs of checked buttons)
   toolbarChecked?: Set<number>;
+  // Toolbar button list (TB_ADDBUTTONS) + bitmap (TB_ADDBITMAP / LoadToolBar)
+  tbButtons?: Array<{ iBitmap: number; idCommand: number; fsState: number; fsStyle: number }>;
+  tbButtonStructSize?: number;
+  tbButtonSize?: number;     // MAKELONG(cy, cx) packed; canvas paint reads via & 0xFFFF / >> 16
+  tbBitmapSize?: number;     // MAKELONG(cy, cx)
+  tbBitmapHandle?: number;   // HBITMAP from TB_ADDBITMAP (TBADDBITMAP.nID when hInst=NULL)
   // ComboBox state
   cbItems?: string[];
   cbItemData?: number[];
