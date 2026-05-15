@@ -373,8 +373,23 @@ function renderToolbar(emu: Emulator, ctx: CanvasRenderingContext2D, tb: WindowI
     btnH = (tb.tbButtonSize >>> 16) & 0xFFFF;
   }
 
-  // Resolve the bitmap from the cached handle
-  const bmp = tb.tbBitmapHandle ? emu.handles.get<{ width: number; height: number; canvas: OffscreenCanvas | HTMLCanvasElement }>(tb.tbBitmapHandle) : null;
+  // Resolve the bitmap from the cached handle.
+  // MFC's CToolBar::AddReplaceBitmap copies the resource bitmap into a
+  // CreateCompatibleBitmap via BitBlt — and our compat-canvas often ends up
+  // visually empty in the browser. BitBlt SRCCOPY now propagates resourceId
+  // from the source DC to the destination bitmap, so we can fall back to a
+  // direct resource reload (which carries the original imageData/canvas).
+  type ToolbarBmp = { width: number; height: number; canvas: OffscreenCanvas | HTMLCanvasElement; resourceId?: number; resourceModule?: number };
+  let bmp: ToolbarBmp | null = tb.tbBitmapHandle ? emu.handles.get<ToolbarBmp>(tb.tbBitmapHandle) : null;
+  if (bmp && bmp.resourceId !== undefined) {
+    const fallbackHandle = bmp.resourceModule
+      ? emu.loadBitmapResourceFromModule(bmp.resourceModule, bmp.resourceId)
+      : emu.loadBitmapResource(bmp.resourceId);
+    if (fallbackHandle) {
+      const direct = emu.handles.get<ToolbarBmp>(fallbackHandle);
+      if (direct && direct.canvas) bmp = direct;
+    }
+  }
 
   const baseX = tb.x + ox;
   const baseY = tb.y + oy;

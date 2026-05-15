@@ -50,7 +50,7 @@ emu.screenWidth = 1024;
 emu.screenHeight = 768;
 emu.registryStore = new RegistryStore();
 
-// silence noisy logs
+// keep handles.alloc/BitBlt-prop logs but filter rest
 const origLog = console.log;
 console.log = () => {};
 await emu.load(ab, peInfo, mockCanvas);

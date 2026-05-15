@@ -504,7 +504,7 @@ export function loadBitmapResource(emu: Emulator, resourceId: number): number {
     try {
       const dibData = new Uint8Array(srcBuf, entry.fileOffset, entry.length);
       const { canvas, ctx, imageData, width, height } = decodeDib(dibData);
-      const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
+      const bmp: BitmapInfo = { width, height, canvas, ctx, imageData, resourceId };
       const hBitmap = emu.handles.alloc('bitmap', bmp);
       emu.bitmapCache.set(resourceId, hBitmap);
       // console.log(`[NE] Loaded bitmap resource ${resourceId}: ${width}x${height} → handle ${hBitmap}`);
@@ -533,7 +533,7 @@ export function loadBitmapResource(emu: Emulator, resourceId: number): number {
     const dibData = new Uint8Array(emu.arrayBuffer, fileOffset, lang.dataSize);
     const { canvas, ctx, imageData, width, height } = decodeDib(dibData);
 
-    const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
+    const bmp: BitmapInfo = { width, height, canvas, ctx, imageData, resourceId };
     const hBitmap = emu.handles.alloc('bitmap', bmp);
     emu.bitmapCache.set(resourceId, hBitmap);
     return hBitmap;
@@ -626,7 +626,7 @@ export function loadBitmapResourceFromModule(emu: Emulator, hInstance: number, r
         dibBytes[i] = emu.memory.readU8(dataAddr + i);
       }
       const { canvas, ctx, imageData, width, height } = decodeDib(dibBytes);
-      const bmp: BitmapInfo = { width, height, canvas, ctx, imageData };
+      const bmp: BitmapInfo = { width, height, canvas, ctx, imageData, resourceId, resourceModule: hInstance };
       const hBitmap = emu.handles.alloc('bitmap', bmp);
       emu.bitmapCache.set(cacheKey, hBitmap);
       console.log(`[DLL] Loaded bitmap resource ${resourceId} from module 0x${hInstance.toString(16)}: ${width}x${height}`);
