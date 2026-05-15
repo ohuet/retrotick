@@ -109,8 +109,22 @@ export function registerShlwapi(emu: Emulator): void {
     return pszFirst + idx * 2;
   });
 
-  // PathIsDirectoryW(pszPath) — 1 arg
-  shlwapi.register('PathIsDirectoryW', 1, () => 0); // not a directory
+  // PathIsDirectoryW / PathIsDirectoryA — query the file manager for the
+  // path's attributes and check the FILE_ATTRIBUTE_DIRECTORY bit. The stubs
+  // claimed everything was a file, breaking File→Open dialogs that recurse
+  // into the user's working directory.
+  const INVALID = 0xFFFFFFFF;
+  const FILE_ATTRIBUTE_DIRECTORY = 0x10;
+  const isDirectoryImpl = (wide: boolean) => (): number => {
+    const pszPath = emu.readArg(0);
+    if (!pszPath) return 0;
+    const path = wide ? emu.memory.readUTF16String(pszPath) : emu.memory.readCString(pszPath);
+    const attrs = emu.fileManager?.getFileAttributes(path, emu.additionalFiles) ?? INVALID;
+    if (attrs === INVALID) return 0;
+    return (attrs & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+  };
+  shlwapi.register('PathIsDirectoryW', 1, isDirectoryImpl(true));
+  shlwapi.register('PathIsDirectoryA', 1, isDirectoryImpl(false));
 
   // PathFindExtensionW(pszPath) — 1 arg, returns pointer to '.' or end of string
   shlwapi.register('PathFindExtensionW', 1, () => {
@@ -128,8 +142,18 @@ export function registerShlwapi(emu: Emulator): void {
     return dotPtr || ptr; // return dot position or end of string
   });
 
-  // PathFileExistsW(pszPath) — 1 arg
-  shlwapi.register('PathFileExistsW', 1, () => 0); // file doesn't exist
+  // PathFileExistsW / PathFileExistsA — exists if getFileAttributes returns
+  // anything other than INVALID. Was stub→0, so every File→Open / installer
+  // path check reported "file missing" even for files we'd happily open.
+  const fileExistsImpl = (wide: boolean) => (): number => {
+    const pszPath = emu.readArg(0);
+    if (!pszPath) return 0;
+    const path = wide ? emu.memory.readUTF16String(pszPath) : emu.memory.readCString(pszPath);
+    const attrs = emu.fileManager?.getFileAttributes(path, emu.additionalFiles) ?? INVALID;
+    return attrs !== INVALID ? 1 : 0;
+  };
+  shlwapi.register('PathFileExistsW', 1, fileExistsImpl(true));
+  shlwapi.register('PathFileExistsA', 1, fileExistsImpl(false));
 
   // LPSTR PathFindExtensionA(LPCSTR pszPath) — pointer to '.' or end of string
   shlwapi.register('PathFindExtensionA', 1, () => {
