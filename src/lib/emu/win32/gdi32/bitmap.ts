@@ -6,7 +6,7 @@ import {
 } from '../types';
 import type { DCInfo } from './types';
 import type { WindowInfo } from '../user32/types';
-import { colorToCSS, disableSmoothing } from './_helpers';
+import { colorToCSS, disableSmoothing, STOCK_BASE } from './_helpers';
 import { decodeDib } from '../../../pe/decode-dib';
 import { dcPutImageData } from '../../emu-window';
 import { resolvePaletteColors } from './palette';
@@ -157,7 +157,75 @@ export function registerBitmap(emu: Emulator): void {
 
   gdi32.register('GetObjectW', 3, emu.apiDefs.get('GDI32.DLL:GetObjectA')?.handler!);
 
-  gdi32.register('GetDIBits', 5, () => 0);
+  // int GetDIBits(HDC hdc, HBITMAP hbm, UINT start, UINT cLines,
+  //               LPVOID lpvBits, LPBITMAPINFO lpbmi, UINT usage)
+  // Reads pixels from a bitmap into the caller's BITMAPINFO + pixel buffer.
+  // When lpvBits is NULL, only fills the BITMAPINFOHEADER (and palette) —
+  // this is how MFC apps query "how big is this bitmap" before allocating
+  // pixel storage. NOTE: previous arg count was 5 — wrong, it's 7 (28 bytes),
+  // and the mismatch corrupted the stdcall stack on every call.
+  gdi32.register('GetDIBits', 7, () => {
+    const _hdc = emu.readArg(0);
+    const hbm = emu.readArg(1);
+    const startScan = emu.readArg(2);
+    const cLines = emu.readArg(3);
+    const lpvBits = emu.readArg(4);
+    const lpbmi = emu.readArg(5);
+    const _usage = emu.readArg(6);
+    const bmp = emu.handles.get<BitmapInfo>(hbm);
+    if (!bmp || !lpbmi) return 0;
+
+    const w = bmp.width, h = bmp.height;
+
+    // If lpvBits is NULL, just fill the header — Windows fills biWidth/Height
+    // /BitCount/SizeImage so caller can size a buffer.
+    if (!lpvBits) {
+      const requestedBpp = emu.memory.readU16(lpbmi + 14);
+      const bpp = requestedBpp || 32;
+      const stride = Math.floor((w * bpp + 31) / 32) * 4;
+      emu.memory.writeI32(lpbmi + 4, w);
+      emu.memory.writeI32(lpbmi + 8, h);
+      emu.memory.writeU16(lpbmi + 12, 1);
+      emu.memory.writeU16(lpbmi + 14, bpp);
+      emu.memory.writeU32(lpbmi + 16, 0);
+      emu.memory.writeU32(lpbmi + 20, stride * h);
+      return h;
+    }
+
+    // Read pixels from the bitmap canvas
+    const ctx = bmp.ctx || bmp.canvas.getContext('2d')!;
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const px = imgData.data;
+    const bpp = emu.memory.readU16(lpbmi + 14) || 32;
+    const stride = Math.floor((w * bpp + 31) / 32) * 4;
+    // GetDIBits returns bottom-up by default
+    for (let scan = 0; scan < cLines; scan++) {
+      const dibRow = startScan + scan;
+      const srcY = (h - 1) - dibRow;
+      if (srcY < 0 || srcY >= h) continue;
+      const rowDst = lpvBits + dibRow * stride;
+      if (bpp === 32) {
+        for (let x = 0; x < w; x++) {
+          const off = (srcY * w + x) * 4;
+          emu.memory.writeU8(rowDst + x * 4 + 0, px[off + 2]);
+          emu.memory.writeU8(rowDst + x * 4 + 1, px[off + 1]);
+          emu.memory.writeU8(rowDst + x * 4 + 2, px[off + 0]);
+          emu.memory.writeU8(rowDst + x * 4 + 3, 0);
+        }
+      } else if (bpp === 24) {
+        for (let x = 0; x < w; x++) {
+          const off = (srcY * w + x) * 4;
+          emu.memory.writeU8(rowDst + x * 3 + 0, px[off + 2]);
+          emu.memory.writeU8(rowDst + x * 3 + 1, px[off + 1]);
+          emu.memory.writeU8(rowDst + x * 3 + 2, px[off + 0]);
+        }
+      } else {
+        return 0; // 1/4/8 bpp would need palette quantization — out of scope
+      }
+    }
+    emu.memory.writeU32(lpbmi + 20, stride * h);
+    return cLines;
+  });
 
   gdi32.register('SetDIBitsToDevice', 12, () => {
     const hdc = emu.readArg(0);
@@ -606,7 +674,32 @@ export function registerBitmap(emu: Emulator): void {
   gdi32.register('GetSystemPaletteUse', 1, () => 1); // SYSPAL_STATIC
   gdi32.register('SetSystemPaletteUse', 2, () => 1); // prev value
   gdi32.register('SetDIBColorTable', 4, () => 0);
-  gdi32.register('GetObjectType', 1, () => 0);
+  // DWORD GetObjectType(HGDIOBJ h) — returns OBJ_* constant identifying the
+  // handle's GDI type. MFC's CGdiObject::FromHandlePermanent uses this to
+  // dispatch to the correct CGdiObject subclass; a stub of 0 makes MFC
+  // mistreat valid handles as invalid.
+  gdi32.register('GetObjectType', 1, () => {
+    const h = emu.readArg(0);
+    if (h >= STOCK_BASE) {
+      const idx = h - STOCK_BASE;
+      // Stock objects: WHITE_BRUSH..BLACK_BRUSH=0..4, NULL_BRUSH=5,
+      // WHITE_PEN=6, BLACK_PEN=7, NULL_PEN=8, OEM_FIXED_FONT..ANSI_VAR_FONT=10..13,
+      // DEFAULT_PALETTE=15, SYSTEM_FIXED_FONT=16, DEFAULT_GUI_FONT=17.
+      if (idx >= 0 && idx <= 5) return 2;            // OBJ_BRUSH
+      if (idx >= 6 && idx <= 8) return 1;            // OBJ_PEN
+      if (idx >= 10 && idx <= 17) return 6;          // OBJ_FONT
+      if (idx === 15) return 5;                       // OBJ_PAL
+      return 0;
+    }
+    const objType = emu.handles.getType(h);
+    if (objType === 'pen') return 1;
+    if (objType === 'brush') return 2;
+    if (objType === 'dc') return 3;       // OBJ_DC — caller can distinguish memdc via DC.hwnd==0
+    if (objType === 'palette') return 5;
+    if (objType === 'font') return 6;
+    if (objType === 'bitmap') return 7;
+    return 0;
+  });
   gdi32.register('SetDIBits', 7, () => {
     // SetDIBits(hdc, hbm, uStartScan, cScanLines, lpvBits, lpbmi, fuColorUse)
     const _hdc = emu.readArg(0);
