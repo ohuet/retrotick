@@ -542,7 +542,14 @@ export function registerMisc(emu: Emulator): void {
   });
 
   user32.register('LockWindowUpdate', 1, () => 1);
-  user32.register('SetCursorPos', 2, () => 1);
+  // SetCursorPos(x, y) — we can't actually move the host OS cursor from inside
+  // a browser, but we cache the position so subsequent GetCursorPos calls see
+  // the requested coordinates (matches how DOOM-style games warp the mouse).
+  user32.register('SetCursorPos', 2, () => {
+    emu.cursorX = emu.readArg(0) | 0;
+    emu.cursorY = emu.readArg(1) | 0;
+    return 1;
+  });
   user32.register('ClipCursor', 1, () => 1);
   // WindowFromDC(hdc) → HWND owning the device context (or 0 for memory DCs).
   // DCInfo carries hwnd already; the stub-0 made some MFC code reach a custom

@@ -23,8 +23,9 @@ export function registerInput(emu: Emulator): void {
 
   user32.register('GetCursorPos', 1, () => {
     const ptr = emu.readArg(0);
-    emu.memory.writeU32(ptr, 0);
-    emu.memory.writeU32(ptr + 4, 0);
+    if (!ptr) return 0;
+    emu.memory.writeI32(ptr,     emu.cursorX | 0);
+    emu.memory.writeI32(ptr + 4, emu.cursorY | 0);
     return 1;
   });
 

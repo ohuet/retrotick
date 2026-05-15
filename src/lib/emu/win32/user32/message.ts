@@ -2224,7 +2224,12 @@ export function registerMessage(emu: Emulator): void {
   user32.register('PostThreadMessageA', 4, () => 1);
 
   user32.register('GetMessageTime', 0, () => (Date.now() & 0xFFFFFFFF) >>> 0);
-  user32.register('GetMessagePos', 0, () => 0); // (0,0)
+  // GetMessagePos returns the screen-coords cursor position packed as
+  // LOWORD=x, HIWORD=y. Reuses emu.cursorX/Y maintained by mouse events
+  // and SetCursorPos.
+  user32.register('GetMessagePos', 0, () => {
+    return ((emu.cursorY & 0xFFFF) << 16) | (emu.cursorX & 0xFFFF);
+  });
 
   // DDE message functions
   user32.register('ReuseDDElParam', 5, () => {

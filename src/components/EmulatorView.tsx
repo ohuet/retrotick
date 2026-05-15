@@ -1237,6 +1237,10 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     const rect = canvas.getBoundingClientRect();
     const x = Math.round((e.clientX - rect.left) * canvas.width / rect.width);
     const y = Math.round((e.clientY - rect.top) * canvas.height / rect.height);
+    // Cache the screen-coord cursor so GetCursorPos / GetMessagePos can read
+    // it without the app needing to receive a WM_MOUSEMOVE first.
+    emu.cursorX = x;
+    emu.cursorY = y;
     const wParam = buildMKFlags(e);
     if (emu.capturedWindow) {
       // Auto-release capture when no buttons pressed and cursor is outside the

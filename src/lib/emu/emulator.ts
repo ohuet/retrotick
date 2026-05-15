@@ -711,6 +711,10 @@ export class Emulator {
   mainWindow = 0;
   capturedWindow = 0;
   focusedWindow = 0;
+  // Mouse cursor position in screen coordinates. Updated by mouse events on
+  // the canvas and by SetCursorPos; read by GetCursorPos and GetMessagePos.
+  cursorX = 0;
+  cursorY = 0;
   findState?: { term: string; lastIndex: number };
   // Exposed from wndproc.ts for RegisterWindowMessage dedup
   registerWindowMessage?: (name: string) => number;
