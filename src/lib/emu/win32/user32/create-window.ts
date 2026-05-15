@@ -683,8 +683,7 @@ export function registerCreateWindow(emu: Emulator): void {
   });
   user32.register('EnumThreadWindows', 3, () => 1);
   user32.register('WindowFromPoint', 2, () => 0);
-  user32.register('FindWindowW', 2, () => 0); // not found
-  user32.register('FindWindowExW', 4, () => 0); // not found
+  // FindWindowW/FindWindowExW are registered in misc.ts with real implementations.
   user32.register('ChildWindowFromPoint', 3, () => {
     const hwnd = emu.readArg(0);
     const x = emu.readArg(1);

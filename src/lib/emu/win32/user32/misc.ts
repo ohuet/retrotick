@@ -406,8 +406,54 @@ export function registerMisc(emu: Emulator): void {
     return 0;
   });
 
-  user32.register('FindWindowA', 2, () => 0); // not found
-  user32.register('FindWindowExA', 4, () => 0); // not found
+  // FindWindow(class, title) → HWND of top-level window matching both names
+  // (NULL on either means "any"). Single-instance apps call this on startup
+  // to detect a running peer; if we always return 0 they can't reuse that
+  // peer's window (mostly harmless), but apps that talk to the shell taskbar
+  // or system tray via FindWindow get a stub-0 and silently skip the call.
+  const findWindowImpl = (wide: boolean) => (): number => {
+    const classPtr = emu.readArg(0);
+    const titlePtr = emu.readArg(1);
+    const wantClass = !classPtr ? null
+      : classPtr < 0x10000 ? `#${classPtr}` // atom
+      : (wide ? emu.memory.readUTF16String(classPtr) : emu.memory.readCString(classPtr));
+    const wantTitle = !titlePtr ? null
+      : (wide ? emu.memory.readUTF16String(titlePtr) : emu.memory.readCString(titlePtr));
+    for (const [hwnd, w] of emu.handles.findByType<WindowInfo>('window')) {
+      if (w.parent) continue; // top-level only
+      if (wantClass !== null && w.classInfo?.className !== wantClass) continue;
+      if (wantTitle !== null && (w.title ?? '') !== wantTitle) continue;
+      return hwnd;
+    }
+    return 0;
+  };
+  user32.register('FindWindowA', 2, findWindowImpl(false));
+  user32.register('FindWindowW', 2, findWindowImpl(true));
+
+  // FindWindowEx(parent, after, class, title) — same as FindWindow but scoped
+  // to children of `parent` (or desktop if NULL), starting search after `after`.
+  const findWindowExImpl = (wide: boolean) => (): number => {
+    const parent = emu.readArg(0);
+    const after = emu.readArg(1);
+    const classPtr = emu.readArg(2);
+    const titlePtr = emu.readArg(3);
+    const wantClass = !classPtr ? null
+      : classPtr < 0x10000 ? `#${classPtr}`
+      : (wide ? emu.memory.readUTF16String(classPtr) : emu.memory.readCString(classPtr));
+    const wantTitle = !titlePtr ? null
+      : (wide ? emu.memory.readUTF16String(titlePtr) : emu.memory.readCString(titlePtr));
+    let started = !after;
+    for (const [hwnd, w] of emu.handles.findByType<WindowInfo>('window')) {
+      if (!started) { if (hwnd === after) started = true; continue; }
+      if (parent ? w.parent !== parent : !!w.parent) continue;
+      if (wantClass !== null && w.classInfo?.className !== wantClass) continue;
+      if (wantTitle !== null && (w.title ?? '') !== wantTitle) continue;
+      return hwnd;
+    }
+    return 0;
+  };
+  user32.register('FindWindowExA', 4, findWindowExImpl(false));
+  user32.register('FindWindowExW', 4, findWindowExImpl(true));
   // Common resolutions reported at 16bpp and 32bpp, 60Hz. Windows reports
   // many modes; the demo's config dialog filters to >8bpp and picks 640x480.
   const COMMON_MODES: [number, number][] = [
