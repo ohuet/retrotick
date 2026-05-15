@@ -490,7 +490,30 @@ export function registerDraw(emu: Emulator): void {
     return 1;
   });
 
-  gdi32.register('DPtoLP', 3, () => 1);
+  // DPtoLP(hdc, lpPoints, nCount) — device→logical, in place.
+  gdi32.register('DPtoLP', 3, () => {
+    const hdc = emu.readArg(0);
+    const lpPoints = emu.readArg(1);
+    const nCount = emu.readArg(2) | 0;
+    const dc = emu.getDC(hdc);
+    if (!dc || !lpPoints || nCount <= 0) return 0;
+    const mode = dc.mapMode ?? 1; // MM_TEXT
+    if (mode === 1) return 1;
+    const wEx = dc.windowExtX || 1, wEy = dc.windowExtY || 1;
+    const vEx = dc.viewportExtX || 1, vEy = dc.viewportExtY || 1;
+    const wOx = dc.windowOrgX || 0, wOy = dc.windowOrgY || 0;
+    const vOx = dc.viewportOrgX || 0, vOy = dc.viewportOrgY || 0;
+    for (let i = 0; i < nCount; i++) {
+      const px = lpPoints + i * 8;
+      const dx = emu.memory.readI32(px);
+      const dy = emu.memory.readI32(px + 4);
+      const lx = ((dx - vOx) * wEx) / vEx + wOx;
+      const ly = ((dy - vOy) * wEy) / vEy + wOy;
+      emu.memory.writeI32(px,     Math.round(lx));
+      emu.memory.writeI32(px + 4, Math.round(ly));
+    }
+    return 1;
+  });
   gdi32.register('SetMapperFlags', 2, () => 0);
   gdi32.register('AbortDoc', 1, () => 0);
 

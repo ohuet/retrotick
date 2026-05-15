@@ -408,7 +408,37 @@ export function registerText(emu: Emulator): void {
     return 1;
   });
 
-  gdi32.register('TextOutW', 5, () => 1);
+  // TextOutW : the Unicode twin of TextOutA. Was a stub that "succeeded" but
+  // never drew, so any Unicode-built app calling TextOutW (Notepad on Win2k+,
+  // localised MFC views, etc.) had blank text on canvas controls.
+  gdi32.register('TextOutW', 5, () => {
+    const hdc = emu.readArg(0);
+    const x = emu.readArg(1) | 0;
+    const y = emu.readArg(2) | 0;
+    const strPtr = emu.readArg(3);
+    const count = emu.readArg(4);
+
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+
+    let text = '';
+    for (let i = 0; i < count; i++) {
+      text += String.fromCharCode(emu.memory.readU16(strPtr + i * 2));
+    }
+    const fontSize = getFontSize(hdc);
+    dc.ctx.font = getFontCSS(hdc);
+    if (dc.bkMode === OPAQUE) {
+      dc.ctx.fillStyle = colorToCSS(dc.bkColor);
+      const m = dc.ctx.measureText(text);
+      dc.ctx.fillRect(x, y, m.width, fontSize);
+    }
+    dc.ctx.fillStyle = colorToCSS(dc.textColor);
+    dc.ctx.textBaseline = 'top';
+    fillTextBitmap(dc.ctx, text, x, y);
+
+    emu.syncDCToCanvas(hdc);
+    return 1;
+  });
 
   gdi32.register('GetTextExtentPoint32W', 4, () => {
     const _hdc = emu.readArg(0);
@@ -473,7 +503,34 @@ export function registerText(emu: Emulator): void {
 
   gdi32.register('CreateDCW', 4, () => 0);
   gdi32.register('CreateDCA', 4, () => 0);
-  gdi32.register('LPtoDP', 3, () => 1);
+  // LPtoDP(hdc, lpPoints, nCount) — convert N POINTs from logical to device
+  // coordinates IN-PLACE. The stub-1 made callers read whatever was already
+  // in the buffer (often zeros); a no-op identity transform under MM_TEXT
+  // matches what most MFC paint code expects.
+  gdi32.register('LPtoDP', 3, () => {
+    const hdc = emu.readArg(0);
+    const lpPoints = emu.readArg(1);
+    const nCount = emu.readArg(2) | 0;
+    const dc = emu.getDC(hdc);
+    if (!dc || !lpPoints || nCount <= 0) return 0;
+    const mode = dc.mapMode ?? 1; // MM_TEXT
+    if (mode === 1) return 1; // identity — caller's buffer already correct
+    // Compute scale from window/viewport extents
+    const wEx = dc.windowExtX || 1, wEy = dc.windowExtY || 1;
+    const vEx = dc.viewportExtX || 1, vEy = dc.viewportExtY || 1;
+    const wOx = dc.windowOrgX || 0, wOy = dc.windowOrgY || 0;
+    const vOx = dc.viewportOrgX || 0, vOy = dc.viewportOrgY || 0;
+    for (let i = 0; i < nCount; i++) {
+      const px = lpPoints + i * 8;
+      const lx = emu.memory.readI32(px);
+      const ly = emu.memory.readI32(px + 4);
+      const dx = ((lx - wOx) * vEx) / wEx + vOx;
+      const dy = ((ly - wOy) * vEy) / wEy + vOy;
+      emu.memory.writeI32(px,     Math.round(dx));
+      emu.memory.writeI32(px + 4, Math.round(dy));
+    }
+    return 1;
+  });
   gdi32.register('StartDocW', 2, () => 1);
   gdi32.register('StartDocA', 2, () => 1);
   gdi32.register('GetTextFaceA', 3, () => {
