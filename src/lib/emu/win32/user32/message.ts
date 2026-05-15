@@ -8,10 +8,40 @@ import {
   WM_QUIT, WM_PAINT, WM_ERASEBKGND,
   WM_SETTEXT, WM_GETTEXT, WM_GETTEXTLENGTH,
   WM_CREATE, WM_NCCREATE, WM_NCCALCSIZE,
-  WM_TIMER, PM_REMOVE, CW_USEDEFAULT,
+  WM_TIMER, WM_LBUTTONUP, WM_COMMAND, PM_REMOVE, CW_USEDEFAULT,
   TBM_GETPOS, TBM_GETRANGEMIN, TBM_GETRANGEMAX,
   TBM_SETPOS, TBM_SETRANGE, TBM_SETRANGEMIN, TBM_SETRANGEMAX,
 } from '../types';
+
+/** Hit-test a click against the toolbar's button layout. Mirrors the layout
+ *  computed by renderToolbar (emu-render.ts) : tbButtonSize cells laid out
+ *  horizontally with TBSTYLE_SEP buttons used as spacers. Returns the clicked
+ *  button's idCommand, or 0 if none / hidden / separator. */
+function toolbarHitTest(tb: WindowInfo, x: number, y: number): number {
+  const buttons = tb.tbButtons;
+  if (!buttons || buttons.length === 0) return 0;
+  const TBSTATE_HIDDEN = 0x08;
+  const TBSTYLE_SEP    = 0x01;
+  let btnW = 22, btnH = 22;
+  if (tb.tbButtonSize !== undefined) {
+    btnW = tb.tbButtonSize & 0xFFFF;
+    btnH = (tb.tbButtonSize >>> 16) & 0xFFFF;
+  }
+  let cursorX = 2;
+  const cursorY = 2;
+  for (const b of buttons) {
+    if (b.fsState & TBSTATE_HIDDEN) continue;
+    if (b.fsStyle & TBSTYLE_SEP) {
+      cursorX += b.iBitmap > 0 ? b.iBitmap : 6;
+      continue;
+    }
+    if (x >= cursorX && x < cursorX + btnW && y >= cursorY && y < cursorY + btnH) {
+      return b.idCommand >>> 0;
+    }
+    cursorX += btnW;
+  }
+  return 0;
+}
 
 export function registerMessage(emu: Emulator): void {
   const user32 = emu.registerDll('USER32.DLL');
@@ -291,6 +321,25 @@ export function registerMessage(emu: Emulator): void {
     if (!wnd.wndProc) {
       const builtin = handleBuiltinMessage(hwnd, message, wParam, lParam);
       return builtin ?? 0;
+    }
+
+    // Toolbar click hit-test : MFC's CToolBar subclass wndProc can't reliably
+    // find the clicked button because COMCTL32's internal layout state isn't
+    // tracked in the emulator. So we hit-test against tb.tbButtons (the same
+    // layout used by renderToolbar) and synthesize WM_COMMAND on the parent.
+    const tbClassName = wnd.classInfo?.className?.toUpperCase();
+    if (tbClassName === 'TOOLBARWINDOW32' && message === WM_LBUTTONUP) {
+      const cmd = toolbarHitTest(wnd, lParam & 0xFFFF, (lParam >> 16) & 0xFFFF);
+      if (cmd > 0 && wnd.parent) {
+        const parent = emu.handles.get<WindowInfo>(wnd.parent);
+        if (parent?.wndProc) {
+          // WM_COMMAND : wParam = HIWORD(notification)|LOWORD(id),
+          //              lParam = control hwnd (0 for menu/accelerator).
+          // Toolbar uses notification code 0 (button click).
+          emu.callWndProc(parent.wndProc, wnd.parent, WM_COMMAND, cmd & 0xFFFF, hwnd);
+          return 0; // skip MFC's own click handling
+        }
+      }
     }
 
     // Call WndProc via stack frame replacement.
