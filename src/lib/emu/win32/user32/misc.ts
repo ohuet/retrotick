@@ -554,7 +554,32 @@ export function registerMisc(emu: Emulator): void {
   });
   user32.register('CountClipboardFormats', 0, () => 0);
   user32.register('SetWindowContextHelpId', 2, () => 1);
-  user32.register('EnumChildWindows', 3, () => 1);
+  // EnumChildWindows(hWndParent, lpEnumFunc, lParam) — call lpEnumFunc(child,
+  // lParam) for each immediate child of hWndParent (or every top-level window
+  // if hWndParent is NULL). Stop if the callback returns FALSE. Apps use this
+  // to iterate dialog controls, gather toolbar children, etc.
+  user32.register('EnumChildWindows', 3, () => {
+    const hParent = emu.readArg(0);
+    const callback = emu.readArg(1);
+    const lParam = emu.readArg(2);
+    if (!callback) return 0;
+    // Build the list before invoking the callback so wndProcs that modify the
+    // window tree (rare but legal) don't trip the iteration.
+    const targets: number[] = [];
+    if (hParent) {
+      const parent = emu.handles.get<WindowInfo>(hParent);
+      if (parent?.childList) targets.push(...parent.childList);
+    } else {
+      for (const [hwnd, w] of emu.handles.findByType<WindowInfo>('window')) {
+        if (!w.parent) targets.push(hwnd);
+      }
+    }
+    for (const hwnd of targets) {
+      const ret = emu.callWndProc(callback, hwnd, lParam, 0, 0);
+      if (ret === 0) break;
+    }
+    return 1;
+  });
 
   user32.register('SendMessageTimeoutA', 6, () => {
     // Simplified: just call SendMessageA logic — return 1 (success)
