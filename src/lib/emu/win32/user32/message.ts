@@ -1829,6 +1829,14 @@ export function registerMessage(emu: Emulator): void {
         const part = wParam & 0xFF;
         if (!wnd.statusTexts) wnd.statusTexts = [];
         wnd.statusTexts[part] = lParam ? emu.memory.readUTF16String(lParam) : '';
+        if (emu.notifyControlOverlays) emu.notifyControlOverlays();
+        return 1;
+      }
+      if (message === SB_SETTEXTA) {
+        const part = wParam & 0xFF;
+        if (!wnd.statusTexts) wnd.statusTexts = [];
+        wnd.statusTexts[part] = lParam ? emu.memory.readCString(lParam) : '';
+        if (emu.notifyControlOverlays) emu.notifyControlOverlays();
         return 1;
       }
       if (message === SB_SIMPLE) return 1;
