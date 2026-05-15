@@ -498,7 +498,14 @@ export function registerMisc(emu: Emulator): void {
   user32.register('LockWindowUpdate', 1, () => 1);
   user32.register('SetCursorPos', 2, () => 1);
   user32.register('ClipCursor', 1, () => 1);
-  user32.register('WindowFromDC', 1, () => 0);
+  // WindowFromDC(hdc) → HWND owning the device context (or 0 for memory DCs).
+  // DCInfo carries hwnd already; the stub-0 made some MFC code reach a custom
+  // wndProc with a NULL hwnd and skip the paint.
+  user32.register('WindowFromDC', 1, () => {
+    const hdc = emu.readArg(0);
+    const dc = emu.getDC(hdc);
+    return dc?.hwnd ?? 0;
+  });
   user32.register('CountClipboardFormats', 0, () => 0);
   user32.register('SetWindowContextHelpId', 2, () => 1);
   user32.register('EnumChildWindows', 3, () => 1);
