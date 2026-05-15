@@ -97,8 +97,24 @@ export function registerDC(emu: Emulator): void {
   const MM_TEXT = 1;
   const R2_COPYPEN = 13;
 
-  gdi32.register('SetMapMode', 2, () => MM_TEXT);
-  gdi32.register('GetMapMode', 1, () => MM_TEXT);
+  // SetMapMode(hdc, mode) → previous mode. Stub used to return MM_TEXT and
+  // discard the requested mode, so apps that switched to MM_ISOTROPIC /
+  // MM_TWIPS / etc. didn't see the change take effect (LPtoDP returned
+  // identity even when they expected scaling).
+  gdi32.register('SetMapMode', 2, () => {
+    const hdc = emu.readArg(0);
+    const mode = emu.readArg(1);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const old = dc.mapMode ?? MM_TEXT;
+    dc.mapMode = mode;
+    return old;
+  });
+  gdi32.register('GetMapMode', 1, () => {
+    const hdc = emu.readArg(0);
+    const dc = emu.getDC(hdc);
+    return dc?.mapMode ?? MM_TEXT;
+  });
   gdi32.register('GetROP2', 1, () => R2_COPYPEN);
   gdi32.register('SetROP2', 2, () => {
     const hdc = emu.readArg(0);
@@ -111,14 +127,71 @@ export function registerDC(emu: Emulator): void {
   });
   gdi32.register('GetLayout', 1, () => 0); // LTR layout
   gdi32.register('SetLayout', 2, () => 0);
-  gdi32.register('SetViewportOrgEx', 4, () => 1);
-  gdi32.register('SetWindowOrgEx', 4, () => 1);
-  gdi32.register('OffsetViewportOrgEx', 4, () => 1);
-  gdi32.register('OffsetWindowOrgEx', 4, () => 1);
+  // Viewport / window origin setters used to be no-ops returning 1, and the
+  // getters always returned (0,0). That made any app changing the transform
+  // see "OK" but get garbage back from the read-back POINT — common in chart
+  // and CAD code that pans by adjusting the viewport origin.
+  gdi32.register('SetViewportOrgEx', 4, () => {
+    const hdc = emu.readArg(0);
+    const x = emu.readArg(1) | 0;
+    const y = emu.readArg(2) | 0;
+    const ptr = emu.readArg(3);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const oldX = dc.viewportOrgX ?? 0;
+    const oldY = dc.viewportOrgY ?? 0;
+    if (ptr) { emu.memory.writeI32(ptr, oldX); emu.memory.writeI32(ptr + 4, oldY); }
+    dc.viewportOrgX = x; dc.viewportOrgY = y;
+    return 1;
+  });
+  gdi32.register('SetWindowOrgEx', 4, () => {
+    const hdc = emu.readArg(0);
+    const x = emu.readArg(1) | 0;
+    const y = emu.readArg(2) | 0;
+    const ptr = emu.readArg(3);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const oldX = dc.windowOrgX ?? 0;
+    const oldY = dc.windowOrgY ?? 0;
+    if (ptr) { emu.memory.writeI32(ptr, oldX); emu.memory.writeI32(ptr + 4, oldY); }
+    dc.windowOrgX = x; dc.windowOrgY = y;
+    return 1;
+  });
+  gdi32.register('OffsetViewportOrgEx', 4, () => {
+    const hdc = emu.readArg(0);
+    const dx = emu.readArg(1) | 0;
+    const dy = emu.readArg(2) | 0;
+    const ptr = emu.readArg(3);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const oldX = dc.viewportOrgX ?? 0;
+    const oldY = dc.viewportOrgY ?? 0;
+    if (ptr) { emu.memory.writeI32(ptr, oldX); emu.memory.writeI32(ptr + 4, oldY); }
+    dc.viewportOrgX = oldX + dx; dc.viewportOrgY = oldY + dy;
+    return 1;
+  });
+  gdi32.register('OffsetWindowOrgEx', 4, () => {
+    const hdc = emu.readArg(0);
+    const dx = emu.readArg(1) | 0;
+    const dy = emu.readArg(2) | 0;
+    const ptr = emu.readArg(3);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const oldX = dc.windowOrgX ?? 0;
+    const oldY = dc.windowOrgY ?? 0;
+    if (ptr) { emu.memory.writeI32(ptr, oldX); emu.memory.writeI32(ptr + 4, oldY); }
+    dc.windowOrgX = oldX + dx; dc.windowOrgY = oldY + dy;
+    return 1;
+  });
 
   gdi32.register('GetWindowOrgEx', 2, () => {
+    const hdc = emu.readArg(0);
     const ptr = emu.readArg(1);
-    if (ptr) { emu.memory.writeU32(ptr, 0); emu.memory.writeU32(ptr + 4, 0); }
+    const dc = emu.getDC(hdc);
+    if (ptr) {
+      emu.memory.writeI32(ptr,     dc?.windowOrgX ?? 0);
+      emu.memory.writeI32(ptr + 4, dc?.windowOrgY ?? 0);
+    }
     return 1;
   });
 
@@ -129,26 +202,46 @@ export function registerDC(emu: Emulator): void {
   });
 
   gdi32.register('GetCurrentPositionEx', 2, () => {
+    const hdc = emu.readArg(0);
     const ptr = emu.readArg(1);
-    if (ptr) { emu.memory.writeU32(ptr, 0); emu.memory.writeU32(ptr + 4, 0); }
+    const dc = emu.getDC(hdc);
+    if (ptr) {
+      emu.memory.writeI32(ptr,     dc?.penPosX ?? 0);
+      emu.memory.writeI32(ptr + 4, dc?.penPosY ?? 0);
+    }
     return 1;
   });
 
   gdi32.register('GetViewportOrgEx', 2, () => {
+    const hdc = emu.readArg(0);
     const ptr = emu.readArg(1);
-    if (ptr) { emu.memory.writeU32(ptr, 0); emu.memory.writeU32(ptr + 4, 0); }
+    const dc = emu.getDC(hdc);
+    if (ptr) {
+      emu.memory.writeI32(ptr,     dc?.viewportOrgX ?? 0);
+      emu.memory.writeI32(ptr + 4, dc?.viewportOrgY ?? 0);
+    }
     return 1;
   });
 
   gdi32.register('GetWindowExtEx', 2, () => {
+    const hdc = emu.readArg(0);
     const ptr = emu.readArg(1);
-    if (ptr) { emu.memory.writeU32(ptr, 1); emu.memory.writeU32(ptr + 4, 1); }
+    const dc = emu.getDC(hdc);
+    if (ptr) {
+      emu.memory.writeI32(ptr,     dc?.windowExtX ?? 1);
+      emu.memory.writeI32(ptr + 4, dc?.windowExtY ?? 1);
+    }
     return 1;
   });
 
   gdi32.register('GetViewportExtEx', 2, () => {
+    const hdc = emu.readArg(0);
     const ptr = emu.readArg(1);
-    if (ptr) { emu.memory.writeU32(ptr, 1); emu.memory.writeU32(ptr + 4, 1); }
+    const dc = emu.getDC(hdc);
+    if (ptr) {
+      emu.memory.writeI32(ptr,     dc?.viewportExtX ?? 1);
+      emu.memory.writeI32(ptr + 4, dc?.viewportExtY ?? 1);
+    }
     return 1;
   });
 
@@ -179,8 +272,32 @@ export function registerDC(emu: Emulator): void {
   gdi32.register('CreateMetaFileW', 1, () => 0);
   gdi32.register('CloseMetaFile', 1, () => 0);
   gdi32.register('DeleteMetaFile', 1, () => 1);
-  gdi32.register('SetWindowExtEx', 4, () => 1);
-  gdi32.register('SetViewportExtEx', 4, () => 1);
+  gdi32.register('SetWindowExtEx', 4, () => {
+    const hdc = emu.readArg(0);
+    const x = emu.readArg(1) | 0;
+    const y = emu.readArg(2) | 0;
+    const ptr = emu.readArg(3);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const oldX = dc.windowExtX ?? 1;
+    const oldY = dc.windowExtY ?? 1;
+    if (ptr) { emu.memory.writeI32(ptr, oldX); emu.memory.writeI32(ptr + 4, oldY); }
+    dc.windowExtX = x; dc.windowExtY = y;
+    return 1;
+  });
+  gdi32.register('SetViewportExtEx', 4, () => {
+    const hdc = emu.readArg(0);
+    const x = emu.readArg(1) | 0;
+    const y = emu.readArg(2) | 0;
+    const ptr = emu.readArg(3);
+    const dc = emu.getDC(hdc);
+    if (!dc) return 0;
+    const oldX = dc.viewportExtX ?? 1;
+    const oldY = dc.viewportExtY ?? 1;
+    if (ptr) { emu.memory.writeI32(ptr, oldX); emu.memory.writeI32(ptr + 4, oldY); }
+    dc.viewportExtX = x; dc.viewportExtY = y;
+    return 1;
+  });
   gdi32.register('ScaleViewportExtEx', 6, () => 1);
   gdi32.register('ScaleWindowExtEx', 6, () => 1);
   gdi32.register('SetColorAdjustment', 2, () => 1);
