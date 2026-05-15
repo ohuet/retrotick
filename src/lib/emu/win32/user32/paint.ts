@@ -275,7 +275,28 @@ export function registerPaint(emu: Emulator): void {
   });
 
   user32.register('DrawFrameControl', 4, () => 1);
-  user32.register('DrawFocusRect', 2, () => 1);
+  // DrawFocusRect(hdc, lprc) — draw the dotted XOR-style focus rectangle. Was
+  // a no-op stub; default-button highlighting and listbox focus indicators
+  // never appeared on canvas controls.
+  user32.register('DrawFocusRect', 2, () => {
+    const hdc = emu.readArg(0);
+    const rectPtr = emu.readArg(1);
+    const dc = emu.getDC(hdc);
+    if (!dc || !rectPtr) return 0;
+    const left = emu.memory.readI32(rectPtr);
+    const top = emu.memory.readI32(rectPtr + 4);
+    const right = emu.memory.readI32(rectPtr + 8);
+    const bottom = emu.memory.readI32(rectPtr + 12);
+    dc.ctx.save();
+    dc.ctx.strokeStyle = '#000';
+    dc.ctx.lineWidth = 1;
+    dc.ctx.setLineDash([1, 1]);
+    // strokeRect at .5 offset keeps the 1-pixel line crisp on canvas.
+    dc.ctx.strokeRect(left + 0.5, top + 0.5, right - left - 1, bottom - top - 1);
+    dc.ctx.restore();
+    emu.syncDCToCanvas(hdc);
+    return 1;
+  });
   user32.register('DrawIcon', 4, () => 1);
 
   // DrawIconEx(hdc, xLeft, yTop, hIcon, cxWidth, cyWidth, istepIfAniCur, hbrFlickerFreeDraw, diFlags)
