@@ -561,8 +561,21 @@ export function registerCreateWindow(emu: Emulator): void {
   });
   user32.register('BringWindowToTop', 1, () => 1);
   user32.register('GetDesktopWindow', 0, () => 0);
-  user32.register('IsWindow', 1, () => 1);
-  user32.register('IsWindowVisible', 1, () => 1);
+  // IsWindow(hwnd) → TRUE if the handle is a valid window. Apps cache hwnds
+  // and check IsWindow before SendMessage to avoid touching destroyed windows
+  // (e.g. MFC's CFrameWnd::OnContextMenu uses this); a blanket 1 makes apps
+  // send to dangling handles, which we then silently ignore — but better to
+  // tell them upfront that the window is gone.
+  user32.register('IsWindow', 1, () => {
+    const hwnd = emu.readArg(0);
+    if (!hwnd) return 0;
+    return emu.handles.getType(hwnd) === 'window' ? 1 : 0;
+  });
+  user32.register('IsWindowVisible', 1, () => {
+    const hwnd = emu.readArg(0);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
+    return wnd && wnd.visible ? 1 : 0;
+  });
   user32.register('IsWindowEnabled', 1, () => {
     const hwnd = emu.readArg(0);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
