@@ -286,7 +286,18 @@ export function exec0F(
         // selector (see cpu.segBase). Real DPMI hosts auto-shadow these;
         // we report them as present 16-bit data R/W DPL=3 segments so
         // that DOS/4GW's LAR-based validator accepts them.
-        if (rights === undefined && sel >= 8) {
+        //
+        // BUT only for selectors we've actually materialized as a segment
+        // (tracked in segBases, e.g. 0x1569/0x1b4e/0x271e loaded into CS/SS/DS
+        // — ensureShadowDescriptor wrote a present descriptor for those, so
+        // they normally pass the present-bit check above anyway). A genuinely
+        // empty GDT slot that was never loaded is a *free* descriptor: real
+        // hardware LARs it as not-present (ZF=0). DOS/4GW probes its free
+        // descriptor range (e.g. selectors 0x7fc0..0x7ff8) with LAR and aborts
+        // (exit 0xED) if those empty slots wrongly report present. Without the
+        // segBases guard the fallback resurrected every empty slot as present.
+        if (rights === undefined && sel >= 8
+            && (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3))) {
           const base = cpu.loadGdtDescriptorBase(sel);
           const lim = cpu.loadGdtDescriptorLimit(sel);
           if ((base === undefined || (base === 0 && lim === 0))) {
