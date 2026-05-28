@@ -108,6 +108,19 @@ export function dispatchException(
         console.warn(`[AH=4C-PM] exit=0x${retCode.toString(16)} cs=${cpu.cs.toString(16)}:${((cpu.eip-cpu.segBase(cpu.cs))>>>0).toString(16)} step=${(cpu.emu as any)?.cpuSteps}`);
         return true;
       }
+      // File read/seek/close for a 32-bit PM client on a handle WE track.
+      // DOS/4GW's own PM INT 21h handler mishandles large reads (bigger than its
+      // RM transfer buffer): instead of chunk-reflecting them it returns stale
+      // bytes — DOOM aborts with "W_ReadLump: only read 16193 of 68168". Service
+      // these directly in PM with full 32-bit ECX/EDX (a DPMI host may provide
+      // DOS file services to its client). Only for handles in _dosFiles so we
+      // never shadow DOS/4GW's own internal file operations.
+      if ((ah === 0x3F || ah === 0x42 || ah === 0x3E) && cpu.use32 && !cpu.realMode) {
+        const fileHandle = cpu.reg[EBX] & 0xFFFF;
+        if (cpu.emu._dosFiles && cpu.emu._dosFiles.has(fileHandle)) {
+          return handleDosInt(cpu, 0x21, cpu.emu);
+        }
+      }
       // Intercept AH=35h (Get Interrupt Vector) in 32-bit PM for IRQ-range
       // vectors. DOS/4GW's own PM INT 21h handler returns a bogus
       // "0x170:0x3500+vec" value for these — those linear addresses are
