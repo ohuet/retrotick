@@ -51,6 +51,15 @@ export function dispatchException(
   // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
   if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
     const dpmi = cpu.emu._dpmiState;
+    // INT 10h AH=00 (set video mode) for a 32-bit PM client. DOS/4GW's own PM
+    // INT 10h handler programs the VGA registers directly without going through
+    // our BIOS video handler, so emu.videoMode stays stale (text 0x3) even after
+    // the client sets mode 13h — the canvas would then render text instead of the
+    // graphics the program is drawing to 0xA0000. Run our video handler so
+    // emu.videoMode / vga.currentMode track the real mode.
+    if (intNum === 0x10 && ((cpu.reg[EAX] >>> 8) & 0xFF) === 0x00 && cpu.use32) {
+      if (handleDosInt(cpu, 0x10, cpu.emu)) return true;
+    }
     // DOS clients like DOOM install their timer/IRQ handlers via INT 21h AH=25h
     // rather than DPMI AX=0205h. DOS/4GW's PM INT 21h handler processes the call
     // internally, but may skip registering IRQ-range vectors (e.g., vec 8) in
