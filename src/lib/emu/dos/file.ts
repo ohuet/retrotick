@@ -97,6 +97,28 @@ export function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulat
 /** Open a file by resolved path. Shared by 0x3D and 0x6C. */
 function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string): void {
   const fs = emu.fs;
+  // Self-EXE re-open: DOS extenders (DOS/4GW, DOS/16M) re-open the program's own
+  // EXE to load the LE/LX image appended after the MZ stub. This MUST resolve to
+  // the exact in-memory image we loaded — in the browser the virtual FS is backed
+  // by IndexedDB, where a findFile/getSyncFileData lookup for the EXE can miss or
+  // go async and return wrong/partial data, making DOS/4GW abort with error 1008
+  // "can't load executable format". emu-load registers the EXE in additionalFiles
+  // by basename; serve it synchronously here, before the FS lookup.
+  const selfExeBase = (emu.exePath || emu.exeName || '').replace(/^.*[\\/]/, '').toUpperCase();
+  const reqBase = resolved.replace(/^.*[\\/]/, '').toUpperCase();
+  if (selfExeBase && reqBase === selfExeBase) {
+    for (const [key, buf] of emu.additionalFiles) {
+      if (key.replace(/^.*[\\/]/, '').toUpperCase() === selfExeBase) {
+        const handle = allocDosHandle(emu);
+        const data = new Uint8Array(buf);
+        emu._dosFiles.set(handle, { data, pos: 0, name });
+        emu.handles.set(handle, 'file', { path: resolved, access: 0x80000000, pos: 0, data, size: data.length, modified: false });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+        return;
+      }
+    }
+  }
   const fileInfo = fs.findFile(resolved, emu.additionalFiles);
   if (fileInfo) {
     // Try synchronous path first (additionalFiles / externalFiles are in memory)
