@@ -454,8 +454,12 @@ export class Emulator {
   /** Start DOS MZ programs in pseudo-V86 (PE=1, VM=1) so DOS/4GW and
    *  DOS/4GW Pro detect a V86-under-monitor environment and take their
    *  VCPI client path. Keeps realMode=true so segment addressing stays
-   *  sel*16 — the CPU is "V86-flavored real mode" like EMM386. */
-  dosEnableV86 = true;
+   *  sel*16 — the CPU is "V86-flavored real mode" like EMM386.
+   *  Default OFF: DOS/4GW games (DOOM, ...) run far better via the DPMI path;
+   *  the pseudo-V86 monitor path hits DOS/4GW error 1005 (incomplete V86-monitor
+   *  emulation). Matches the UI default (dos-settings.ts DEFAULTS.v86=false).
+   *  VCPI-only demos that need it (EMUL5/ISAY) set this true explicitly. */
+  dosEnableV86 = false;
   dosEnableXms = true;
   dosEnableEms = true;
   dosEnableSoundBlaster = true;
