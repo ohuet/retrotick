@@ -1,7 +1,9 @@
 import type { Emulator } from '../../emulator';
 import type { DCInfo } from './types';
+import type { WindowInfo } from '../user32/types';
 import { OPAQUE } from '../types';
 import { disableSmoothing } from './_helpers';
+import { getClientSize } from '../user32/_helpers';
 
 export function registerDC(emu: Emulator): void {
   const gdi32 = emu.registerDll('GDI32.DLL');
@@ -302,15 +304,42 @@ export function registerDC(emu: Emulator): void {
   gdi32.register('ScaleWindowExtEx', 6, () => 1);
   gdi32.register('SetColorAdjustment', 2, () => 1);
 
+  // GetClipBox returns the tightest bounding rect of the DC's clip region, in
+  // LOGICAL coords. We report the window's current update region (paintRect,
+  // captured by BeginPaint) intersected with the client area, falling back to
+  // the full client rect — NOT the whole screen. Returning the screen made apps
+  // that size their painting from GetClipBox (MFC CScrollView views) repaint
+  // the entire surface on every tiny invalidation, saturating the CPU.
   gdi32.register('GetClipBox', 2, () => {
-    const _hdc = emu.readArg(0);
+    const hdc = emu.readArg(0);
     const rectPtr = emu.readArg(1);
-    if (rectPtr) {
-      emu.memory.writeU32(rectPtr, 0);     // left
-      emu.memory.writeU32(rectPtr + 4, 0); // top
-      emu.memory.writeU32(rectPtr + 8, emu.screenWidth);  // right
-      emu.memory.writeU32(rectPtr + 12, emu.screenHeight); // bottom
+    if (!rectPtr) return 1;
+    const dc = emu.getDC(hdc);
+    // Device-space clip rect: prefer the window's update region.
+    let dl = 0, dt = 0, dr = emu.screenWidth, db = emu.screenHeight;
+    const wnd = dc?.hwnd ? emu.handles.get<WindowInfo>(dc.hwnd) : null;
+    if (wnd) {
+      const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+      dl = 0; dt = 0; dr = cs.cw; db = cs.ch;
+      if (wnd.paintRect) {
+        dl = wnd.paintRect.l; dt = wnd.paintRect.t;
+        dr = wnd.paintRect.r; db = wnd.paintRect.b;
+      }
+    } else if (dc?.canvas) {
+      dl = 0; dt = 0; dr = dc.canvas.width; db = dc.canvas.height;
     }
+    // Device → logical via the DC's map-mode transform (inverse of LPtoDP):
+    //   logical = (device - viewportOrg) * windowExt / viewportExt + windowOrg
+    const vOx = dc?.viewportOrgX ?? 0, vOy = dc?.viewportOrgY ?? 0;
+    const wOx = dc?.windowOrgX ?? 0, wOy = dc?.windowOrgY ?? 0;
+    const wEx = dc?.windowExtX || 1, wEy = dc?.windowExtY || 1;
+    const vEx = dc?.viewportExtX || 1, vEy = dc?.viewportExtY || 1;
+    const toLogX = (x: number) => Math.round(((x - vOx) * wEx) / vEx + wOx);
+    const toLogY = (y: number) => Math.round(((y - vOy) * wEy) / vEy + wOy);
+    emu.memory.writeI32(rectPtr,      toLogX(dl));
+    emu.memory.writeI32(rectPtr + 4,  toLogY(dt));
+    emu.memory.writeI32(rectPtr + 8,  toLogX(dr));
+    emu.memory.writeI32(rectPtr + 12, toLogY(db));
     return 1; // SIMPLEREGION
   });
 

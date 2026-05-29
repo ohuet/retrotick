@@ -7,7 +7,6 @@ export function registerInput(emu: Emulator): void {
   // Mouse capture
   user32.register('SetCapture', 1, () => {
     const hwnd = emu.readArg(0);
-    console.log(`[SetCapture] hwnd=0x${hwnd.toString(16)}`);
     emu.capturedWindow = hwnd;
     return 0;
   });

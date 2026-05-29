@@ -53,13 +53,25 @@ export function registerPaint(emu: Emulator): void {
     // Fill PAINTSTRUCT
     emu.memory.writeU32(psPtr, hdc);       // hdc
     emu.memory.writeU32(psPtr + 4, hadErase ? 1 : 0); // fErase
-    // rcPaint — client area dimensions
+    // rcPaint — the update region (intersected with the client area), so apps
+    // that honor rcPaint/GetClipBox only repaint what changed. Capture the
+    // accumulated invalid rect into paintRect for GetClipBox, then clear it.
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     const cs = wnd ? getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height) : { cw: 0, ch: 0 };
-    emu.memory.writeU32(psPtr + 8, 0);     // left
-    emu.memory.writeU32(psPtr + 12, 0);    // top
-    emu.memory.writeU32(psPtr + 16, cs.cw);  // right
-    emu.memory.writeU32(psPtr + 20, cs.ch);  // bottom
+    let pl = 0, pt = 0, pr = cs.cw, pb = cs.ch;
+    if (wnd?.invalidRect) {
+      pl = Math.max(0, wnd.invalidRect.l);
+      pt = Math.max(0, wnd.invalidRect.t);
+      pr = Math.min(cs.cw, wnd.invalidRect.r);
+      pb = Math.min(cs.ch, wnd.invalidRect.b);
+      if (pr < pl) pr = pl;
+      if (pb < pt) pb = pt;
+    }
+    if (wnd) { wnd.paintRect = { l: pl, t: pt, r: pr, b: pb }; wnd.invalidRect = undefined; }
+    emu.memory.writeU32(psPtr + 8, pl);    // left
+    emu.memory.writeU32(psPtr + 12, pt);   // top
+    emu.memory.writeU32(psPtr + 16, pr);   // right
+    emu.memory.writeU32(psPtr + 20, pb);   // bottom
     emu.memory.writeU32(psPtr + 24, 0);    // fRestore
     emu.memory.writeU32(psPtr + 28, 0);    // fIncUpdate
     // rgbReserved (32 bytes of zero)
@@ -71,18 +83,37 @@ export function registerPaint(emu: Emulator): void {
   user32.register('EndPaint', 2, () => {
     const hwnd = emu.readArg(0);
     const _psPtr = emu.readArg(1);
+    const wnd = emu.handles.get<WindowInfo>(hwnd);
+    if (wnd) wnd.paintRect = undefined;
     emu.endPaint(hwnd, 0);
     return 1;
   });
 
   user32.register('InvalidateRect', 3, () => {
     const hwnd = emu.readArg(0);
-    const _rectPtr = emu.readArg(1);
+    const rectPtr = emu.readArg(1);
     const erase = emu.readArg(2);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd && !wnd.painting) {
       wnd.needsPaint = true;
       if (erase) wnd.needsErase = true;
+      // Accumulate the invalid region. NULL rect = whole client area (clear any
+      // partial region so GetClipBox reports a full repaint).
+      const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+      if (!rectPtr) {
+        wnd.invalidRect = { l: 0, t: 0, r: cs.cw, b: cs.ch };
+      } else {
+        let l = emu.memory.readI32(rectPtr);
+        let t = emu.memory.readI32(rectPtr + 4);
+        let r = emu.memory.readI32(rectPtr + 8);
+        let b = emu.memory.readI32(rectPtr + 12);
+        if (r < l) { const tmp = l; l = r; r = tmp; }
+        if (b < t) { const tmp = t; t = b; b = tmp; }
+        const prev = wnd.invalidRect;
+        wnd.invalidRect = prev
+          ? { l: Math.min(prev.l, l), t: Math.min(prev.t, t), r: Math.max(prev.r, r), b: Math.max(prev.b, b) }
+          : { l, t, r, b };
+      }
     }
     return 1;
   });
@@ -93,6 +124,7 @@ export function registerPaint(emu: Emulator): void {
     if (wnd) {
       wnd.needsPaint = false;
       wnd.needsErase = false;
+      wnd.invalidRect = undefined;
     }
     return 1;
   });
@@ -321,7 +353,9 @@ export function registerPaint(emu: Emulator): void {
   user32.register('RedrawWindow', 4, () => {
     const hwnd = emu.readArg(0);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
-    if (wnd) { wnd.needsPaint = true; wnd.needsErase = true; }
+    // RedrawWindow without RDW_INVALIDATE-of-a-rect invalidates the whole
+    // window; clear any partial region so the next paint is a full repaint.
+    if (wnd) { wnd.needsPaint = true; wnd.needsErase = true; wnd.invalidRect = undefined; }
     return 1;
   });
 
