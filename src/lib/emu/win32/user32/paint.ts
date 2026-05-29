@@ -1,6 +1,7 @@
 import type { Emulator } from '../../emulator';
 import type { WindowInfo } from './types';
 import { getClientSize } from './_helpers';
+import { dcGetImageData, dcPutImageData } from '../../emu-window';
 import {
   WM_PAINT, WM_ERASEBKGND, SIZEOF_PAINTSTRUCT, SYS_COLORS,
   COLOR_BTNHIGHLIGHT, COLOR_3DLIGHT, COLOR_BTNSHADOW, COLOR_3DDKSHADOW,
@@ -95,12 +96,16 @@ export function registerPaint(emu: Emulator): void {
     const erase = emu.readArg(2);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd && !wnd.painting) {
+      // A repaint already pending with no tracked rect means a FULL repaint is
+      // queued (needsPaint set on create/show/resize). Don't let a later
+      // partial InvalidateRect shrink it — seed the accumulator with the full
+      // client so the union stays full.
+      const fullPending = wnd.needsPaint && !wnd.invalidRect;
       wnd.needsPaint = true;
       if (erase) wnd.needsErase = true;
-      // Accumulate the invalid region. NULL rect = whole client area (clear any
-      // partial region so GetClipBox reports a full repaint).
+      // Accumulate the invalid region. NULL rect = whole client area.
       const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
-      if (!rectPtr) {
+      if (!rectPtr || fullPending) {
         wnd.invalidRect = { l: 0, t: 0, r: cs.cw, b: cs.ch };
       } else {
         let l = emu.memory.readI32(rectPtr);
@@ -203,12 +208,17 @@ export function registerPaint(emu: Emulator): void {
 
     const w = right - left, h = bottom - top;
     if (w > 0 && h > 0) {
-      const imgData = dc.ctx.getImageData(left, top, w, h);
+      // Use transform-aware read/write: child-window DCs carry a canvas
+      // translate (the window's position on the shared canvas). Raw
+      // getImageData/putImageData ignore it, so the inverted rect (e.g. the
+      // text cursor caret) landed at the main canvas origin instead of inside
+      // the child window.
+      const imgData = dcGetImageData(dc, left, top, w, h);
       const d = imgData.data;
       for (let i = 0; i < d.length; i += 4) {
         d[i] = 255 - d[i]; d[i+1] = 255 - d[i+1]; d[i+2] = 255 - d[i+2];
       }
-      dc.ctx.putImageData(imgData, left, top);
+      dcPutImageData(dc, imgData, left, top);
       emu.syncDCToCanvas(hdc);
     }
     return 1;
