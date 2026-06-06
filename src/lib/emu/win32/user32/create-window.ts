@@ -1,6 +1,6 @@
 import { type Emulator, getNextCascadePos } from '../../emulator';
 import type { WindowInfo } from './types';
-import { getClientSize, clampToMinTrackSize } from './_helpers';
+import { getClientSize, clampToMinTrackSize, invalidateForResize } from './_helpers';
 import { buildMenuHandleTree } from './menu';
 import {
   WM_CREATE, WM_NCCREATE, WM_NCCALCSIZE, WM_SHOWWINDOW,
@@ -470,7 +470,7 @@ export function registerCreateWindow(emu: Emulator): void {
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (wnd) {
       const clamped = clampToMinTrackSize(emu, hwnd, wnd, w, h);
-      console.log(`[MoveWindow] hwnd=0x${hwnd.toString(16)} x=${x} y=${y} w=${clamped.w} h=${clamped.h}`);
+      const sizeChanged = wnd.width !== clamped.w || wnd.height !== clamped.h;
       wnd.x = x; wnd.y = y; wnd.width = clamped.w; wnd.height = clamped.h;
       const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, clamped.w, clamped.h);
       if (hwnd === emu.mainWindow) {
@@ -480,8 +480,11 @@ export function registerCreateWindow(emu: Emulator): void {
       // Send WM_SIZE with client area dimensions
       const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
       emu.callWndProc(wnd.wndProc, hwnd, WM_SIZE, 0, lParam);
-      // Trigger repaint if requested
-      if (repaint && wnd) {
+      // MoveWindow with bRepaint invalidates the full (new) client; clearing
+      // any stale partial invalidRect captured at the previous size.
+      if (repaint && sizeChanged) {
+        invalidateForResize(emu, wnd);
+      } else if (repaint) {
         wnd.needsPaint = true;
         wnd.needsErase = true;
       }
@@ -499,7 +502,7 @@ export function registerCreateWindow(emu: Emulator): void {
     const uFlags = emu.readArg(6);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (!wnd) return 0;
-    const SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_FRAMECHANGED = 0x20;
+    const SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOREDRAW = 0x8, SWP_FRAMECHANGED = 0x20;
     const SWP_SHOWWINDOW = 0x40, SWP_HIDEWINDOW = 0x80;
     let sizeChanged = false;
 
@@ -546,6 +549,11 @@ export function registerCreateWindow(emu: Emulator): void {
         emu.callWndProc(wnd.wndProc, hwnd, WM_SIZE, 0,
           ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
       }
+    }
+
+    // A resize without SWP_NOREDRAW invalidates the (new) client area in full.
+    if (sizeChanged && !(uFlags & SWP_NOREDRAW)) {
+      invalidateForResize(emu, wnd);
     }
 
     // Invalidate cached popup DC so it picks up the new position

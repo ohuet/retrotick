@@ -4,6 +4,20 @@ import type { WinMsg } from '../../emulator';
 import type { WindowInfo } from './types';
 import { WS_CAPTION, WS_DLGFRAME, WS_BORDER, WS_THICKFRAME, WM_GETMINMAXINFO } from '../types';
 
+/**
+ * Called after a window's size changes. Windows invalidates the affected area;
+ * for the CS_HREDRAW|CS_VREDRAW classes that MFC frames/views use, the WHOLE
+ * client repaints. We invalidate the window's full new client so a stale,
+ * smaller invalidRect captured at the previous size can't leave part of the
+ * client unpainted (the "cut rectangle" symptom).
+ */
+export function invalidateForResize(emu: Emulator, wnd: WindowInfo): void {
+  const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+  wnd.needsPaint = true;
+  wnd.needsErase = true;
+  wnd.invalidRect = { l: 0, t: 0, r: cs.cw, b: cs.ch };
+}
+
 // Helper: write a WinMsg into a MSG struct at pMsg, filling pt from lParam for mouse messages
 export function writeMsgStruct(emu: Emulator, pMsg: number, msg: WinMsg): void {
   emu.memory.writeU32(pMsg, msg.hwnd);

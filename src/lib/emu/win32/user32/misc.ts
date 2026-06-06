@@ -1,6 +1,6 @@
 import type { Emulator } from '../../emulator';
 import type { WindowInfo } from './types';
-import { getClientSize, clampToMinTrackSize } from './_helpers';
+import { getClientSize, clampToMinTrackSize, invalidateForResize } from './_helpers';
 import { emuCompleteThunk } from '../../emu-exec';
 import {
   SM_CXSCREEN, SM_CYSCREEN, SM_CYMENU, SM_CYCAPTION, SM_CXBORDER, SM_CYBORDER,
@@ -276,12 +276,13 @@ export function registerMisc(emu: Emulator): void {
           wnd.width = clamped.w; wnd.height = clamped.h;
         }
         if (sizeChanged && wnd.wndProc) {
-          const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
-          const lParam = ((ch & 0xFFFF) << 16) | (cw & 0xFFFF);
+          const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+          const lParam = ((cs.ch & 0xFFFF) << 16) | (cs.cw & 0xFFFF);
           emu.callWndProc(wnd.wndProc, e.hWnd, 0x0005, 0, lParam); // WM_SIZE
         }
-        wnd.needsPaint = true;
-        wnd.needsErase = true;
+        // Invalidate the full new client so a stale partial invalidRect captured
+        // at the previous size can't leave part of the client unpainted.
+        invalidateForResize(emu, wnd);
       }
       // Fix up MFC dock bars that have 0 size but visible children.
       // MFC's CDockBar::OnSizeParent may fail to claim space if its internal
@@ -365,6 +366,35 @@ export function registerMisc(emu: Emulator): void {
             }
           }
         }
+      }
+
+      // Stretch a dock bar's sole "sizing" control bar to fill the dock's
+      // length. CSizingControlBar-style panes (a docked preview/properties
+      // pane) fill the whole side they're docked to; toolbars/status bars size
+      // to their content, so they're excluded. Only act when the dock holds a
+      // single fillable child — multiple bars share the length side by side.
+      const NON_FILL = new Set(['TOOLBARWINDOW32', 'MSCTLS_STATUSBAR32', 'REBARWINDOW32']);
+      for (const e of dwp.entries) {
+        const dock = emu.handles.get<WindowInfo>(e.hWnd);
+        if (!dock || !dock.childList) continue;
+        const ctrlId = dock.controlId ?? 0;
+        if (ctrlId < AFX_IDW_DOCKBAR_TOP || ctrlId > AFX_IDW_DOCKBAR_BOTTOM) continue;
+        const isHorz = ctrlId === AFX_IDW_DOCKBAR_TOP || ctrlId === AFX_IDW_DOCKBAR_BOTTOM;
+        const fillable = dock.childList
+          .map((h) => [h, emu.handles.get<WindowInfo>(h)] as const)
+          .filter(([, c]) => !!c && c.visible && !NON_FILL.has((c.classInfo?.className ?? '').toUpperCase()));
+        if (fillable.length !== 1) continue;
+        const [chwnd, child] = fillable[0];
+        if (!child) continue;
+        const mainExtent = isHorz ? dock.width : dock.height;
+        const cur = isHorz ? child.width : child.height;
+        if (mainExtent <= cur) continue; // already fills the dock length
+        if (isHorz) child.width = mainExtent; else child.height = mainExtent;
+        const cs = getClientSize(child.style, child.hMenu !== 0, child.width, child.height);
+        if (child.wndProc) {
+          emu.callWndProc(child.wndProc, chwnd, 0x0005, 0, ((cs.ch & 0xFFFF) << 16) | (cs.cw & 0xFFFF)); // WM_SIZE
+        }
+        invalidateForResize(emu, child);
       }
 
       // Also mark main window for repaint
