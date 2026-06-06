@@ -368,28 +368,26 @@ export function registerMisc(emu: Emulator): void {
         }
       }
 
-      // Stretch a dock bar's sole "sizing" control bar to fill the dock's
-      // length. CSizingControlBar-style panes (a docked preview/properties
-      // pane) fill the whole side they're docked to; toolbars/status bars size
-      // to their content, so they're excluded. Only act when the dock holds a
-      // single fillable child — multiple bars share the length side by side.
+      // Stretch a sole "sizing" control bar to fill the HEIGHT of a left/right
+      // dock bar (a docked preview/properties pane fills the whole side it's
+      // docked to). Only LEFT/RIGHT (vertical) docks: a bar in a top/bottom
+      // dock keeps its content width and sits side-by-side with others, so
+      // stretching its width would wrongly make it span the whole edge.
+      // Toolbars/status bars are excluded (they size to content). Only act when
+      // the dock holds a single fillable child.
       const NON_FILL = new Set(['TOOLBARWINDOW32', 'MSCTLS_STATUSBAR32', 'REBARWINDOW32']);
       for (const e of dwp.entries) {
         const dock = emu.handles.get<WindowInfo>(e.hWnd);
         if (!dock || !dock.childList) continue;
         const ctrlId = dock.controlId ?? 0;
-        if (ctrlId < AFX_IDW_DOCKBAR_TOP || ctrlId > AFX_IDW_DOCKBAR_BOTTOM) continue;
-        const isHorz = ctrlId === AFX_IDW_DOCKBAR_TOP || ctrlId === AFX_IDW_DOCKBAR_BOTTOM;
+        if (ctrlId !== AFX_IDW_DOCKBAR_LEFT && ctrlId !== AFX_IDW_DOCKBAR_RIGHT) continue;
         const fillable = dock.childList
           .map((h) => [h, emu.handles.get<WindowInfo>(h)] as const)
           .filter(([, c]) => !!c && c.visible && !NON_FILL.has((c.classInfo?.className ?? '').toUpperCase()));
         if (fillable.length !== 1) continue;
         const [chwnd, child] = fillable[0];
-        if (!child) continue;
-        const mainExtent = isHorz ? dock.width : dock.height;
-        const cur = isHorz ? child.width : child.height;
-        if (mainExtent <= cur) continue; // already fills the dock length
-        if (isHorz) child.width = mainExtent; else child.height = mainExtent;
+        if (!child || dock.height <= child.height) continue; // already fills
+        child.height = dock.height;
         const cs = getClientSize(child.style, child.hMenu !== 0, child.width, child.height);
         if (child.wndProc) {
           emu.callWndProc(child.wndProc, chwnd, 0x0005, 0, ((cs.ch & 0xFFFF) << 16) | (cs.cw & 0xFFFF)); // WM_SIZE

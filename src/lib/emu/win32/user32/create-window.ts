@@ -371,6 +371,12 @@ export function registerCreateWindow(emu: Emulator): void {
     const SW_HIDE = 0, SW_SHOWNORMAL = 1, SW_SHOWMINIMIZED = 2, SW_MAXIMIZE = 3;
     const SW_SHOW = 5, SW_MINIMIZE = 6, SW_RESTORE = 9;
     wnd.visible = nCmdShow !== SW_HIDE;
+    // Keep the WS_VISIBLE style bit in sync. Code that queries visibility via
+    // GetWindowLong(GWL_STYLE)/GetStyle (e.g. MFC's CControlBar::IsVisible used
+    // by CDockBar layout) reads this bit, not our boolean — leaving it set after
+    // SW_HIDE makes a hidden window still reserve its layout slot.
+    const WS_VISIBLE = 0x10000000;
+    if (wnd.visible) wnd.style |= WS_VISIBLE; else wnd.style &= ~WS_VISIBLE;
 
     // Update minimized/maximized state
     if (nCmdShow === SW_MINIMIZE || nCmdShow === SW_SHOWMINIMIZED) {

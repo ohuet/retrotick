@@ -46,12 +46,29 @@ function toolbarHitTest(tb: WindowInfo, x: number, y: number): number {
 export function registerMessage(emu: Emulator): void {
   const user32 = emu.registerDll('USER32.DLL');
 
+  // A window paints only if it AND every ancestor up to the main window is
+  // visible. A hidden window (or one under a hidden parent) must never erase or
+  // paint — on the shared canvas its background fill would blank whatever now
+  // occupies its slot (e.g. a hidden CSizingControlBar greying out the pane
+  // that took its place after RecalcLayout).
+  const isEffectivelyVisible = (h: number): boolean => {
+    let cur = h, guard = 0;
+    while (cur && guard++ < 64) {
+      const w = emu.handles.get<WindowInfo>(cur);
+      if (!w || !w.visible) return false;
+      if (cur === emu.mainWindow) break;
+      cur = w.parent || 0;
+    }
+    return true;
+  };
+
   // Message loop
   // Synthesize WM_PAINT for windows that need repainting
   const synthesizePaint = (): { hwnd: number; message: number; wParam: number; lParam: number } | null => {
     // Check all windows for needsPaint flag
     for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
       if (!wnd || !wnd.needsPaint) continue;
+      if (!isEffectivelyVisible(handle)) { wnd.needsPaint = false; wnd.needsErase = false; continue; }
       if (wnd.wndProc) {
         if (wnd.needsErase) {
           wnd.needsErase = false;
