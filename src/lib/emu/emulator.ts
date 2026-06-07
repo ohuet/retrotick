@@ -323,6 +323,9 @@ export class Emulator {
   _pendingReadConsole: { bufPtr: number; nCharsToRead: number; charsReadPtr: number } | null = null;
   _pendingReadConsoleInput: { bufPtr: number; nLength: number; eventsReadPtr: number; isWide: boolean } | null = null;
   _dispatchPaintUsedBeginPaint = false;
+  // Reentrancy guard: set while beginPaint is dispatching WM_ERASEBKGND so a
+  // handler that paints can't recurse into another erase dispatch.
+  _inEraseBkgnd = false;
   _pendingGetch = false;
   _consoleInputResume: { stackBytes: number; completer: (emu: Emulator, retVal: number, stackBytes: number) => void } | null = null;
   // Line editing state (emulates conhost line editing for ReadConsoleW with ENABLE_LINE_INPUT)

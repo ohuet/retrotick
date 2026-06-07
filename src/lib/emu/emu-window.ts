@@ -8,6 +8,9 @@ import { renderChildControls } from './emu-render';
 import { getClientSize, getNonClientMetrics } from './win32/user32/_helpers';
 import { emuFindResourceEntryForModule } from './emu-load';
 
+// WM_ERASEBKGND — dispatched from beginPaint so apps that override OnEraseBkgnd run.
+const WM_ERASEBKGND = 0x0014;
+
 // Track DCs that have canvas state saved (child window translate)
 const childDCSet = new Set<number>();
 // Track DCs that have WS_CLIPCHILDREN state saved
@@ -271,6 +274,9 @@ export function beginPaint(emu: Emulator, hwnd: number): number {
   const hdc = getWindowDC(emu, hwnd);
   // Validate the region — clear needsPaint to prevent infinite WM_PAINT loop
   const wnd = emu.handles.get<WindowInfo>(hwnd);
+  // Capture the erase request before clearing it: real BeginPaint sends
+  // WM_ERASEBKGND only when the update region was invalidated with bErase=TRUE.
+  const hadErase = wnd?.needsErase ?? false;
   if (wnd) { wnd.needsPaint = false; wnd.needsErase = false; wnd.painting = true; }
   // Signal to DispatchMessage that BeginPaint was called (so it doesn't duplicate overlay notifications)
   emu._dispatchPaintUsedBeginPaint = true;
@@ -296,6 +302,28 @@ export function beginPaint(emu: Emulator, hwnd: number): number {
         const r = bgColor & 0xFF, g = (bgColor >> 8) & 0xFF, b = (bgColor >> 16) & 0xFF;
         dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
         dc.ctx.fillRect(0, 0, wnd.width, wnd.height);
+      }
+    }
+
+    // Dispatch WM_ERASEBKGND to the window procedure, exactly as the real
+    // BeginPaint does when the update region needs erasing. This lets apps that
+    // OVERRIDE OnEraseBkgnd run their custom code (custom backgrounds, grid /
+    // column-guide overlays drawn with a PS_DOT pen, etc.). Windows that don't
+    // override fall through to DefWindowProc, which fills the class brush — so
+    // the direct fill above is redundant-but-harmless for them and a safe
+    // fallback for built-in (wndProc-less) and dialog windows. Guarded by
+    // _inEraseBkgnd so a handler that itself paints can't recurse here, and
+    // gated on hadErase so the cursor-blink partial repaints (invalidated with
+    // bErase=FALSE) don't re-run a full erase every tick.
+    const isDialog = wnd.classInfo.className === '#32770' || !!wnd.dlgProc;
+    if (hadErase && wnd.wndProc && !isDialog && !emu._inEraseBkgnd) {
+      emu._inEraseBkgnd = true;
+      try {
+        emu.callWndProc(wnd.wndProc, hwnd, WM_ERASEBKGND, hdc, 0);
+      } catch {
+        // An erase handler fault must not abort the paint cycle.
+      } finally {
+        emu._inEraseBkgnd = false;
       }
     }
   }
