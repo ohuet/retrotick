@@ -16,6 +16,28 @@ function bresenhamLine(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingC
   }
 }
 
+/** Stroke a dashed/dotted line (PS_DASH..PS_DASHDOTDOT) via setLineDash. */
+function dashedLine(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  x0: number, y0: number, x1: number, y1: number, css: string, style: number,
+): void {
+  ctx.save();
+  ctx.strokeStyle = css;
+  ctx.lineWidth = 1;
+  // PS_DASH=1, PS_DOT=2, PS_DASHDOT=3, PS_DASHDOTDOT=4
+  const dash = style === 2 ? [1, 1]
+    : style === 1 ? [3, 1]
+    : style === 3 ? [3, 1, 1, 1]
+    : [3, 1, 1, 1, 1, 1];
+  ctx.setLineDash(dash);
+  ctx.beginPath();
+  // +0.5 keeps a 1px axis-aligned line crisp on the canvas grid.
+  ctx.moveTo(x0 + 0.5, y0 + 0.5);
+  ctx.lineTo(x1 + 0.5, y1 + 0.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
 /** Bresenham line that also writes to the palette index buffer */
 function bresenhamLinePal(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -90,6 +112,8 @@ export function registerDraw(emu: Emulator): void {
           const palBuf = ensurePalIndexBuf(dc);
           const palIdx = getPaletteIdx(pen.color);
           bresenhamLinePal(dc.ctx, dc.penPosX, dc.penPosY, x, y, palBuf, cw, ch, palIdx + 1);
+        } else if (pen.style >= 1 && pen.style <= 4) {
+          dashedLine(dc.ctx, dc.penPosX, dc.penPosY, x, y, colorToCSS(pen.color), pen.style);
         } else {
           dc.ctx.fillStyle = colorToCSS(pen.color);
           bresenhamLine(dc.ctx, dc.penPosX, dc.penPosY, x, y);
