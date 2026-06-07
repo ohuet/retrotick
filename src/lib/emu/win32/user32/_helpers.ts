@@ -100,7 +100,13 @@ export function clampToMinTrackSize(emu: Emulator, hwnd: number, wnd: WindowInfo
 }
 
 export function getClientSize(style: number, hasMenu: boolean, totalW: number, totalH: number, win16 = false) {
-  const { bw, captionH, menuH } = getNonClientMetrics(style, hasMenu, win16);
+  // A child window's hMenu slot holds its control ID, not a menu handle, so
+  // callers pass hMenu!==0 as hasMenu — but children never have a menu bar.
+  // Without this guard every child window's client area loses a phantom menu
+  // row (~19px), which e.g. leaves a grey strip under a docked palette/toolbar.
+  const WS_CHILD = 0x40000000;
+  const menu = hasMenu && !(style & WS_CHILD);
+  const { bw, captionH, menuH } = getNonClientMetrics(style, menu, win16);
   return {
     cw: Math.max(1, totalW - 2 * bw),
     ch: Math.max(1, totalH - 2 * bw - captionH - menuH),

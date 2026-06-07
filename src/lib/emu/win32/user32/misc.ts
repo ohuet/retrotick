@@ -368,6 +368,58 @@ export function registerMisc(emu: Emulator): void {
         }
       }
 
+      // Reserve a bottom status bar's height. MFC's RepositionBars sometimes
+      // lays out the bottom dock bar and the side docks/view against the full
+      // client height without subtracting a bottom status bar, so they extend
+      // underneath it (the palette/F-keys end up partly hidden by the status
+      // bar). Pull the bottom dock up to rest on the status bar, then clamp the
+      // side docks / view to sit above it. Do this BEFORE the vertical-fill pass
+      // so a filled side pane uses the corrected (shorter) dock height.
+      {
+        const mainW = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (mainW?.childList) {
+          let statusTop = Infinity, statusHwnd = 0;
+          for (const ch of mainW.childList) {
+            const c = emu.handles.get<WindowInfo>(ch);
+            if (c?.visible && (c.classInfo?.className ?? '').toUpperCase() === 'MSCTLS_STATUSBAR32' && c.y < statusTop) {
+              statusTop = c.y; statusHwnd = ch;
+            }
+          }
+          if (statusHwnd && statusTop < Infinity) {
+            let limit = statusTop;
+            // Move the bottom dock up so it ends exactly at the status bar top.
+            for (const ch of mainW.childList) {
+              const c = emu.handles.get<WindowInfo>(ch);
+              if (!c || !c.visible || (c.controlId ?? 0) !== AFX_IDW_DOCKBAR_BOTTOM) continue;
+              if (c.y + c.height > statusTop) {
+                c.y = statusTop - c.height;
+                c.needsPaint = true; c.needsErase = true;
+                for (const cc of c.childList ?? []) {
+                  const w = emu.handles.get<WindowInfo>(cc);
+                  if (w) { w.needsPaint = true; w.needsErase = true; }
+                }
+              }
+              if (c.y < limit) limit = c.y;
+            }
+            // Clamp anything else that still reaches below the bottom dock top
+            // (the view and the left/right side docks).
+            for (const ch of mainW.childList) {
+              if (ch === statusHwnd) continue;
+              const c = emu.handles.get<WindowInfo>(ch);
+              if (!c || !c.visible || (c.controlId ?? 0) === AFX_IDW_DOCKBAR_BOTTOM) continue;
+              if (c.y < limit && c.y + c.height > limit) {
+                c.height = limit - c.y;
+                const cs = getClientSize(c.style, c.hMenu !== 0, c.width, c.height);
+                if (c.wndProc) {
+                  emu.callWndProc(c.wndProc, ch, 0x0005, 0, ((cs.ch & 0xFFFF) << 16) | (cs.cw & 0xFFFF)); // WM_SIZE
+                }
+                invalidateForResize(emu, c);
+              }
+            }
+          }
+        }
+      }
+
       // Stretch a sole "sizing" control bar to fill the HEIGHT of a left/right
       // dock bar (a docked preview/properties pane fills the whole side it's
       // docked to). Only LEFT/RIGHT (vertical) docks: a bar in a top/bottom
