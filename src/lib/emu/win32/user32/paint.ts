@@ -93,6 +93,61 @@ function drawNcScrollbars(emu: Emulator, hwnd: number): void {
   emu.syncDCToCanvas(emu.getWindowDC(hwnd));
 }
 
+// MFC dock-bar control IDs.
+const AFX_IDW_DOCKBAR_LEFT = 0xE81C;
+const AFX_IDW_DOCKBAR_RIGHT = 0xE81D;
+
+/**
+ * Draw the gripper caption (title strip + close X) of a CSizingControlBarG-style
+ * docked pane (e.g. PabloDraw's preview pane). Detected generically: the painted
+ * window's grandparent is a LEFT/RIGHT (vertical) AfxControlBar dock bar. The OS
+ * paints this NC chrome; the emulator's DefWindowProc doesn't, so the pane shows
+ * with no title bar. Drawn on the FRAME's DC at the inner view's EndPaint so the
+ * inner content doesn't paint over it.
+ */
+function drawControlBarCaption(emu: Emulator, innerHwnd: number): void {
+  const inner = emu.handles.get<WindowInfo>(innerHwnd);
+  if (!inner || !inner.parent) return;
+  const frame = emu.handles.get<WindowInfo>(inner.parent);
+  if (!frame || !frame.parent) return;
+  const dock = emu.handles.get<WindowInfo>(frame.parent);
+  if (!dock) return;
+  const cid = dock.controlId ?? 0;
+  if (cid !== AFX_IDW_DOCKBAR_LEFT && cid !== AFX_IDW_DOCKBAR_RIGHT) return;
+  const fcn = (frame.classInfo?.className ?? '').toUpperCase();
+  if (fcn.includes('TOOLBAR') || fcn.includes('REBAR')) return;
+
+  const dc = emu.getDC(emu.getWindowDC(inner.parent));
+  if (!dc) return;
+  const ctx = dc.ctx;
+  const cs = getClientSize(frame.style, frame.hMenu !== 0, frame.width, frame.height);
+  const w = cs.cw, capH = 13;
+  const face = cssOf(SYS_COLORS[COLOR_BTNFACE]);
+  const hi = cssOf(SYS_COLORS[COLOR_BTNHIGHLIGHT]);
+  const shd = cssOf(SYS_COLORS[COLOR_BTNSHADOW]);
+  // caption background
+  ctx.fillStyle = face; ctx.fillRect(0, 0, w, capH);
+  // two raised gripper lines on the left
+  for (let i = 0; i < 2; i++) {
+    const ly = 3 + i * 4;
+    ctx.fillStyle = hi; ctx.fillRect(2, ly, w - 16, 1);
+    ctx.fillStyle = shd; ctx.fillRect(2, ly + 1, w - 16, 1);
+  }
+  // close (X) button at top-right, raised
+  const bs = 11, bx = w - bs - 1, by = 1;
+  ctx.fillStyle = face; ctx.fillRect(bx, by, bs, bs);
+  ctx.fillStyle = hi; ctx.fillRect(bx, by, bs, 1); ctx.fillRect(bx, by, 1, bs);
+  ctx.fillStyle = shd; ctx.fillRect(bx, by + bs - 1, bs, 1); ctx.fillRect(bx + bs - 1, by, 1, bs);
+  ctx.fillStyle = '#000';
+  for (let i = 0; i < 5; i++) {
+    ctx.fillRect(bx + 3 + i, by + 3 + i, 1, 1);
+    ctx.fillRect(bx + 7 - i, by + 3 + i, 1, 1);
+  }
+  // bottom edge of the caption
+  ctx.fillStyle = shd; ctx.fillRect(0, capH - 1, w, 1);
+  emu.syncDCToCanvas(emu.getWindowDC(inner.parent));
+}
+
 export function registerPaint(emu: Emulator): void {
   const user32 = emu.registerDll('USER32.DLL');
 
@@ -174,6 +229,7 @@ export function registerPaint(emu: Emulator): void {
     if (wnd) wnd.paintRect = undefined;
     emu.endPaint(hwnd, 0);
     drawNcScrollbars(emu, hwnd);
+    drawControlBarCaption(emu, hwnd);
     return 1;
   });
 
