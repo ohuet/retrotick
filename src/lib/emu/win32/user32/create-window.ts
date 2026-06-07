@@ -58,8 +58,13 @@ export function registerCreateWindow(emu: Emulator): void {
     // is ~75% of the work area (Win32 docs: "system default size"), not a
     // hardcoded 320x240; small apps look right at small sizes, but framed MFC
     // apps with docked toolbars + a canvas (PabloDraw) need a real default.
-    const defaultW = Math.max(640, Math.floor((emu.screenWidth || 1024) * 0.75));
-    const defaultH = Math.max(480, Math.floor((emu.screenHeight || 768) * 0.75));
+    // Open framed apps wide enough that a typical document view (CScrollView)
+    // fits without a horizontal scrollbar: a too-small default makes the editor
+    // narrower than its content, forcing a scrollbar and clipping margin guides.
+    // Capped to the available desktop so it never exceeds the screen.
+    const sw0 = emu.screenWidth || 1024, sh0 = emu.screenHeight || 768;
+    const defaultW = Math.min(sw0, Math.max(1024, Math.floor(sw0 * 0.85)));
+    const defaultH = Math.min(sh0, Math.max(640, Math.floor(sh0 * 0.85)));
     if (x === (CW_USEDEFAULT | 0) && !(style & 0x40000000)) {
       const pos = cls.wndProc ? getNextCascadePos(emu.screenWidth, emu.screenHeight) : { x: 0, y: 0 };
       x = pos.x;
@@ -218,8 +223,13 @@ export function registerCreateWindow(emu: Emulator): void {
     // is ~75% of the work area (Win32 docs: "system default size"), not a
     // hardcoded 320x240; framed MFC apps need a real default.
     const WS_CHILD = 0x40000000;
-    const defaultW = Math.max(640, Math.floor((emu.screenWidth || 1024) * 0.75));
-    const defaultH = Math.max(480, Math.floor((emu.screenHeight || 768) * 0.75));
+    // Open framed apps wide enough that a typical document view (CScrollView)
+    // fits without a horizontal scrollbar: a too-small default makes the editor
+    // narrower than its content, forcing a scrollbar and clipping margin guides.
+    // Capped to the available desktop so it never exceeds the screen.
+    const sw0 = emu.screenWidth || 1024, sh0 = emu.screenHeight || 768;
+    const defaultW = Math.min(sw0, Math.max(1024, Math.floor(sw0 * 0.85)));
+    const defaultH = Math.min(sh0, Math.max(640, Math.floor(sh0 * 0.85)));
     if (x === (CW_USEDEFAULT | 0) && !(style & WS_CHILD)) {
       const pos = cls.wndProc ? getNextCascadePos(emu.screenWidth, emu.screenHeight) : { x: 0, y: 0 };
       x = pos.x;
