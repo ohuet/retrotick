@@ -93,6 +93,10 @@ export interface WindowInfo {
   // Min track size from WM_GETMINMAXINFO
   minTrackWidth?: number;
   minTrackHeight?: number;
+  // Scroll bar state (mirrored from scroll.ts) so the non-client scrollbar can
+  // be rendered. nBar SB_HORZ=0 -> scrollH, SB_VERT=1 -> scrollV.
+  scrollH?: { nMin: number; nMax: number; nPage: number; nPos: number };
+  scrollV?: { nMin: number; nMax: number; nPage: number; nPos: number };
   // Cached heap buffers for LVM_REDRAWITEMS
   _redrawNm?: number;
   _redrawTextBuf?: number;
