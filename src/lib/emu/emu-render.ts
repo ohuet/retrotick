@@ -246,10 +246,22 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
       }
       if (emu.isNE) {
         emu.callWndProc16(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win16 PASCAL)
+        child.needsPaint = false;
       } else {
         emu.callWndProc(child.wndProc, childHwnd, 0x000F, 0, 0); // WM_PAINT (Win32 stdcall)
+        // Leave needsPaint set, and request an erase, so the message loop also
+        // delivers a REAL WM_ERASEBKGND + WM_PAINT via synthesizePaint. MFC
+        // routes these to OnEraseBkgnd/OnDraw only through a genuine
+        // GetMessage→DispatchMessage cycle; the forced call above is a no-op for
+        // deeply-nested MFC views (e.g. a docked CScrollView preview pane), so
+        // without the real delivery they never paint their background. The erase
+        // is where MFC views fill their background (the preview's black). This
+        // only runs on the parent frame's paint cycles (rare), not on the
+        // editor's per-cell caret-blink repaints, so it does not reintroduce the
+        // blink-timer repaint storm. BeginPaint clears needsPaint → exactly one
+        // real paint per frame-paint cycle (no storm).
+        child.needsErase = true;
       }
-      child.needsPaint = false;
     }
     // Built-in ToolbarWindow32 paint must run AFTER any MFC subclass WM_PAINT
     // so our button bitmaps overlay MFC's stock chrome (gripper + grey base).
