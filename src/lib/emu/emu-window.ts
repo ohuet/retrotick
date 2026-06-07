@@ -845,6 +845,20 @@ export function loadCursorResourceByName(emu: Emulator, name: string): number {
   }
 }
 
+// Standard MFC framework strings (afxres.h). MFC apps that link the shared
+// MFC42.DLL load these by ID from MFC's own string table — which our MFC42 stub
+// does not carry. CFrameWnd::SetMessageText(AFX_IDS_IDLEMESSAGE) puts "Ready" in
+// status-bar pane 0 during idle; without it the pane stays blank. These IDs live
+// in the reserved AFX range (0xE000+) so they never collide with an app's own
+// string resources, and the app's table takes precedence when it defines one.
+const AFX_STD_STRINGS: Record<number, string> = {
+  0xE001: 'Ready',                                          // AFX_IDS_IDLEMESSAGE
+  0xE002: 'Select an object on which to get Help',          // AFX_IDS_HELPMODEMESSAGE
+};
+
 export function loadStringResource(emu: Emulator, id: number): string | null {
-  return emu.stringCache.get(id) || null;
+  const cached = emu.stringCache.get(id);
+  if (cached !== undefined) return cached;
+  if (id in AFX_STD_STRINGS) return AFX_STD_STRINGS[id];
+  return null;
 }
