@@ -286,8 +286,12 @@ export function beginPaint(emu: Emulator, hwnd: number): number {
   applyClipChildren(emu, hwnd, wnd, hdc);
 
   // Erase background: for dialogs, use COLOR_BTNFACE (WM_CTLCOLORDLG default);
-  // for regular windows, use the class brush
-  if (wnd) {
+  // for regular windows, use the class brush. Real BeginPaint erases ONLY when
+  // the update region was invalidated with bErase=TRUE, and only the update
+  // region itself — a partial bErase=FALSE invalidation (e.g. a caret-blink
+  // cell) must NOT wipe the rest of the window, or content drawn during
+  // WM_ERASEBKGND (custom guides, grids) flickers at every blink tick.
+  if (wnd && hadErase) {
     const dc = getDC(emu, hdc);
     if (dc) {
       const isDialog = wnd.classInfo.className === '#32770' || !!wnd.dlgProc;
@@ -300,8 +304,18 @@ export function beginPaint(emu: Emulator, hwnd: number): number {
       }
       if (bgColor !== null) {
         const r = bgColor & 0xFF, g = (bgColor >> 8) & 0xFF, b = (bgColor >> 16) & 0xFF;
+        // Clip the erase to the accumulated invalid rect (still intact here —
+        // the BeginPaint API handler consumes it into paintRect afterwards).
+        let el = 0, et = 0, er = wnd.width, eb = wnd.height;
+        const ir = wnd.invalidRect;
+        if (ir) {
+          el = Math.max(0, ir.l); et = Math.max(0, ir.t);
+          er = Math.min(wnd.width, ir.r); eb = Math.min(wnd.height, ir.b);
+          if (er < el) er = el;
+          if (eb < et) eb = et;
+        }
         dc.ctx.fillStyle = `rgb(${r},${g},${b})`;
-        dc.ctx.fillRect(0, 0, wnd.width, wnd.height);
+        dc.ctx.fillRect(el, et, er - el, eb - et);
       }
     }
 

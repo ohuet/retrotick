@@ -5,36 +5,14 @@ import { RegistryStore } from '../src/lib/registry-store.ts';
 import { ProfileStore } from '../src/lib/profile-store.ts';
 
 const noop = () => {};
-const mockCtx = {
-  fillRect: noop, clearRect: noop, strokeRect: noop,
-  fillText: noop, strokeText: noop, measureText: () => ({ width: 8 }),
-  drawImage: noop, putImageData: noop, getImageData: () => ({ data: new Uint8ClampedArray(4) }),
-  createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h }),
-  save: noop, restore: noop, translate: noop, scale: noop, rotate: noop,
-  setTransform: noop, resetTransform: noop, transform: noop,
-  beginPath: noop, closePath: noop, moveTo: noop, lineTo: noop,
-  arc: noop, arcTo: noop, rect: noop, ellipse: noop,
-  fill: noop, stroke: noop, clip: noop,
-  createLinearGradient: () => ({ addColorStop: noop }),
-  createRadialGradient: () => ({ addColorStop: noop }),
-  createPattern: () => null,
-  font: '', textAlign: 'left', textBaseline: 'top',
-  fillStyle: '', strokeStyle: '', lineWidth: 1, lineCap: 'butt', lineJoin: 'miter',
-  globalAlpha: 1, globalCompositeOperation: 'source-over',
-  imageSmoothingEnabled: true, shadowBlur: 0, shadowColor: 'transparent',
-  canvas: null,
-};
-const mockCanvas = {
-  width: 800, height: 600,
-  getContext: () => mockCtx,
-  toDataURL: () => 'data:image/png;base64,',
-  addEventListener: noop, removeEventListener: noop,
-  style: { cursor: 'default' },
-  parentElement: { style: { cursor: 'default' } },
-};
-mockCtx.canvas = mockCanvas;
-globalThis.document = { createElement: () => mockCanvas, title: '' };
-globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; } getContext() { return { ...mockCtx, canvas: this }; } };
+// Size-correct mocks (same shape as the diag-pablo-*.mjs harnesses): the old
+// getImageData returned a fixed 4-byte buffer, which faults canvas-preserving
+// resize paths mid-boot and silently halts the emulator before the click.
+function makeCtx(c){return{fillRect:noop,clearRect:noop,strokeRect:noop,fillText:noop,strokeText:noop,measureText:()=>({width:8}),drawImage:noop,putImageData:noop,getImageData:(x,y,w,h)=>({data:new Uint8ClampedArray(Math.max(1,w|0)*Math.max(1,h|0)*4),width:w,height:h}),createImageData:(w,h)=>({data:new Uint8ClampedArray(Math.max(1,w|0)*Math.max(1,h|0)*4),width:w,height:h}),save:noop,restore:noop,translate:noop,scale:noop,rotate:noop,setTransform:noop,resetTransform:noop,transform:noop,getTransform:()=>({a:1,b:0,c:0,d:1,e:0,f:0}),beginPath:noop,closePath:noop,moveTo:noop,lineTo:noop,arc:noop,arcTo:noop,rect:noop,ellipse:noop,fill:noop,stroke:noop,clip:noop,setLineDash:noop,getLineDash:()=>[],createLinearGradient:()=>({addColorStop:noop}),createRadialGradient:()=>({addColorStop:noop}),createPattern:()=>null,font:'',textAlign:'left',textBaseline:'top',fillStyle:'',strokeStyle:'',lineWidth:1,globalAlpha:1,canvas:c};}
+function makeCanvas(w,h){const c={width:w??800,height:h??600,toDataURL:()=>'',addEventListener:noop,removeEventListener:noop,style:{cursor:'default'},parentElement:{style:{cursor:'default'}}};c.getContext=()=>makeCtx(c);return c;}
+const mockCanvas = makeCanvas(800, 600);
+globalThis.document = { createElement: () => makeCanvas(800, 600), title: '' };
+globalThis.OffscreenCanvas = class { constructor(w, h) { Object.assign(this, makeCanvas(w, h)); this.width = w; this.height = h; } };
 globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
 globalThis.Image = class { set src(_) {} };
 globalThis.URL = { createObjectURL: () => 'blob:mock', revokeObjectURL: noop };

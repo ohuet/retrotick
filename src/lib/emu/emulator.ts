@@ -1261,6 +1261,19 @@ export class Emulator {
         return;
       }
     }
+    if (message === 0x0200) { // WM_MOUSEMOVE
+      // Coalesce: Windows never queues multiple mouse moves — the queue holds
+      // only the latest position. Without this, a fast pointermove stream
+      // floods the queue faster than the emulated wndProc drains it, and
+      // clicks queued behind hundreds of moves respond seconds late. Only the
+      // TRAILING entry is replaced so ordering vs button events is preserved.
+      const last = queue.length > 0 ? queue[queue.length - 1] : null;
+      if (last && last.message === 0x0200 && last.hwnd === hwnd) {
+        last.wParam = wParam;
+        last.lParam = lParam;
+        return;
+      }
+    }
     queue.push({ hwnd, message, wParam, lParam });
     if (onAvail) {
       if (targetThread) targetThread._onMessageAvailable = null;
