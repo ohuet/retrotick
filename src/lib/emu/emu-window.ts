@@ -126,6 +126,72 @@ function getWindowOrigin(emu: Emulator, hwnd: number): { x: number; y: number } 
   return { x, y };
 }
 
+/**
+ * Clip out the canvas rects of visible windows ABOVE this one in z-order
+ * (later siblings in each ancestor's childList) — the shared-canvas
+ * equivalent of Windows compositing. Without this, two overlapping sibling
+ * windows each repaint their full rect at independent times (caret blinks,
+ * partial invalidations) and the overlap pixels alternate between the two
+ * painters, which shows up as flicker along the boundary.
+ * Coordinates are local to the window: the caller has already set the DC
+ * transform so local (0,0) maps to canvas (origin.x, origin.y + ccsYOffset).
+ */
+function clipUpperSiblings(
+  emu: Emulator,
+  hwnd: number,
+  wnd: WindowInfo,
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  origin: { x: number; y: number },
+  ccsYOffset: number,
+): void {
+  const excl: { x: number; y: number; w: number; h: number }[] = [];
+  // A sibling's children may stick out of the sibling's own rect (e.g. MFC
+  // sizing control bars created at (-2,-2) inside their dock bar), so exclude
+  // the visible DESCENDANT rects too, not just the sibling rect itself.
+  const pushWithDescendants = (h: number, depth: number): void => {
+    const w = emu.handles.get<WindowInfo>(h);
+    if (!w || !w.visible || depth > 8) return;
+    if (w.width > 0 && w.height > 0) {
+      const o = getWindowOrigin(emu, h);
+      excl.push({ x: o.x, y: o.y, w: w.width, h: w.height });
+    }
+    if (w.childList) {
+      for (const ch of w.childList) pushWithDescendants(ch, depth + 1);
+    }
+  };
+  let cur = hwnd;
+  let guard = 0;
+  while (cur && cur !== emu.mainWindow && guard++ < 32) {
+    const w = emu.handles.get<WindowInfo>(cur);
+    if (!w || !w.parent) break;
+    const p = emu.handles.get<WindowInfo>(w.parent);
+    if (p?.childList) {
+      const idx = p.childList.indexOf(cur);
+      if (idx >= 0) {
+        for (let i = idx + 1; i < p.childList.length; i++) {
+          pushWithDescendants(p.childList[i], 0);
+        }
+      }
+    }
+    cur = w.parent;
+  }
+  if (excl.length === 0) return;
+  // Single evenodd path: window rect minus upper-sibling rects.
+  ctx.beginPath();
+  ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
+  for (const r of excl) {
+    const lx = r.x - origin.x;
+    const ly = r.y - origin.y - ccsYOffset;
+    // Reverse winding for evenodd subtraction
+    ctx.moveTo(lx, ly);
+    ctx.lineTo(lx, ly + r.h);
+    ctx.lineTo(lx + r.w, ly + r.h);
+    ctx.lineTo(lx + r.w, ly);
+    ctx.closePath();
+  }
+  ctx.clip('evenodd');
+}
+
 export function getWindowDC(emu: Emulator, hwnd: number): number {
   const wnd = emu.handles.get<WindowInfo>(hwnd);
   const isDescendant = wnd && hwnd !== emu.mainWindow && isDescendantOfMain(emu, hwnd);
@@ -158,6 +224,7 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
       dc.ctx.beginPath();
       dc.ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
       dc.ctx.clip();
+      if (!isPopup) clipUpperSiblings(emu, hwnd, wnd, dc.ctx, origin, ccsYOffset);
       childDCSet.add(existing);
       return existing;
     }
@@ -222,6 +289,7 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
     ctx.beginPath();
     ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
     ctx.clip();
+    if (!isPopup) clipUpperSiblings(emu, hwnd, wnd, ctx, origin, ccsYOffset);
     // Fill CCS toolbar background — the DC is shifted down so the top strip
     // would otherwise show the canvas background color instead of BTNFACE.
     if (ccsYOffset > 0) {

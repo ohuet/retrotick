@@ -31,7 +31,8 @@ function drawNcScrollbars(emu: Emulator, hwnd: number): void {
   const hasV = !!sv && (sv.nMax - sv.nMin) > (sv.nPage | 0) && ((wnd.style & WS_VSCROLL) || sv.nPage > 0);
   const hasH = !!sh && (sh.nMax - sh.nMin) > (sh.nPage | 0) && ((wnd.style & WS_HSCROLL) || sh.nPage > 0);
   if (!hasV && !hasH) return;
-  const dc = emu.getDC(emu.getWindowDC(hwnd));
+  const hdc = emu.getWindowDC(hwnd);
+  const dc = emu.getDC(hdc);
   if (!dc) return;
   const ctx = dc.ctx;
   const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
@@ -90,7 +91,10 @@ function drawNcScrollbars(emu: Emulator, hwnd: number): void {
       raised(thumbX, y, thumbW, SBW);
     }
   }
-  emu.syncDCToCanvas(emu.getWindowDC(hwnd));
+  emu.syncDCToCanvas(hdc);
+  // Balance the save/clip armed by getWindowDC on the shared canvas — leaving
+  // it armed corrupts the save-stack ordering for the next window's DC arm.
+  emu.releaseChildDC(hdc);
 }
 
 // MFC dock-bar control IDs.
@@ -117,7 +121,8 @@ function drawControlBarCaption(emu: Emulator, innerHwnd: number): void {
   const fcn = (frame.classInfo?.className ?? '').toUpperCase();
   if (fcn.includes('TOOLBAR') || fcn.includes('REBAR')) return;
 
-  const dc = emu.getDC(emu.getWindowDC(inner.parent));
+  const hdcCap = emu.getWindowDC(inner.parent);
+  const dc = emu.getDC(hdcCap);
   if (!dc) return;
   const ctx = dc.ctx;
   const cs = getClientSize(frame.style, frame.hMenu !== 0, frame.width, frame.height);
@@ -145,7 +150,9 @@ function drawControlBarCaption(emu: Emulator, innerHwnd: number): void {
   }
   // bottom edge of the caption
   ctx.fillStyle = shd; ctx.fillRect(0, capH - 1, w, 1);
-  emu.syncDCToCanvas(emu.getWindowDC(inner.parent));
+  emu.syncDCToCanvas(hdcCap);
+  // Balance the save/clip armed by getWindowDC on the shared canvas.
+  emu.releaseChildDC(hdcCap);
 }
 
 export function registerPaint(emu: Emulator): void {
