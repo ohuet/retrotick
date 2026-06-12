@@ -62,15 +62,51 @@ export function registerMessage(emu: Emulator): void {
     return true;
   };
 
+  // hWnd filter matching, real-Windows semantics: 0 = any window of the
+  // thread; -1 = thread messages only (hwnd 0); otherwise the window itself
+  // or any of its descendants (GetMessage/PeekMessage retrieve messages for
+  // hWnd "or any of its children, as specified by IsChild").
+  const HWND_THREAD_ONLY = 0xFFFFFFFF;
+  const matchesHwndFilter = (filterHwnd: number, msgHwnd: number): boolean => {
+    if (filterHwnd === 0) return true;
+    if (filterHwnd === HWND_THREAD_ONLY) return msgHwnd === 0;
+    let cur = msgHwnd, guard = 0;
+    while (cur && guard++ < 64) {
+      if (cur === filterHwnd) return true;
+      cur = emu.handles.get<WindowInfo>(cur)?.parent || 0;
+    }
+    return false;
+  };
+
+  // Find the first queued message matching the filters. WM_QUIT bypasses
+  // them: real GetMessage returns it regardless of the hWnd/range filters
+  // (otherwise a modal loop pumping a specific hwnd would hang after
+  // PostQuitMessage), but only once no other matching message precedes it.
+  const findQueuedMessage = (filterHwnd: number, msgFilterMin: number, msgFilterMax: number): number => {
+    const hasFilter = msgFilterMin !== 0 || msgFilterMax !== 0;
+    let quitIdx = -1;
+    for (let i = 0; i < emu.messageQueue.length; i++) {
+      const msg = emu.messageQueue[i];
+      if (msg.message === WM_QUIT) { if (quitIdx < 0) quitIdx = i; continue; }
+      if (!matchesHwndFilter(filterHwnd, msg.hwnd)) continue;
+      if (hasFilter && (msg.message < msgFilterMin || msg.message > msgFilterMax)) continue;
+      return i;
+    }
+    return quitIdx;
+  };
+
   // Message loop
   // Synthesize WM_PAINT for windows that need repainting.
   // `consume` is true for calls that hand the message to the app for
   // processing (GetMessage, PeekMessage PM_REMOVE) and false for non-removing
   // peeks (PM_NOREMOVE), which must not affect pending-paint state.
-  const synthesizePaint = (consume: boolean): { hwnd: number; message: number; wParam: number; lParam: number } | null => {
+  // `filterHwnd` restricts synthesis to that window and its descendants, so a
+  // filtered pump can't steal (and mark consumed) another window's paint.
+  const synthesizePaint = (consume: boolean, filterHwnd = 0): { hwnd: number; message: number; wParam: number; lParam: number } | null => {
     // Check all windows for needsPaint flag
     for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
       if (!wnd || !wnd.needsPaint) continue;
+      if (!matchesHwndFilter(filterHwnd, handle)) continue;
       if (!isEffectivelyVisible(handle)) { wnd.needsPaint = false; wnd.needsErase = false; continue; }
       if (wnd.wndProc) {
         // Real Windows never queue-delivers WM_ERASEBKGND: BeginPaint sends it
@@ -122,28 +158,37 @@ export function registerMessage(emu: Emulator): void {
 
   user32.register('GetMessageA', 4, () => {
     const pMsg = emu.readArg(0);
-    const _hWnd = emu.readArg(1);
-    const _msgFilterMin = emu.readArg(2);
-    const _msgFilterMax = emu.readArg(3);
+    const hWnd = emu.readArg(1);
+    const msgFilterMin = emu.readArg(2);
+    const msgFilterMax = emu.readArg(3);
+    const hasFilter = msgFilterMin !== 0 || msgFilterMax !== 0;
+    const wantsPaint = !hasFilter || (WM_PAINT >= msgFilterMin && WM_PAINT <= msgFilterMax);
 
-    if (emu.messageQueue.length > 0) {
-      const msg = emu.messageQueue.shift()!;
-      writeMsgStruct(emu, pMsg, msg);
-      return msg.message === WM_QUIT ? 0 : 1;
+    const tryRetrieve = (): { hwnd: number; message: number; wParam: number; lParam: number } | null => {
+      const idx = findQueuedMessage(hWnd, msgFilterMin, msgFilterMax);
+      if (idx >= 0) return emu.messageQueue.splice(idx, 1)[0];
+      // Synthesize WM_PAINT if a matching window needs repainting
+      if (wantsPaint) return synthesizePaint(true, hWnd);
+      return null;
+    };
+
+    const first = tryRetrieve();
+    if (first) {
+      writeMsgStruct(emu, pMsg, first);
+      return first.message === WM_QUIT ? 0 : 1;
     }
 
-    // Synthesize WM_PAINT if any window needs repainting
-    const paintMsg = synthesizePaint(true);
-    if (paintMsg) {
-      writeMsgStruct(emu, pMsg, paintMsg);
-      return 1;
-    }
-
-    // Queue is empty — set up callback and wait
+    // No matching message — set up callback and wait. A posted message that
+    // does NOT match the filters must not wake the caller (real GetMessage
+    // keeps blocking), so re-arm until a matching one arrives.
     const stackBytes = emu._currentThunkStackBytes;
     emu.waitingForMessage = true;
-    emu._onMessageAvailable = () => {
-      const msg = emu.messageQueue.shift()!;
+    const onAvailable = (): void => {
+      const msg = tryRetrieve();
+      if (!msg) {
+        emu._onMessageAvailable = onAvailable;
+        return;
+      }
       writeMsgStruct(emu, pMsg, msg);
       emu.waitingForMessage = false;
       emuCompleteThunk(emu, msg.message === WM_QUIT ? 0 : 1, stackBytes);
@@ -151,6 +196,7 @@ export function registerMessage(emu: Emulator): void {
         requestAnimationFrame(emu.tick);
       }
     };
+    emu._onMessageAvailable = onAvailable;
     return undefined;
   });
 
@@ -161,12 +207,13 @@ export function registerMessage(emu: Emulator): void {
     const msgFilterMax = emu.readArg(3);
     const removeFlag = emu.readArg(4);
 
-    // Find first message matching the filter
+    // Find first message matching the filter (hWnd matches the window or any
+    // of its descendants, like real PeekMessage)
     const hasFilter = msgFilterMin !== 0 || msgFilterMax !== 0;
     let idx = -1;
     for (let i = 0; i < emu.messageQueue.length; i++) {
       const msg = emu.messageQueue[i];
-      if (hWnd !== 0 && msg.hwnd !== hWnd) continue;
+      if (!matchesHwndFilter(hWnd, msg.hwnd)) continue;
       if (hasFilter && (msg.message < msgFilterMin || msg.message > msgFilterMax)) continue;
       idx = i;
       break;
@@ -184,9 +231,10 @@ export function registerMessage(emu: Emulator): void {
     if (emu.wndProcDepth === 0) {
       // synthesizePaint only ever returns WM_PAINT — check the filter BEFORE
       // synthesizing so a consuming call can't mark a paint as delivered and
-      // then drop it on a filter mismatch.
+      // then drop it on a filter mismatch. The hWnd filter is passed through
+      // so a window-specific peek can't steal another window's paint.
       if (!hasFilter || (WM_PAINT >= msgFilterMin && WM_PAINT <= msgFilterMax)) {
-        const paintMsg = synthesizePaint((removeFlag & PM_REMOVE) !== 0);
+        const paintMsg = synthesizePaint((removeFlag & PM_REMOVE) !== 0, hWnd);
         if (paintMsg) {
           writeMsgStruct(emu, pMsg, paintMsg);
           return 1;

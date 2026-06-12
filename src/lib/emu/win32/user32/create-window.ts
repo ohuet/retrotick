@@ -464,12 +464,13 @@ export function registerCreateWindow(emu: Emulator): void {
     const wnd = emu.handles.get<WindowInfo>(hwnd);
     if (!wnd) return 0;
 
-    // Only send WM_PAINT if window needs repainting
-    if (wnd.needsPaint) {
-      if (wnd.needsErase) {
-        wnd.needsErase = false;
-        emu.callWndProc(wnd.wndProc, hwnd, WM_ERASEBKGND, emu.getWindowDC(hwnd), 0);
-      }
+    // Real UpdateWindow sends only WM_PAINT (synchronously, bypassing the
+    // queue) when the update region is non-empty. The erase belongs to
+    // BeginPaint, which dispatches WM_ERASEBKGND with the paint DC and
+    // releases it at EndPaint — leave needsErase set for it. Dispatching
+    // WM_ERASEBKGND here with a getWindowDC-armed wParam leaked the arm
+    // (save+clip on the shared canvas that nothing ever released).
+    if (wnd.needsPaint && wnd.wndProc) {
       emu.callWndProc(wnd.wndProc, hwnd, WM_PAINT, 0, 0);
     }
     return 1;
