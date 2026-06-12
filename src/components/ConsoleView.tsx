@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, useLayoutEffect } from 'preact/hooks';
 import { type Emulator, isFullwidth } from '../lib/emu/emulator';
-import { cp437ToChar } from '../lib/emu/cp437';
+import { cp437ToChar, unicodeToCp437 } from '../lib/emu/cp437';
 import { loadDosSettings } from '../lib/dos-settings';
 import { injectDosMouseEvent, drawGfxMouseCursor, getTextModeCursorOverride, getDisplayedTextCursor } from '../lib/emu/dos/mouse';
 
@@ -548,7 +548,10 @@ export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChang
         let scan = CODE_TO_SCANCODE[e.code];
         if (scan === undefined) scan = KEY_TO_SCANCODE[e.key];
         if (scan === undefined) return;
-        const browserChar = e.key.length === 1 ? e.key.charCodeAt(0) : undefined;
+        // DOS programs read OEM (CP437) bytes from the BIOS keyboard buffer,
+        // not Unicode code points — 'à' must arrive as 0x85, not U+00E0 (which
+        // CP437 renders as α). Map the browser's Unicode char to its CP437 byte.
+        const browserChar = e.key.length === 1 ? unicodeToCp437(e.key.codePointAt(0)!) : undefined;
         const isExtended = EXTENDED_NAV_CODES.has(e.code) || KEY_IS_EXTENDED.has(e.key);
         if (isExtended) emu.injectHwKey(0xE0);
         emu.injectHwKey(scan, browserChar);
@@ -869,7 +872,7 @@ export function ConsoleView({ emu, focused = true, zoom = 1, onScreenLayoutChang
       e.preventDefault();
       for (const ch of e.data) {
         const scan = CHAR_TO_SCANCODE[ch.toLowerCase()];
-        if (scan !== undefined) inject(scan, ch.charCodeAt(0));
+        if (scan !== undefined) inject(scan, unicodeToCp437(ch.codePointAt(0)!));
       }
     } else if (e.inputType === 'deleteContentBackward') {
       e.preventDefault();
