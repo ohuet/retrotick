@@ -321,15 +321,19 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
 const WS_CLIPCHILDREN = 0x02000000;
 
 function applyClipChildren(emu: Emulator, hwnd: number, wnd: WindowInfo | null, hdc: number): void {
-  if (!wnd || !(wnd.style & WS_CLIPCHILDREN) || !wnd.childList || hwnd !== emu.mainWindow) return;
+  // Any window with WS_CLIPCHILDREN (not just the main window): a parent must
+  // never erase/paint over its children's rects — e.g. an MFC sizing control
+  // bar's BTNFACE erase would grey out the docked view inside it.
+  if (!wnd || !(wnd.style & WS_CLIPCHILDREN) || !wnd.childList) return;
   const dc = getDC(emu, hdc);
   if (!dc) return;
 
-  // Collect visible child rects
+  // Collect visible child rects (coords are parent-client-relative — the same
+  // local space the DC transform maps for both the main window and children).
   const childRects: { x: number; y: number; w: number; h: number }[] = [];
   for (const childHwnd of wnd.childList) {
     const child = emu.handles.get<WindowInfo>(childHwnd);
-    if (!child || !child.visible) continue;
+    if (!child || !child.visible || child.width <= 0 || child.height <= 0) continue;
     childRects.push({ x: child.x, y: child.y, w: child.width, h: child.height });
   }
   if (childRects.length === 0) return;
@@ -337,21 +341,20 @@ function applyClipChildren(emu: Emulator, hwnd: number, wnd: WindowInfo | null, 
   dc.ctx.save();
   clipChildrenDCSet.add(hdc);
 
-  // Create a clip path that is the canvas rect minus child rects
-  // Using evenodd: outer rect CW + child rects CW will clip out the children
-  const cw = dc.canvas.width;
-  const ch = dc.canvas.height;
-  dc.ctx.beginPath();
-  dc.ctx.rect(0, 0, cw, ch);
+  // Subtract each child rect with its OWN evenodd clip (successive clips
+  // intersect = full area minus the UNION of child rects). One combined
+  // evenodd path breaks when child rects overlap each other: the doubly
+  // covered region flips back to paintable.
+  const seen = new Set<string>();
   for (const r of childRects) {
-    // Draw child rect in reverse winding (CCW) for evenodd clipping
-    dc.ctx.moveTo(r.x, r.y);
-    dc.ctx.lineTo(r.x, r.y + r.h);
-    dc.ctx.lineTo(r.x + r.w, r.y + r.h);
-    dc.ctx.lineTo(r.x + r.w, r.y);
-    dc.ctx.closePath();
+    const key = `${r.x},${r.y},${r.w},${r.h}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dc.ctx.beginPath();
+    dc.ctx.rect(-1e7, -1e7, 2e7, 2e7);
+    dc.ctx.rect(r.x, r.y, r.w, r.h);
+    dc.ctx.clip('evenodd');
   }
-  dc.ctx.clip('evenodd');
 }
 
 export function beginPaint(emu: Emulator, hwnd: number): number {
