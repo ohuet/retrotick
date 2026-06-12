@@ -292,6 +292,11 @@ export class Emulator {
   handles = new HandleTable();
   canvas: HTMLCanvasElement | null = null;
   canvasCtx: CanvasRenderingContext2D | null = null;
+  // Transparent overlay canvas over the DOM menu bar: receives window-relative
+  // GetWindowDC drawing that lands in the main window's non-client band
+  // (e.g. FreeCell paints "Cards Left" into its menu bar). Optional — without
+  // it, NC-band drawing is clipped out instead of polluting the client.
+  ncCanvas: HTMLCanvasElement | null = null;
   currentCursor = 0; // handle of current cursor
   glContext: GL1Context | null = null;
 

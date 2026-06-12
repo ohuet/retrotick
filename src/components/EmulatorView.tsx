@@ -381,6 +381,9 @@ function renderMdiChildOverlay(
 export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, commandLine, onStop, onFocus, onReady, onRunExe, onSetupEmulator, audioContext: sharedAudioContext, onTitleChange, onIconChange, onMinimize, onRegisterCloseHandler, processRegistry, zIndex = 100, focused = true, minimized: minimizedProp }: EmulatorViewProps) {
   const exeBaseName = exeName.split(/[/\\]/).pop() || exeName;
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Transparent overlay over the menu bar for window-relative NC drawing
+  // (GetWindowDC on the main window — e.g. FreeCell's "Cards Left" counter).
+  const ncCanvasRef = useRef<HTMLCanvasElement>(null);
   const emuRef = useRef<Emulator | null>(null);
   const [menus, setMenus] = useState<MenuResult[]>([]);
   const detectedLang = langToHtmlLang(detectPELanguageId(peInfo.resources)) || undefined;
@@ -663,6 +666,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       onSetupEmulator?.(emu);
 
+      emu.ncCanvas = ncCanvasRef.current;
       emuRef.current = emu;
       (globalThis as typeof globalThis & { __emu?: unknown }).__emu = emu;
       onRegisterCloseHandler?.(() => {
@@ -1277,11 +1281,16 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     } else {
       // Hit-test to find the correct child window and convert coordinates
       const hit = emu.windowFromPoint(x, y);
-      // Real Windows sends WM_MOUSEACTIVATE to the clicked window before the
-      // button message; MFC's CView::OnMouseActivate relies on it to SetFocus
-      // the view (which is how typing reaches the editor after a click).
-      if (msg === WM_LBUTTONDOWN || msg === WM_RBUTTONDOWN
-        || msg === WM_LBUTTONDBLCLK || msg === WM_RBUTTONDBLCLK) {
+      // Real Windows sends WM_MOUSEACTIVATE before the button message ONLY
+      // when the clicked window differs from the active window (Wine
+      // win32u/message.c: `if (msg->hwnd != info.hwndActive)`). Child views
+      // always get it (MFC CView::OnMouseActivate SetFocuses the view), but a
+      // click straight on the active top-level must NOT — apps like FreeCell
+      // answer MA_ACTIVATEANDEAT to swallow activation clicks, and sending it
+      // every time made them eat every click.
+      if ((msg === WM_LBUTTONDOWN || msg === WM_RBUTTONDOWN
+        || msg === WM_LBUTTONDBLCLK || msg === WM_RBUTTONDBLCLK)
+        && hit.hwnd !== emu.mainWindow) {
         emu.postMessage(hit.hwnd, WM_MOUSEACTIVATE, emu.mainWindow, (msg << 16) | HTCLIENT);
       }
       emu.postMessage(hit.hwnd, msg, wParam, makeLParam(hit.x, hit.y));
@@ -1683,7 +1692,19 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
         minimized={false}
         blocked={hasModalDialog}
         onBlockedClick={flashModal}
-        menus={<MenuBar menus={menus} onCommand={handleMenuCommand} onFocus={onFocus} onMenuOpen={handleMenuOpen} />}
+        menus={
+          <div style={{ position: 'relative' }}>
+            <MenuBar menus={menus} onCommand={handleMenuCommand} onFocus={onFocus} onMenuOpen={handleMenuOpen} />
+            <canvas
+              ref={(el: HTMLCanvasElement | null) => {
+                ncCanvasRef.current = el;
+                if (emuRef.current) emuRef.current.ncCanvas = el;
+              }}
+              height={19}
+              style={{ position: 'absolute', left: 0, top: 0, height: '19px', pointerEvents: 'none', imageRendering: 'pixelated' }}
+            />
+          </div>
+        }
         onClose={() => {
           const emu = emuRef.current;
           if (emu?.mainWindow) {

@@ -240,6 +240,57 @@ function dcArea(emu: Emulator, wnd: WindowInfo, origin: { x: number; y: number }
  */
 export function getWindowDC(emu: Emulator, hwnd: number, windowRelative = false): number {
   const wnd = emu.handles.get<WindowInfo>(hwnd);
+
+  // Window-relative DC on the MAIN window. Its non-client band (caption +
+  // menu) is rendered by the DOM shell, not the canvas — the canvas covers
+  // the client area only. Real GetWindowDC has its origin at the WINDOW
+  // corner, so app drawing aimed at the NC band (e.g. FreeCell's
+  // "Cards Left" counter painted next to its menu) must NOT land on the
+  // client canvas shifted down by the NC height. When the UI provides an NC
+  // overlay canvas (positioned over the menu bar), draw there; otherwise use
+  // the main canvas with the window origin so NC-band coordinates clip out.
+  if (windowRelative && wnd && hwnd === emu.mainWindow && emu.canvasCtx) {
+    // The menu can come from the window (hMenu) or from the class
+    // (lpszMenuName) — both reserve an SM_CYMENU band in the NC area.
+    const hasMenu = !!wnd.hMenu || !!wnd.classInfo?.menuName;
+    const { bw, captionH, menuH } = getNonClientMetrics(wnd.style, hasMenu, emu.isNE);
+    let hdcNc = (emu as any)._ncWindowDC as number | undefined;
+    let dc = hdcNc ? emu.handles.get<DCInfo>(hdcNc) : null;
+    if (!dc) {
+      dc = {
+        canvas: emu.canvas!, ctx: emu.canvasCtx, hwnd,
+        selectedBitmap: 0,
+        selectedPen: emu.isNE ? 0x8007 : 0x80000007,    // BLACK_PEN
+        selectedBrush: emu.isNE ? 0x8000 : 0x80000000,  // WHITE_BRUSH
+        selectedFont: 0, selectedPalette: 0,
+        textColor: 0, bkColor: 0xFFFFFF, bkMode: OPAQUE,
+        penPosX: 0, penPosY: 0, rop2: 13,
+      };
+      hdcNc = emu.handles.alloc('dc', dc);
+      (emu as any)._ncWindowDC = hdcNc;
+    }
+    if (emu.ncCanvas) {
+      // Dedicated overlay canvas over the menu bar; its top-left is the
+      // window's (bw, bw+captionH). Own context → a plain transform, no
+      // save/clip arming needed (ReleaseDC's releaseChildDC is a no-op).
+      if (emu.ncCanvas.width !== wnd.width) emu.ncCanvas.width = wnd.width;
+      dc.canvas = emu.ncCanvas;
+      dc.ctx = emu.ncCanvas.getContext('2d')!;
+      dc.ctx.imageSmoothingEnabled = false;
+      dc.ctx.setTransform(1, 0, 0, 1, -bw, -(bw + captionH));
+    } else {
+      // Shared client canvas: arm save+transform (window origin) so client-
+      // area drawing through a window DC still lands correctly and NC-band
+      // drawing clips out; balanced by ReleaseDC → releaseChildDC.
+      if (childDCSet.has(hdcNc!)) releaseChildDC(emu, hdcNc!);
+      dc.canvas = emu.canvas!;
+      dc.ctx = emu.canvasCtx;
+      dc.ctx.save();
+      dc.ctx.setTransform(1, 0, 0, 1, -bw, -(bw + captionH + menuH));
+      childDCSet.add(hdcNc!);
+    }
+    return hdcNc!;
+  }
   const isDescendant = wnd && hwnd !== emu.mainWindow && isDescendantOfMain(emu, hwnd);
   // Visible popup windows (not main, not descendant) also draw on the main canvas
   const isPopup = wnd && hwnd !== emu.mainWindow && !isDescendant && wnd.visible && emu.canvas && emu.canvasCtx;
