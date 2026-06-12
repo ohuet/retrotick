@@ -727,6 +727,10 @@ export class Emulator {
   glSyncYieldedThisFrame = false;
   glSyncAwaitingSwap = false;
   keyStates = new Set<number>(); // Currently pressed virtual key codes
+  // Toggle-key state (GetKeyState bit 0): VK_CAPITAL / VK_NUMLOCK / VK_SCROLL.
+  // NumLock starts on, matching a Windows desktop boot; synced to the host
+  // keyboard state on each key event when the browser exposes it.
+  keyToggles = new Set<number>([0x90 /* VK_NUMLOCK */]);
   configuredLcid = 0x0409; // Set from regional settings at load time
   windowDCs = new Map<number, number>();
   private timers = new Map<string, { jsTimer: number; elapse: number; timerFunc: number }>();

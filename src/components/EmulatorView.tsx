@@ -1329,6 +1329,17 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
       if (vk === undefined) return;
       e.preventDefault();
       emu.keyStates.add(vk);
+      // Mirror the host toggle-key state (GetKeyState bit 0)
+      if (e.getModifierState) {
+        const VK_CAPITAL = 0x14, VK_NUMLOCK = 0x90, VK_SCROLL = 0x91;
+        const syncToggle = (mod: string, tvk: number) => {
+          if (e.getModifierState(mod)) emu.keyToggles.add(tvk);
+          else emu.keyToggles.delete(tvk);
+        };
+        syncToggle('CapsLock', VK_CAPITAL);
+        syncToggle('NumLock', VK_NUMLOCK);
+        syncToggle('ScrollLock', VK_SCROLL);
+      }
       // lParam: repeat count (1) | scanCode << 16 | extended << 24 | previous state << 30
       const scanCode = e.keyCode & 0xFF;
       const lParam = 1 | (scanCode << 16);

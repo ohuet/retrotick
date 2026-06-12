@@ -48,7 +48,8 @@ export function registerInput(emu: Emulator): void {
   user32.register('ShowCursor', 1, () => 1);
   user32.register('GetKeyState', 1, () => {
     const vk = emu.readArg(0) & 0xFF;
-    return emu.keyStates.has(vk) ? 0x8000 : 0;
+    // Bit 15: key down; bit 0: toggle state (CAPS/NUM/SCROLL lock)
+    return (emu.keyStates.has(vk) ? 0x8000 : 0) | (emu.keyToggles.has(vk) ? 1 : 0);
   });
   user32.register('GetAsyncKeyState', 1, () => {
     const vk = emu.readArg(0) & 0xFF;
@@ -58,7 +59,7 @@ export function registerInput(emu: Emulator): void {
   user32.register('GetKeyboardState', 1, () => {
     const ptr = emu.readArg(0);
     for (let i = 0; i < 256; i++) {
-      emu.memory.writeU8(ptr + i, emu.keyStates.has(i) ? 0x80 : 0);
+      emu.memory.writeU8(ptr + i, (emu.keyStates.has(i) ? 0x80 : 0) | (emu.keyToggles.has(i) ? 1 : 0));
     }
     return 1;
   });

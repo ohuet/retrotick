@@ -1944,6 +1944,7 @@ export function registerMessage(emu: Emulator): void {
     if (cn === 'MSCTLS_STATUSBAR32') {
       const WM_SIZE = 0x0005;
       const WM_NCCREATE = 0x0081;
+      const WM_SETTEXT_SB = 0x000C;
       const SB_SETTEXTW = 0x040B;
       const SB_SETTEXTA = 0x0401;
       const SB_GETTEXTLENGTHA = 0x0403;
@@ -1988,10 +1989,52 @@ export function registerMessage(emu: Emulator): void {
         if (!wnd.statusTexts) wnd.statusTexts = [];
         return 1;
       }
+      // SB_GETBORDERS writes int[3]: horizontal border, vertical border, gap
+      // between parts. MFC's CStatusBar::UpdateAllPanes reads these into a
+      // stack array and bases every pane position on them — leaving the array
+      // unwritten fed stack garbage into SB_SETPARTS (broken pane layout).
+      if (message === SB_GETBORDERS) {
+        if (lParam) {
+          emu.memory.writeI32(lParam, 0);     // SM_CXBORDER-ish horizontal
+          emu.memory.writeI32(lParam + 4, 2); // vertical
+          emu.memory.writeI32(lParam + 8, 2); // gap between parts
+        }
+        return 1;
+      }
+      if (message === SB_GETPARTS) {
+        const parts = wnd.statusParts ?? [];
+        if (lParam) {
+          const n = Math.min(wParam, parts.length);
+          for (let i = 0; i < n; i++) emu.memory.writeI32(lParam + i * 4, parts[i]);
+        }
+        return parts.length;
+      }
+      if (message === SB_GETRECT) {
+        const parts = wnd.statusParts ?? [];
+        if (wParam >= parts.length || !lParam) return 0;
+        const left = wParam === 0 ? 0 : parts[wParam - 1];
+        const right = parts[wParam] === -1 ? wnd.width : parts[wParam];
+        emu.memory.writeI32(lParam, left);
+        emu.memory.writeI32(lParam + 4, 2);
+        emu.memory.writeI32(lParam + 8, right);
+        emu.memory.writeI32(lParam + 12, Math.max(2, wnd.height - 2));
+        return 1;
+      }
       if (message === SB_SETTEXTW) {
         const part = wParam & 0xFF;
         if (!wnd.statusTexts) wnd.statusTexts = [];
         wnd.statusTexts[part] = lParam ? emu.memory.readUTF16String(lParam) : '';
+        if (emu.notifyControlOverlays) emu.notifyControlOverlays();
+        return 1;
+      }
+      // The real control treats WM_SETTEXT as "set part 0 text" (non-simple
+      // mode) — SetWindowText(statusBar, ...) is the documented way to set the
+      // message pane for apps that don't subclass the control.
+      if (message === WM_SETTEXT_SB) {
+        if (!wnd.statusTexts) wnd.statusTexts = [];
+        const uni = (emu as any)._setTextUnicode ??
+          (lParam !== 0 && emu.memory.readU8(lParam) !== 0 && emu.memory.readU8(lParam + 1) === 0);
+        wnd.statusTexts[0] = lParam ? (uni ? emu.memory.readUTF16String(lParam) : emu.memory.readCString(lParam)) : '';
         if (emu.notifyControlOverlays) emu.notifyControlOverlays();
         return 1;
       }
@@ -2003,6 +2046,20 @@ export function registerMessage(emu: Emulator): void {
         return 1;
       }
       if (message === SB_SIMPLE) return 1;
+      const SB_GETTEXTW = 0x040D;
+      const SB_GETTEXTLENGTHW = 0x040C;
+      if (message === SB_GETTEXTLENGTHA || message === SB_GETTEXTLENGTHW) {
+        const t = wnd.statusTexts?.[wParam & 0xFF] ?? '';
+        return t.length; // LOWORD=length, HIWORD=uType(0)
+      }
+      if (message === SB_GETTEXTA || message === SB_GETTEXTW) {
+        const t = wnd.statusTexts?.[wParam & 0xFF] ?? '';
+        if (lParam) {
+          if (message === SB_GETTEXTW) emu.memory.writeUTF16String(lParam, t);
+          else emu.memory.writeCString(lParam, t);
+        }
+        return t.length;
+      }
       if (message >= 0x0400 && message < 0x0500) return 0;
     }
 

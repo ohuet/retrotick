@@ -1,7 +1,8 @@
 import type { Emulator } from '../../emulator';
 import type { WindowInfo } from './types';
+import { applyWindowText } from './_helpers';
 import {
-  WM_CLOSE, WM_DESTROY, WM_PAINT, WM_ERASEBKGND, WM_SYSCOMMAND,
+  WM_CLOSE, WM_DESTROY, WM_PAINT, WM_ERASEBKGND, WM_SYSCOMMAND, WM_SETTEXT,
   WM_NCCREATE, WM_NCDESTROY, WM_NCCALCSIZE, WM_NCPAINT, WM_NCACTIVATE,
   WM_GETMINMAXINFO, WM_SHOWWINDOW, WM_ACTIVATE, WM_SETCURSOR, WM_NCHITTEST,
   WM_WINDOWPOSCHANGING, WM_WINDOWPOSCHANGED, WM_ACTIVATEAPP, WM_SIZE,
@@ -90,6 +91,19 @@ export function registerWndProc(emu: Emulator): void {
         }
         emu.handles.free(hwnd);
         return 0;
+      }
+      case WM_SETTEXT: {
+        // Default WM_SETTEXT: store the title (SetWindowText only sends the
+        // message; the store happens here so a window that handles WM_SETTEXT
+        // itself keeps control). _setTextUnicode is set by SetWindowTextA/W
+        // for the duration of the send; fall back to a UTF-16 sniff.
+        const wnd = emu.handles.get<WindowInfo>(hwnd);
+        if (wnd && lParam) {
+          const uni = (emu as any)._setTextUnicode ??
+            (emu.memory.readU8(lParam) !== 0 && emu.memory.readU8(lParam + 1) === 0);
+          applyWindowText(emu, hwnd, wnd, uni ? emu.memory.readUTF16String(lParam) : emu.memory.readCString(lParam));
+        }
+        return 1;
       }
       case WM_NCCREATE:
         return 1;

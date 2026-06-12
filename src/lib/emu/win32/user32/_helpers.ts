@@ -18,6 +18,25 @@ export function invalidateForResize(emu: Emulator, wnd: WindowInfo): void {
   wnd.invalidRect = { l: 0, t: 0, r: cs.cw, b: cs.ch };
 }
 
+/**
+ * Store a window's new title and propagate the UI side effects (title bar,
+ * control overlays, parent repaint). This is what DefWindowProc does for
+ * WM_SETTEXT; SetWindowText itself only SENDS WM_SETTEXT, so a window that
+ * handles the message (e.g. MFC's CStatusBar routing it into pane 0) keeps
+ * full control over what the text means.
+ */
+export function applyWindowText(emu: Emulator, hwnd: number, wnd: WindowInfo, newTitle: string): void {
+  if (newTitle === wnd.title) return;
+  wnd.title = newTitle;
+  if (hwnd === emu.mainWindow) {
+    emu.onWindowChange?.(wnd);
+  } else if (wnd.parent && wnd.parent === emu.mainWindow) {
+    const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
+    if (parentWnd) parentWnd.needsPaint = true;
+  }
+  emu.notifyControlOverlays?.();
+}
+
 // Helper: write a WinMsg into a MSG struct at pMsg, filling pt from lParam for mouse messages
 export function writeMsgStruct(emu: Emulator, pMsg: number, msg: WinMsg): void {
   emu.memory.writeU32(pMsg, msg.hwnd);

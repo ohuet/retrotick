@@ -3,7 +3,8 @@ import { fillTextBitmap } from '../../emu-render';
 import { decodeMBCS, encodeMBCS } from '../../memory';
 import { formatString, stackArgReader, vaListArgReader } from '../../format';
 import type { WindowInfo } from './types';
-import { OPAQUE } from '../types';
+import { OPAQUE, WM_SETTEXT } from '../types';
+import { applyWindowText } from './_helpers';
 
 /** Process '&' prefix: strip '&' before accelerator char, '&&' becomes '&'.
  *  Returns { display, underlineIndex } where underlineIndex is the char to underline (-1 if none). */
@@ -101,46 +102,43 @@ export function registerText(emu: Emulator): void {
   const user32 = emu.registerDll('USER32.DLL');
 
   // SetWindowTextA
-  user32.register('SetWindowTextA', 2, () => {
+  // Real SetWindowText SENDS WM_SETTEXT to the window procedure; the title
+  // only changes if the proc lets DefWindowProc handle it. A subclassing app
+  // must see the message — e.g. MFC's CStatusBar routes the frame's message
+  // text ("Ready") into status pane 0 from its WM_SETTEXT handler. The
+  // _setTextUnicode flag tells the DefWindowProc/built-in handler how to read
+  // lParam (cleared after the synchronous send).
+  const setWindowText = (unicode: boolean) => {
     const hwnd = emu.readArg(0);
     const textPtr = emu.readArg(1);
     const wnd = emu.handles.get<WindowInfo>(hwnd);
-    if (wnd && textPtr) {
-      const newTitle = emu.memory.readCString(textPtr);
-      if (newTitle !== wnd.title) {
-        wnd.title = newTitle;
-        if (hwnd === emu.mainWindow) {
-          emu.onWindowChange?.(wnd);
-        } else if (wnd.parent && wnd.parent === emu.mainWindow) {
-          const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
-          if (parentWnd) { parentWnd.needsPaint = true; }
-        }
-        emu.notifyControlOverlays();
+    if (!wnd) return 0;
+    if (wnd.wndProc) {
+      (emu as any)._setTextUnicode = unicode;
+      try {
+        emu.callWndProc(wnd.wndProc, hwnd, WM_SETTEXT, 0, textPtr);
+      } finally {
+        (emu as any)._setTextUnicode = undefined;
+      }
+      return 1;
+    }
+    // Built-in window: same routing SendMessage would do, then default store.
+    if (emu.dispatchBuiltinMessage) {
+      (emu as any)._setTextUnicode = unicode;
+      try {
+        const builtin = emu.dispatchBuiltinMessage(hwnd, WM_SETTEXT, 0, textPtr, false);
+        if (builtin !== null) return 1;
+      } finally {
+        (emu as any)._setTextUnicode = undefined;
       }
     }
-    return 1;
-  });
-
-  // SetWindowTextW
-  user32.register('SetWindowTextW', 2, () => {
-    const hwnd = emu.readArg(0);
-    const textPtr = emu.readArg(1);
-    const wnd = emu.handles.get<WindowInfo>(hwnd);
-    if (wnd && textPtr) {
-      const newTitle = emu.memory.readUTF16String(textPtr);
-      if (newTitle !== wnd.title) {
-        wnd.title = newTitle;
-        if (hwnd === emu.mainWindow) {
-          emu.onWindowChange?.(wnd);
-        } else if (wnd.parent && wnd.parent === emu.mainWindow) {
-          const parentWnd = emu.handles.get<WindowInfo>(wnd.parent);
-          if (parentWnd) { parentWnd.needsPaint = true; }
-        }
-        emu.notifyControlOverlays();
-      }
+    if (textPtr) {
+      applyWindowText(emu, hwnd, wnd, unicode ? emu.memory.readUTF16String(textPtr) : emu.memory.readCString(textPtr));
     }
     return 1;
-  });
+  };
+  user32.register('SetWindowTextA', 2, () => setWindowText(false));
+  user32.register('SetWindowTextW', 2, () => setWindowText(true));
 
   // Helper: look up window title, falling back to process registry for cross-emulator hwnds
   function getWindowTitle(hwnd: number): string | undefined {
