@@ -12,7 +12,7 @@ import { WS_CAPTION, WS_DLGFRAME, WS_BORDER, WS_THICKFRAME, WM_GETMINMAXINFO } f
  * client unpainted (the "cut rectangle" symptom).
  */
 export function invalidateForResize(emu: Emulator, wnd: WindowInfo): void {
-  const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+  const cs = clientSizeOf(wnd);
   wnd.needsPaint = true;
   wnd.needsErase = true;
   wnd.invalidRect = { l: 0, t: 0, r: cs.cw, b: cs.ch };
@@ -42,10 +42,12 @@ export function writeMsgStruct(emu: Emulator, pMsg: number, msg: WinMsg): void {
 function clientToScreen(emu: Emulator, hwnd: number): { x: number; y: number } {
   const wnd = hwnd ? emu.handles.get<WindowInfo>(hwnd) : null;
   if (!wnd) return { x: 0, y: 0 };
+  // A custom WM_NCCALCSIZE margin insets the client origin within the window
+  const il = wnd.ncInset?.l ?? 0, it = wnd.ncInset?.t ?? 0;
   const WS_CHILD = 0x40000000;
   if (wnd.style & WS_CHILD) {
     const parentOrigin = clientToScreen(emu, wnd.parent || 0);
-    return { x: parentOrigin.x + wnd.x, y: parentOrigin.y + wnd.y };
+    return { x: parentOrigin.x + wnd.x + il, y: parentOrigin.y + wnd.y + it };
   }
   // Top-level: account for border and caption
   const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);

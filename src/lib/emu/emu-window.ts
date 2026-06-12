@@ -1,11 +1,11 @@
 import type { Emulator } from './emulator';
 import type { DCInfo, BitmapInfo, BrushInfo, PenInfo } from './win32/gdi32/index';
 import type { WindowInfo } from './win32/user32/index';
-import { OPAQUE, SYS_COLORS, COLOR_BTNFACE } from './win32/types';
+import { OPAQUE, SYS_COLORS, COLOR_BTNFACE, WM_NCPAINT } from './win32/types';
 import { decodeDib } from '../pe/decode-dib';
 import { rvaToFileOffset } from '../pe/read';
 import { renderChildControls } from './emu-render';
-import { getClientSize, getNonClientMetrics } from './win32/user32/_helpers';
+import { getClientSize, clientSizeOf, getNonClientMetrics } from './win32/user32/_helpers';
 import { emuFindResourceEntryForModule } from './emu-load';
 
 // WM_ERASEBKGND — dispatched from beginPaint so apps that override OnEraseBkgnd run.
@@ -215,7 +215,30 @@ function clipUpperSiblings(
   }
 }
 
-export function getWindowDC(emu: Emulator, hwnd: number): number {
+/**
+ * DC drawing area for a window: client-relative DCs of a window with a custom
+ * NC margin (ncInset) are offset to the client origin and sized to the client;
+ * everything else uses the window origin/size (client == window for plain
+ * children, and window-relative DCs always cover the full window).
+ */
+function dcArea(emu: Emulator, wnd: WindowInfo, origin: { x: number; y: number }, windowRelative: boolean) {
+  if (!windowRelative && wnd.ncInset) {
+    const { cw, ch } = clientSizeOf(wnd);
+    return { x: origin.x + wnd.ncInset.l, y: origin.y + wnd.ncInset.t, w: cw, h: ch };
+  }
+  return { x: origin.x, y: origin.y, w: wnd.width, h: wnd.height };
+}
+
+/**
+ * On real Windows, GetDC/BeginPaint DCs are CLIENT-relative; only GetWindowDC
+ * is window-relative. The two origins coincide except for windows whose own
+ * WM_NCCALCSIZE reserves a custom NC margin (wnd.ncInset) — for those, the
+ * client DC must be offset by the inset and clipped to the client area, or the
+ * app's client painting lands on (and erases) its own NC margin.
+ * `windowRelative` selects GetWindowDC semantics (origin at the window
+ * top-left, clip to the full window rect).
+ */
+export function getWindowDC(emu: Emulator, hwnd: number, windowRelative = false): number {
   const wnd = emu.handles.get<WindowInfo>(hwnd);
   const isDescendant = wnd && hwnd !== emu.mainWindow && isDescendantOfMain(emu, hwnd);
   // Visible popup windows (not main, not descendant) also draw on the main canvas
@@ -242,12 +265,13 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
       if (internalH && internalH > wnd.height) {
         ccsYOffset = Math.round((internalH - wnd.height) / 2);
       }
+      const a = dcArea(emu, wnd, origin, windowRelative);
       dc.ctx.save();
-      dc.ctx.setTransform(1, 0, 0, 1, origin.x, origin.y + ccsYOffset);
+      dc.ctx.setTransform(1, 0, 0, 1, a.x, a.y + ccsYOffset);
       dc.ctx.beginPath();
-      dc.ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
+      dc.ctx.rect(0, -ccsYOffset, a.w, a.h);
       dc.ctx.clip();
-      if (!isPopup) clipUpperSiblings(emu, hwnd, wnd, dc.ctx, origin, ccsYOffset);
+      if (!isPopup) clipUpperSiblings(emu, hwnd, wnd, dc.ctx, a, ccsYOffset);
       childDCSet.add(existing);
       return existing;
     }
@@ -307,12 +331,13 @@ export function getWindowDC(emu: Emulator, hwnd: number): number {
     if (internalH && internalH > wnd.height) {
       ccsYOffset = Math.round((internalH - wnd.height) / 2);
     }
+    const a = dcArea(emu, wnd, origin, windowRelative);
     ctx.save();
-    ctx.setTransform(1, 0, 0, 1, origin.x, origin.y + ccsYOffset);
+    ctx.setTransform(1, 0, 0, 1, a.x, a.y + ccsYOffset);
     ctx.beginPath();
-    ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
+    ctx.rect(0, -ccsYOffset, a.w, a.h);
     ctx.clip();
-    if (!isPopup) clipUpperSiblings(emu, hwnd, wnd, ctx, origin, ccsYOffset);
+    if (!isPopup) clipUpperSiblings(emu, hwnd, wnd, ctx, a, ccsYOffset);
     // Fill CCS toolbar background — the DC is shifted down so the top strip
     // would otherwise show the canvas background color instead of BTNFACE.
     if (ccsYOffset > 0) {
@@ -364,7 +389,46 @@ function applyClipChildren(emu: Emulator, hwnd: number, wnd: WindowInfo | null, 
   }
 }
 
+/**
+ * Paint the custom NC margin (ncInset) of a window: fill it with the class
+ * background (BTNFACE fallback) on a window-relative DC, then send WM_NCPAINT
+ * so the app draws its own NC chrome (e.g. CSizingControlBar edges/gripper).
+ * Real BeginPaint sends WM_NCPAINT when the update region includes the frame;
+ * without this the margin reserved by WM_NCCALCSIZE keeps stale pixels.
+ */
+function paintNcMargin(emu: Emulator, hwnd: number, wnd: WindowInfo): void {
+  const inset = wnd.ncInset!;
+  const hdc = getWindowDC(emu, hwnd, true);
+  const dc = getDC(emu, hdc);
+  if (dc) {
+    let bg = SYS_COLORS[COLOR_BTNFACE];
+    const brush = wnd.classInfo.hbrBackground ? getBrush(emu, wnd.classInfo.hbrBackground) : null;
+    if (brush && !brush.isNull) bg = brush.color;
+    dc.ctx.fillStyle = `rgb(${bg & 0xFF},${(bg >> 8) & 0xFF},${(bg >> 16) & 0xFF})`;
+    const w = wnd.width, h = wnd.height;
+    if (inset.t > 0) dc.ctx.fillRect(0, 0, w, inset.t);
+    if (inset.b > 0) dc.ctx.fillRect(0, h - inset.b, w, inset.b);
+    if (inset.l > 0) dc.ctx.fillRect(0, 0, inset.l, h);
+    if (inset.r > 0) dc.ctx.fillRect(w - inset.r, 0, inset.r, h);
+  }
+  releaseChildDC(emu, hdc);
+  if (wnd.wndProc && !(emu as any)._inNcPaint) {
+    (emu as any)._inNcPaint = true;
+    try {
+      emu.callWndProc(wnd.wndProc, hwnd, WM_NCPAINT, 1, 0);
+    } catch {
+      // An NC paint handler fault must not abort the paint cycle.
+    } finally {
+      (emu as any)._inNcPaint = false;
+    }
+  }
+}
+
 export function beginPaint(emu: Emulator, hwnd: number): number {
+  // A custom NC margin repaints with the window (sent before the client paint
+  // DC is armed, so the app's WM_NCPAINT GetWindowDC/ReleaseDC stays balanced).
+  const wndNc = emu.handles.get<WindowInfo>(hwnd);
+  if (wndNc?.ncInset && wndNc.needsErase) paintNcMargin(emu, hwnd, wndNc);
   const hdc = getWindowDC(emu, hwnd);
   // Validate the region — clear needsPaint to prevent infinite WM_PAINT loop
   const wnd = emu.handles.get<WindowInfo>(hwnd);

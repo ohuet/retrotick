@@ -1381,7 +1381,7 @@ export class Emulator {
   getDC(hdc: number): DCInfo | null { return _getDC(this, hdc); }
   promoteToMainWindow(hwnd: number, wnd: WindowInfo): void { _promoteToMainWindow(this, hwnd, wnd); }
   setupCanvasSize(cw: number, ch: number): void { _setupCanvasSize(this, cw, ch); }
-  getWindowDC(hwnd: number): number { return _getWindowDC(this, hwnd); }
+  getWindowDC(hwnd: number, windowRelative = false): number { return _getWindowDC(this, hwnd, windowRelative); }
   beginPaint(hwnd: number): number { return _beginPaint(this, hwnd); }
   endPaint(hwnd: number, hdc: number): void { _endPaint(this, hwnd, hdc); }
   renderChildControls(hwnd: number): void { _renderChildControls(this, hwnd); }

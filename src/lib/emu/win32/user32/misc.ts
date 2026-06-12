@@ -112,10 +112,12 @@ export function registerMisc(emu: Emulator): void {
   const WS_CHILD = 0x40000000;
   const clientOrigin = (wnd: WindowInfo | null): { x: number; y: number } => {
     if (!wnd) return { x: 0, y: 0 }; // desktop/screen
+    // A custom WM_NCCALCSIZE margin insets the client origin within the window
+    const il = wnd.ncInset?.l ?? 0, it = wnd.ncInset?.t ?? 0;
     if (wnd.style & WS_CHILD) {
       const parentWnd = wnd.parent ? emu.handles.get<WindowInfo>(wnd.parent) : null;
       const parentOrigin = clientOrigin(parentWnd);
-      return { x: parentOrigin.x + wnd.x, y: parentOrigin.y + wnd.y };
+      return { x: parentOrigin.x + wnd.x + il, y: parentOrigin.y + wnd.y + it };
     }
     // Top-level window: account for border and caption
     const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);

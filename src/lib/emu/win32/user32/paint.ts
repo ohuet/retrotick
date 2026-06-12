@@ -167,12 +167,14 @@ export function registerPaint(emu: Emulator): void {
 
   user32.register('GetDCEx', 3, () => {
     const hwnd = emu.readArg(0);
-    return emu.getWindowDC(hwnd);
+    const flags = emu.readArg(2);
+    const DCX_WINDOW = 0x00000001;
+    return emu.getWindowDC(hwnd, (flags & DCX_WINDOW) !== 0);
   });
 
   user32.register('GetWindowDC', 1, () => {
     const hwnd = emu.readArg(0);
-    return emu.getWindowDC(hwnd);
+    return emu.getWindowDC(hwnd, true);
   });
 
   user32.register('ReleaseDC', 2, () => {
