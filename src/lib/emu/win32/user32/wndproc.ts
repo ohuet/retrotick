@@ -5,6 +5,7 @@ import {
   WM_NCCREATE, WM_NCDESTROY, WM_NCCALCSIZE, WM_NCPAINT, WM_NCACTIVATE,
   WM_GETMINMAXINFO, WM_SHOWWINDOW, WM_ACTIVATE, WM_SETCURSOR, WM_NCHITTEST,
   WM_WINDOWPOSCHANGING, WM_WINDOWPOSCHANGED, WM_ACTIVATEAPP, WM_SIZE,
+  WM_MOUSEACTIVATE, MA_ACTIVATE,
   SC_CLOSE, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE,
   HTCLIENT, SYS_COLORS, COLOR_BTNFACE, IDCANCEL,
 } from '../types';
@@ -131,6 +132,11 @@ export function registerWndProc(emu: Emulator): void {
       }
       case WM_SETCURSOR:
         return 1;
+      case WM_MOUSEACTIVATE:
+        // Real DefWindowProc forwards to the parent then returns MA_ACTIVATE.
+        // MFC's CView::OnMouseActivate aborts (no SetFocus on the view) only
+        // on MA_NOACTIVATE/MA_NOACTIVATEANDEAT, so MA_ACTIVATE lets it focus.
+        return MA_ACTIVATE;
       case WM_ACTIVATE:
       case WM_ACTIVATEAPP:
       case WM_SHOWWINDOW:

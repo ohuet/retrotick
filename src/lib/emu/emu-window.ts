@@ -10,6 +10,8 @@ import { emuFindResourceEntryForModule } from './emu-load';
 
 // WM_ERASEBKGND — dispatched from beginPaint so apps that override OnEraseBkgnd run.
 const WM_ERASEBKGND = 0x0014;
+// WM_SETFOCUS — delivered on main-window promotion (activation gives focus).
+const WM_SETFOCUS = 0x0007;
 
 // Track DCs that have canvas state saved (child window translate)
 const childDCSet = new Set<number>();
@@ -57,6 +59,16 @@ export function promoteToMainWindow(emu: Emulator, hwnd: number, wnd: WindowInfo
         emu.canvasCtx.fillRect(0, 0, cw, ch);
       }
     }
+  }
+
+  // Activation gives the new top-level window keyboard focus (real Windows
+  // sends WM_SETFOCUS as part of activating it). Deliver via the queue so the
+  // app handles it in its message loop — MFC's CFrameWnd::OnSetFocus then
+  // forwards focus to its active view via SetFocus, which records the real
+  // focus target (emu.focusedWindow) used to route keyboard input.
+  if (emu.focusedWindow !== hwnd) {
+    emu.focusedWindow = hwnd;
+    if (wnd.wndProc) emu.postMessage(hwnd, WM_SETFOCUS, 0, 0);
   }
 
   emu.onWindowChange?.(wnd);
@@ -176,20 +188,24 @@ function clipUpperSiblings(
     cur = w.parent;
   }
   if (excl.length === 0) return;
-  // Single evenodd path: window rect minus upper-sibling rects.
-  ctx.beginPath();
-  ctx.rect(0, -ccsYOffset, wnd.width, wnd.height);
+  // Subtract each upper-window rect with its OWN evenodd clip (intersection of
+  // successive clips = window minus the UNION of the rects). A single evenodd
+  // path breaks when exclusion rects overlap each other — e.g. a dock pane and
+  // its same-sized inner view both excluded: the doubly-covered region flips
+  // even→odd→even and becomes paintable again, letting a lower window's
+  // scrollbar bleed through (the editor/preview boundary flicker).
+  const seen = new Set<string>();
   for (const r of excl) {
+    const key = `${r.x},${r.y},${r.w},${r.h}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const lx = r.x - origin.x;
     const ly = r.y - origin.y - ccsYOffset;
-    // Reverse winding for evenodd subtraction
-    ctx.moveTo(lx, ly);
-    ctx.lineTo(lx, ly + r.h);
-    ctx.lineTo(lx + r.w, ly + r.h);
-    ctx.lineTo(lx + r.w, ly);
-    ctx.closePath();
+    ctx.beginPath();
+    ctx.rect(-1e7, -1e7, 2e7, 2e7);
+    ctx.rect(lx, ly, r.w, r.h);
+    ctx.clip('evenodd');
   }
-  ctx.clip('evenodd');
 }
 
 export function getWindowDC(emu: Emulator, hwnd: number): number {

@@ -4,7 +4,7 @@ import { parsePE, parseCOM, extractMenus, extractIcons } from '../lib/pe';
 import { Emulator } from '../lib/emu/emulator';
 import type { DialogInfo, ControlOverlay, ProcessRegistry, CommonDialogRequest } from '../lib/emu/emulator';
 import type { WindowInfo } from '../lib/emu/win32/user32/index';
-import { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEMOVE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_COMMAND, WM_SYSCOMMAND, WM_SIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_CHAR, WM_INITMENU, WM_INITMENUPOPUP, MK_LBUTTON, MK_RBUTTON, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE } from '../lib/emu/win32/types';
+import { WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MOUSEMOVE, WM_LBUTTONDBLCLK, WM_RBUTTONDBLCLK, WM_COMMAND, WM_SYSCOMMAND, WM_SIZE, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_CHAR, WM_INITMENU, WM_INITMENUPOPUP, WM_MOUSEACTIVATE, MK_LBUTTON, MK_RBUTTON, HTCLIENT, SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE } from '../lib/emu/win32/types';
 import { MessageBox, MsgBoxIcon, MB_ICONERROR } from './win2k/MessageBox';
 import { MenuBar } from './win2k/MenuBar';
 import { Window, WS_DLGFRAME, WS_CAPTION, WS_SYSMENU, WS_THICKFRAME, WS_MINIMIZEBOX, WS_MAXIMIZEBOX, getBorderWidth } from './win2k/Window';
@@ -1277,6 +1277,13 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     } else {
       // Hit-test to find the correct child window and convert coordinates
       const hit = emu.windowFromPoint(x, y);
+      // Real Windows sends WM_MOUSEACTIVATE to the clicked window before the
+      // button message; MFC's CView::OnMouseActivate relies on it to SetFocus
+      // the view (which is how typing reaches the editor after a click).
+      if (msg === WM_LBUTTONDOWN || msg === WM_RBUTTONDOWN
+        || msg === WM_LBUTTONDBLCLK || msg === WM_RBUTTONDBLCLK) {
+        emu.postMessage(hit.hwnd, WM_MOUSEACTIVATE, emu.mainWindow, (msg << 16) | HTCLIENT);
+      }
       emu.postMessage(hit.hwnd, msg, wParam, makeLParam(hit.x, hit.y));
     }
   }, []);
