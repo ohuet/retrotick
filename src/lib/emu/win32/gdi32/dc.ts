@@ -1,7 +1,7 @@
 import type { Emulator } from '../../emulator';
 import type { DCInfo } from './types';
 import type { WindowInfo } from '../user32/types';
-import { OPAQUE } from '../types';
+import { OPAQUE, RGN_ERROR, SIMPLEREGION, COMPLEXREGION } from '../types';
 import { disableSmoothing } from './_helpers';
 import { getClientSize } from '../user32/_helpers';
 
@@ -264,7 +264,28 @@ export function registerDC(emu: Emulator): void {
 
   gdi32.register('SelectClipRgn', 2, () => 1);
   gdi32.register('ExtSelectClipRgn', 3, () => 1); // SIMPLEREGION
-  gdi32.register('ExcludeClipRect', 5, () => 1); // SIMPLEREGION
+
+  // ExcludeClipRect(hdc, l, t, r, b) — remove a rectangle from the clip
+  // region. Canvas equivalent: intersect with (everything minus the rect) via
+  // an evenodd clip. Apps rely on this to protect an area from subsequent
+  // painting — e.g. MFC control bars exclude their client rect in OnNcPaint
+  // before filling the whole window rect, so only the NC margin is painted;
+  // as a no-op stub, that fill covered the embedded view (grey preview pane).
+  gdi32.register('ExcludeClipRect', 5, () => {
+    const hdc = emu.readArg(0);
+    const left = emu.readArg(1) | 0;
+    const top = emu.readArg(2) | 0;
+    const right = emu.readArg(3) | 0;
+    const bottom = emu.readArg(4) | 0;
+    const dc = emu.getDC(hdc);
+    if (!dc) return RGN_ERROR;
+    if (right <= left || bottom <= top) return SIMPLEREGION; // empty rect: no change
+    dc.ctx.beginPath();
+    dc.ctx.rect(-1e7, -1e7, 2e7, 2e7);
+    dc.ctx.rect(left, top, right - left, bottom - top);
+    dc.ctx.clip('evenodd');
+    return COMPLEXREGION;
+  });
   gdi32.register('SelectClipPath', 2, () => 1);
   gdi32.register('OffsetClipRgn', 3, () => 1); // SIMPLEREGION
   gdi32.register('RectVisible', 2, () => 1); // visible

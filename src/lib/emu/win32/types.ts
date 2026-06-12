@@ -220,6 +220,12 @@ export const SM_CYVIRTUALSCREEN = 79;
 export const TRANSPARENT = 1;
 export const OPAQUE = 2;
 
+// Region complexity return values (clip functions)
+export const RGN_ERROR = 0;
+export const NULLREGION = 1;
+export const SIMPLEREGION = 2;
+export const COMPLEXREGION = 3;
+
 // MK flags for mouse messages
 export const MK_LBUTTON = 0x0001;
 export const MK_RBUTTON = 0x0002;
