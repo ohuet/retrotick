@@ -1,6 +1,6 @@
 import type { Emulator } from '../../emulator';
 import type { WindowInfo } from './types';
-import { getClientSize, clampToMinTrackSize, invalidateForResize } from './_helpers';
+import { getClientSize, clientSizeOf, computeNcInset, clampToMinTrackSize, invalidateForResize } from './_helpers';
 import { emuCompleteThunk } from '../../emu-exec';
 import {
   SM_CXSCREEN, SM_CYSCREEN, SM_CYMENU, SM_CYCAPTION, SM_CXBORDER, SM_CYBORDER,
@@ -276,7 +276,8 @@ export function registerMisc(emu: Emulator): void {
           wnd.width = clamped.w; wnd.height = clamped.h;
         }
         if (sizeChanged && wnd.wndProc) {
-          const cs = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+          computeNcInset(emu, e.hWnd, wnd);
+          const cs = clientSizeOf(wnd);
           const lParam = ((cs.ch & 0xFFFF) << 16) | (cs.cw & 0xFFFF);
           emu.callWndProc(wnd.wndProc, e.hWnd, 0x0005, 0, lParam); // WM_SIZE
         }
@@ -409,7 +410,8 @@ export function registerMisc(emu: Emulator): void {
               if (!c || !c.visible || (c.controlId ?? 0) === AFX_IDW_DOCKBAR_BOTTOM) continue;
               if (c.y < limit && c.y + c.height > limit) {
                 c.height = limit - c.y;
-                const cs = getClientSize(c.style, c.hMenu !== 0, c.width, c.height);
+                if (c.wndProc) computeNcInset(emu, ch, c);
+                const cs = clientSizeOf(c);
                 if (c.wndProc) {
                   emu.callWndProc(c.wndProc, ch, 0x0005, 0, ((cs.ch & 0xFFFF) << 16) | (cs.cw & 0xFFFF)); // WM_SIZE
                 }
@@ -440,7 +442,8 @@ export function registerMisc(emu: Emulator): void {
         const [chwnd, child] = fillable[0];
         if (!child || dock.height <= child.height) continue; // already fills
         child.height = dock.height;
-        const cs = getClientSize(child.style, child.hMenu !== 0, child.width, child.height);
+        if (child.wndProc) computeNcInset(emu, chwnd, child);
+        const cs = clientSizeOf(child);
         if (child.wndProc) {
           emu.callWndProc(child.wndProc, chwnd, 0x0005, 0, ((cs.ch & 0xFFFF) << 16) | (cs.cw & 0xFFFF)); // WM_SIZE
         }

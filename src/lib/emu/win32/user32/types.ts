@@ -46,6 +46,13 @@ export interface WindowInfo {
   // BeginPaint/ValidateRect — validate then, so the paint is delivered exactly
   // once per invalidation instead of looping forever.
   _paintSynthesized?: boolean;
+  // Client-area inset (margins from each window edge) reserved by the window's
+  // own WM_NCCALCSIZE handler, captured by computeNcInset. Set ONLY for windows
+  // that actually shrink the proposed rect (custom non-client areas — e.g. MFC
+  // CSizingControlBar grippers/edges); undefined for everything else, which
+  // falls back to the style-based getClientSize. Used by GetClientRect, the
+  // WM_SIZE client dimensions, and child-origin offset.
+  ncInset?: { l: number; t: number; r: number; b: number };
   // Accumulated invalid (dirty) region in client/device coords, unioned across
   // InvalidateRect calls. Captured into `paintRect` at BeginPaint so GetClipBox
   // can report the real update region instead of the whole window — apps that

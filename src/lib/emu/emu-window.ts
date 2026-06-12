@@ -129,9 +129,16 @@ function getWindowOrigin(emu: Emulator, hwnd: number): { x: number; y: number } 
     // Child windows are positioned relative to the parent's client area, so we need
     // to offset by the parent's non-client area (border + caption)
     if (parent && parent.hwnd !== emu.mainWindow) {
-      const { bw, captionH } = getNonClientMetrics(parent.style, !!parent.hMenu, emu.isNE);
-      x += bw;
-      y += bw + captionH;
+      if (parent.ncInset) {
+        // The parent reserved a custom non-client area via WM_NCCALCSIZE
+        // (e.g. a control bar's gripper/edges); its client origin is inset by it.
+        x += parent.ncInset.l;
+        y += parent.ncInset.t;
+      } else {
+        const { bw, captionH } = getNonClientMetrics(parent.style, !!parent.hMenu, emu.isNE);
+        x += bw;
+        y += bw + captionH;
+      }
     }
     cur = parent;
   }

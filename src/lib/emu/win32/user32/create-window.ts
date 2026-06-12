@@ -1,6 +1,6 @@
 import { type Emulator, getNextCascadePos } from '../../emulator';
 import type { WindowInfo } from './types';
-import { getClientSize, clampToMinTrackSize, invalidateForResize } from './_helpers';
+import { getClientSize, clientSizeOf, computeNcInset, clampToMinTrackSize, invalidateForResize } from './_helpers';
 import { buildMenuHandleTree } from './menu';
 import {
   WM_CREATE, WM_NCCREATE, WM_NCCALCSIZE, WM_SHOWWINDOW,
@@ -168,7 +168,9 @@ export function registerCreateWindow(emu: Emulator): void {
     // Use wnd.wndProc (not cls.wndProc) since WM_NCCREATE handler may subclass the window
     if (wnd.wndProc) {
       emu.callWndProc(wnd.wndProc, hwnd, WM_NCCREATE, 0, createStructAddr);
-      emu.callWndProc(wnd.wndProc, hwnd, WM_NCCALCSIZE, 0, 0);
+      // Real WM_NCCALCSIZE: pass the window rect, capture any custom client
+      // inset (control-bar grippers/edges) the handler reserves.
+      computeNcInset(emu, hwnd, wnd);
     } else if (emu.dispatchBuiltinMessage) {
       // Built-in controls (msctls_statusbar32, toolbarwindow32, …) have
       // wndProc=0; callStdcall(0,…) returns 0 without dispatching, so their
@@ -323,7 +325,9 @@ export function registerCreateWindow(emu: Emulator): void {
 
     if (wnd.wndProc) {
       emu.callWndProc(wnd.wndProc, hwnd, WM_NCCREATE, 0, createStructAddr);
-      emu.callWndProc(wnd.wndProc, hwnd, WM_NCCALCSIZE, 0, 0);
+      // Real WM_NCCALCSIZE: pass the window rect, capture any custom client
+      // inset (control-bar grippers/edges) the handler reserves.
+      computeNcInset(emu, hwnd, wnd);
     } else if (emu.dispatchBuiltinMessage) {
       emu.dispatchBuiltinMessage(hwnd, WM_NCCREATE, 0, createStructAddr, true);
       emu.dispatchBuiltinMessage(hwnd, WM_NCCALCSIZE, 0, 0, true);
@@ -440,7 +444,7 @@ export function registerCreateWindow(emu: Emulator): void {
 
     // Send WM_SHOWWINDOW, WM_SIZE (with client area dims), WM_ACTIVATE
     emu.callWndProc(wnd.wndProc, hwnd, WM_SHOWWINDOW, wnd.visible ? 1 : 0, 0);
-    const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+    const { cw, ch } = clientSizeOf(wnd);
     emu.callWndProc(wnd.wndProc, hwnd, WM_SIZE, 0,
       ((ch & 0xFFFF) << 16) | (cw & 0xFFFF));
     if (wnd.visible) {
@@ -489,7 +493,8 @@ export function registerCreateWindow(emu: Emulator): void {
       const clamped = clampToMinTrackSize(emu, hwnd, wnd, w, h);
       const sizeChanged = wnd.width !== clamped.w || wnd.height !== clamped.h;
       wnd.x = x; wnd.y = y; wnd.width = clamped.w; wnd.height = clamped.h;
-      const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, clamped.w, clamped.h);
+      if (sizeChanged) computeNcInset(emu, hwnd, wnd);
+      const { cw, ch } = clientSizeOf(wnd);
       if (hwnd === emu.mainWindow) {
         emu.setupCanvasSize(cw, ch);
       }
@@ -555,7 +560,9 @@ export function registerCreateWindow(emu: Emulator): void {
     }
 
     if ((uFlags & SWP_FRAMECHANGED) || sizeChanged) {
-      const { cw, ch } = getClientSize(wnd.style, wnd.hMenu !== 0, wnd.width, wnd.height);
+      // A frame/size change can change the custom non-client inset; recompute.
+      if (((uFlags & SWP_FRAMECHANGED) || sizeChanged)) computeNcInset(emu, hwnd, wnd);
+      const { cw, ch } = clientSizeOf(wnd);
       if (hwnd === emu.mainWindow) {
         emu.setupCanvasSize(cw, ch);
         emu.onWindowChange?.(wnd);
