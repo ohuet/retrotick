@@ -63,19 +63,37 @@ export function registerMessage(emu: Emulator): void {
   };
 
   // Message loop
-  // Synthesize WM_PAINT for windows that need repainting
-  const synthesizePaint = (): { hwnd: number; message: number; wParam: number; lParam: number } | null => {
+  // Synthesize WM_PAINT for windows that need repainting.
+  // `consume` is true for calls that hand the message to the app for
+  // processing (GetMessage, PeekMessage PM_REMOVE) and false for non-removing
+  // peeks (PM_NOREMOVE), which must not affect pending-paint state.
+  const synthesizePaint = (consume: boolean): { hwnd: number; message: number; wParam: number; lParam: number } | null => {
     // Check all windows for needsPaint flag
     for (const [handle, wnd] of emu.handles.findByType('window') as [number, WindowInfo][]) {
       if (!wnd || !wnd.needsPaint) continue;
       if (!isEffectivelyVisible(handle)) { wnd.needsPaint = false; wnd.needsErase = false; continue; }
       if (wnd.wndProc) {
-        if (wnd.needsErase) {
-          wnd.needsErase = false;
-          return { hwnd: handle, message: WM_ERASEBKGND, wParam: emu.getWindowDC(handle), lParam: 0 };
+        // Real Windows never queue-delivers WM_ERASEBKGND: BeginPaint sends it
+        // with the paint DC when the region was invalidated with bErase=TRUE,
+        // and EndPaint releases that DC. Synthesizing it here armed a child DC
+        // (getWindowDC save+clip on the shared canvas) that nothing released —
+        // the stale clip then intersected every later window's clip until
+        // painting was fully suppressed. Leave needsErase for beginPaint.
+        // Like real Windows, WM_PAINT stays pending until BeginPaint /
+        // ValidateRect validates the region — clearing needsPaint on synthesis
+        // lost the paint when the app peeked with PM_NOREMOVE first (MFC's
+        // CWinThread::Run idle loop) and only then called GetMessage. But if
+        // the app already consumed a WM_PAINT for this invalidation and never
+        // validated, validate now instead of re-delivering forever.
+        if (consume) {
+          if (wnd._paintSynthesized) {
+            wnd.needsPaint = false;
+            wnd.needsErase = false;
+            wnd._paintSynthesized = false;
+            continue;
+          }
+          wnd._paintSynthesized = true;
         }
-        // Clear needsPaint here to prevent infinite WM_PAINT if WndProc doesn't call BeginPaint
-        wnd.needsPaint = false;
         return { hwnd: handle, message: WM_PAINT, wParam: 0, lParam: 0 };
       }
       // Built-in windows (no wndProc) with a class brush: erase background directly
@@ -93,6 +111,8 @@ export function registerMessage(emu: Emulator): void {
             emu.syncDCToCanvas(hdc);
           }
         }
+        // Balance the save/clip armed by getWindowDC on the shared canvas
+        emu.releaseChildDC(hdc);
       } else {
         wnd.needsPaint = false;
       }
@@ -113,7 +133,7 @@ export function registerMessage(emu: Emulator): void {
     }
 
     // Synthesize WM_PAINT if any window needs repainting
-    const paintMsg = synthesizePaint();
+    const paintMsg = synthesizePaint(true);
     if (paintMsg) {
       writeMsgStruct(emu, pMsg, paintMsg);
       return 1;
@@ -162,9 +182,12 @@ export function registerMessage(emu: Emulator): void {
     // Only at the top-level message loop (depth 0) to avoid consuming WM_PAINT
     // prematurely during init or nested WndProc calls.
     if (emu.wndProcDepth === 0) {
-      const paintMsg = synthesizePaint();
-      if (paintMsg) {
-        if (!hasFilter || (paintMsg.message >= msgFilterMin && paintMsg.message <= msgFilterMax)) {
+      // synthesizePaint only ever returns WM_PAINT — check the filter BEFORE
+      // synthesizing so a consuming call can't mark a paint as delivered and
+      // then drop it on a filter mismatch.
+      if (!hasFilter || (WM_PAINT >= msgFilterMin && WM_PAINT <= msgFilterMax)) {
+        const paintMsg = synthesizePaint((removeFlag & PM_REMOVE) !== 0);
+        if (paintMsg) {
           writeMsgStruct(emu, pMsg, paintMsg);
           return 1;
         }
@@ -380,6 +403,16 @@ export function registerMessage(emu: Emulator): void {
     // (e.g. Delphi apps). Apps that do call BeginPaint already get overlays via endPaint.
     if (trackPaint && !emu._dispatchPaintUsedBeginPaint) {
       emu.notifyControlOverlays();
+    }
+
+    // WM_PAINT stays pending until validated (synthesizePaint no longer clears
+    // it). If the wndProc handled WM_PAINT without BeginPaint/ValidateRect the
+    // flag is still set here — validate now, like the system does, so the same
+    // WM_PAINT isn't re-synthesized forever.
+    if (message === WM_PAINT && wnd.needsPaint) {
+      wnd.needsPaint = false;
+      wnd.needsErase = false;
+      wnd._paintSynthesized = false;
     }
 
     return ret;

@@ -40,6 +40,12 @@ export interface WindowInfo {
   _odsSelected?: boolean;
   needsErase?: boolean;
   painting?: boolean;
+  // Set when a synthesized WM_PAINT for the current invalidation was handed to
+  // the app (GetMessage / PeekMessage PM_REMOVE). If it comes back to
+  // synthesizePaint still set, the app processed the message without
+  // BeginPaint/ValidateRect — validate then, so the paint is delivered exactly
+  // once per invalidation instead of looping forever.
+  _paintSynthesized?: boolean;
   // Accumulated invalid (dirty) region in client/device coords, unioned across
   // InvalidateRect calls. Captured into `paintRect` at BeginPaint so GetClipBox
   // can report the real update region instead of the whole window — apps that

@@ -279,6 +279,7 @@ export function registerPaint(emu: Emulator): void {
     if (wnd) {
       wnd.needsPaint = false;
       wnd.needsErase = false;
+      wnd._paintSynthesized = false;
       wnd.invalidRect = undefined;
     }
     return 1;

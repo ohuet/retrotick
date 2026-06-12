@@ -345,7 +345,7 @@ export function beginPaint(emu: Emulator, hwnd: number): number {
   // Capture the erase request before clearing it: real BeginPaint sends
   // WM_ERASEBKGND only when the update region was invalidated with bErase=TRUE.
   const hadErase = wnd?.needsErase ?? false;
-  if (wnd) { wnd.needsPaint = false; wnd.needsErase = false; wnd.painting = true; }
+  if (wnd) { wnd.needsPaint = false; wnd.needsErase = false; wnd._paintSynthesized = false; wnd.painting = true; }
   // Signal to DispatchMessage that BeginPaint was called (so it doesn't duplicate overlay notifications)
   emu._dispatchPaintUsedBeginPaint = true;
 
