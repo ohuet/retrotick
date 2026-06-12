@@ -17,9 +17,12 @@ import {
  *  computed by renderToolbar (emu-render.ts) : tbButtonSize cells laid out
  *  horizontally with TBSTYLE_SEP buttons used as spacers. Returns the clicked
  *  button's idCommand, or 0 if none / hidden / separator. */
-function toolbarHitTest(tb: WindowInfo, x: number, y: number): number {
+/** Client rect of toolbar button `index`, from the same layout walk as
+ *  toolbarHitTest/renderToolbar. Separators occupy their iBitmap width
+ *  (default 6), hidden buttons occupy nothing. Returns null if out of range. */
+function toolbarItemRect(tb: WindowInfo, index: number): { l: number; t: number; r: number; b: number } | null {
   const buttons = tb.tbButtons;
-  if (!buttons || buttons.length === 0) return 0;
+  if (!buttons || index < 0 || index >= buttons.length) return null;
   const TBSTATE_HIDDEN = 0x08;
   const TBSTYLE_SEP    = 0x01;
   let btnW = 22, btnH = 22;
@@ -27,18 +30,31 @@ function toolbarHitTest(tb: WindowInfo, x: number, y: number): number {
     btnW = tb.tbButtonSize & 0xFFFF;
     btnH = (tb.tbButtonSize >>> 16) & 0xFFFF;
   }
-  let cursorX = 2;
-  const cursorY = 2;
-  for (const b of buttons) {
+  let x = 2;
+  for (let i = 0; i < buttons.length; i++) {
+    const b = buttons[i];
+    const w = (b.fsState & TBSTATE_HIDDEN) ? 0
+      : (b.fsStyle & TBSTYLE_SEP) ? (b.iBitmap > 0 ? b.iBitmap : 6)
+      : btnW;
+    if (i === index) return { l: x, t: 2, r: x + w, b: 2 + btnH };
+    x += w;
+  }
+  return null;
+}
+
+function toolbarHitTest(tb: WindowInfo, x: number, y: number): number {
+  const buttons = tb.tbButtons;
+  if (!buttons || buttons.length === 0) return 0;
+  const TBSTATE_HIDDEN = 0x08;
+  const TBSTYLE_SEP    = 0x01;
+  for (let i = 0; i < buttons.length; i++) {
+    const b = buttons[i];
     if (b.fsState & TBSTATE_HIDDEN) continue;
-    if (b.fsStyle & TBSTYLE_SEP) {
-      cursorX += b.iBitmap > 0 ? b.iBitmap : 6;
-      continue;
-    }
-    if (x >= cursorX && x < cursorX + btnW && y >= cursorY && y < cursorY + btnH) {
+    if (b.fsStyle & TBSTYLE_SEP) continue;
+    const r = toolbarItemRect(tb, i);
+    if (r && x >= r.l && x < r.r && y >= r.t && y < r.b) {
       return b.idCommand >>> 0;
     }
-    cursorX += btnW;
   }
   return 0;
 }
@@ -2168,7 +2184,21 @@ export function registerMessage(emu: Emulator): void {
       if (message === TB_GETBITMAP) return 0;
       if (message === TB_GETBITMAPFLAGS) return 0;
       if (message === TB_CHANGEBITMAP) return 1;
-      if (message === TB_HITTEST) return -1;
+      if (message === TB_HITTEST) {
+        // lParam -> POINT in client coords; returns the button index, or a
+        // negative value when the point is not on a button.
+        if (!lParam) return -1;
+        const px = emu.memory.readI32(lParam);
+        const py = emu.memory.readI32(lParam + 4);
+        const TBSTYLE_SEP_HT = 0x01;
+        for (let i = 0; i < wnd.tbButtons.length; i++) {
+          const r = toolbarItemRect(wnd, i);
+          if (r && px >= r.l && px < r.r && py >= r.t && py < r.b) {
+            return (wnd.tbButtons[i].fsStyle & TBSTYLE_SEP_HT) ? -1 : i;
+          }
+        }
+        return -1;
+      }
       if (message === TB_COMMANDTOINDEX) {
         const idx = wnd.tbButtons.findIndex(b => b.idCommand === wParam);
         return idx;
@@ -2196,12 +2226,21 @@ export function registerMessage(emu: Emulator): void {
       if (message === TB_ISBUTTONENABLED || message === TB_ISBUTTONCHECKED || message === TB_ISBUTTONPRESSED ||
           message === TB_ISBUTTONHIDDEN || message === TB_ISBUTTONINDETERMINATE) return 0;
       if (message === TB_GETITEMRECT || message === TB_GETRECT) {
-        if (lParam) {
-          emu.memory.writeI32(lParam, 0);
-          emu.memory.writeI32(lParam + 4, 0);
-          emu.memory.writeI32(lParam + 8, 22);
-          emu.memory.writeI32(lParam + 12, 22);
-        }
+        // TB_GETITEMRECT takes a button INDEX, TB_GETRECT a command ID. The
+        // rect must be the button's REAL position: MFC's CToolBar::OnToolHitTest
+        // walks every button with TB_GETITEMRECT + PtInRect to decide whether a
+        // click hit a button — a fixed (0,0,22,22) answer made every click past
+        // the first button look like toolbar-void, which starts a CDockContext
+        // toolbar DRAG (modal tracking loop that swallows the WM_LBUTTONUP).
+        const idx = message === TB_GETRECT
+          ? wnd.tbButtons.findIndex(b => b.idCommand === wParam)
+          : wParam;
+        const r = toolbarItemRect(wnd, idx);
+        if (!r || !lParam) return 0;
+        emu.memory.writeI32(lParam, r.l);
+        emu.memory.writeI32(lParam + 4, r.t);
+        emu.memory.writeI32(lParam + 8, r.r);
+        emu.memory.writeI32(lParam + 12, r.b);
         return 1;
       }
       if (message === TB_GETMAXSIZE) {
