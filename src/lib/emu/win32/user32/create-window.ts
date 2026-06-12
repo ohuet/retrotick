@@ -9,6 +9,24 @@ import {
   CW_USEDEFAULT,
 } from '../types';
 
+// A top-level window of a built-in CONTROL class is never an app's main
+// window on real Windows — it's a utility/message-pump window (e.g. calc.exe
+// creates a top-level WS_VISIBLE EDIT named "CalcMsgPumpWnd" before its real
+// Calculator dialog). Promoting it steals the main-window slot from the real
+// frame/dialog that follows. (#32770 dialogs stay promotable — dialog-based
+// apps are legitimate.)
+const NEVER_MAIN_CLASSES = new Set([
+  'BUTTON', 'EDIT', 'STATIC', 'LISTBOX', 'COMBOBOX', 'SCROLLBAR',
+  'TOOLTIPS_CLASS32', 'MSCTLS_HOTKEY32', 'MSCTLS_TRACKBAR32',
+  'MSCTLS_PROGRESS32', 'MSCTLS_STATUSBAR32', 'MSCTLS_UPDOWN32',
+  'SYSTABCONTROL32', 'SYSLISTVIEW32', 'SYSTREEVIEW32', 'SYSHEADER32',
+  'SYSANIMATE32', 'SYSLINK', 'TOOLBARWINDOW32', 'REBARWINDOW32',
+  'RICHEDIT20W', 'RICHEDIT20A', 'RICHEDIT',
+]);
+export function isUtilityWindowClass(wnd: WindowInfo): boolean {
+  return NEVER_MAIN_CLASSES.has((wnd.classInfo?.className ?? '').toUpperCase());
+}
+
 export function registerCreateWindow(emu: Emulator): void {
   const user32 = emu.registerDll('USER32.DLL');
   const windowClasses = emu.windowClasses;
@@ -119,7 +137,8 @@ export function registerCreateWindow(emu: Emulator): void {
     }
 
     // Set as main window for parentless windows with actual size
-    if ((!hParent || hParent === 0) && width > 0 && height > 0 && emu.mainWindow === 0) {
+    if ((!hParent || hParent === 0) && width > 0 && height > 0 && emu.mainWindow === 0
+      && !isUtilityWindowClass(wnd)) {
       emu.promoteToMainWindow(hwnd, wnd);
     }
     // If current mainWindow is an invisible/zero-size WS_POPUP (e.g. Delphi TApplication),
@@ -285,7 +304,8 @@ export function registerCreateWindow(emu: Emulator): void {
       }
     }
 
-    if ((!hParent || hParent === 0) && width > 0 && height > 0 && emu.mainWindow === 0) {
+    if ((!hParent || hParent === 0) && width > 0 && height > 0 && emu.mainWindow === 0
+      && !isUtilityWindowClass(wnd)) {
       emu.promoteToMainWindow(hwnd, wnd);
     }
     const WS_POPUP_CW = 0x80000000;
@@ -405,7 +425,7 @@ export function registerCreateWindow(emu: Emulator): void {
     const WS_CHILD = 0x40000000;
     const WS_POPUP_SW = 0x80000000;
     if (wnd.visible && wnd.width > 0 && wnd.height > 0 && !(wnd.style & WS_CHILD)) {
-      if (emu.mainWindow === 0) {
+      if (emu.mainWindow === 0 && !isUtilityWindowClass(wnd)) {
         console.log(`[WND] ShowWindow promoting 0x${hwnd.toString(16)} to mainWindow`);
         emu.promoteToMainWindow(hwnd, wnd);
       } else if (!(wnd.style & WS_POPUP_SW) && hwnd !== emu.mainWindow) {
