@@ -1550,6 +1550,27 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   const hasModalDialog = !!(messageBoxes.length > 0 || dialogInfo || commonDialog);
   const parentFocused = focused && !hasModalDialog;
 
+  // Keyboard isolation from the desktop: the desktop div keeps DOM focus by
+  // default, so every keydown while typing into the emulator ALSO fired the
+  // desktop's onKeyDown (icon arrow-navigation, Enter re-launching the
+  // selected icon). Hold DOM focus on this window's root while it is the
+  // focused app — keydown events then target this div and never reach the
+  // desktop's handler. Form fields (DOM EDIT overlays, rename inputs) keep
+  // their focus: never steal from them.
+  const grabDomFocus = useCallback((e?: PointerEvent) => {
+    onFocus();
+    const target = (e?.target as HTMLElement | null) ?? null;
+    if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+    desktopRef.current?.focus({ preventScroll: true });
+  }, [onFocus]);
+
+  useEffect(() => {
+    if (!focused) return;
+    const ae = document.activeElement as HTMLElement | null;
+    if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName)) return;
+    desktopRef.current?.focus({ preventScroll: true });
+  }, [focused]);
+
   // Programs like winver.exe / ssmaze.scr /c have no main window — only show the message box / dialog
   if (!hasMainWindow && !isConsole && windowReady) {
     return (
@@ -1638,7 +1659,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
   void consoleLayoutBump; // dependency: re-evaluate when the layout changes
 
   return (
-    <div ref={desktopRef} style={{ position: 'absolute', left: `${windowPos.x}px`, top: `${windowPos.y}px`, zIndex, visibility: windowReady ? 'visible' : 'hidden', display: minimizedProp ? 'none' : undefined, touchAction: 'none' }} onPointerDown={onFocus}>
+    <div ref={desktopRef} tabIndex={-1} style={{ position: 'absolute', left: `${windowPos.x}px`, top: `${windowPos.y}px`, zIndex, visibility: windowReady ? 'visible' : 'hidden', display: minimizedProp ? 'none' : undefined, touchAction: 'none', outline: 'none' }} onPointerDown={grabDomFocus}>
       <Window
         title={windowTitle}
         style={windowStyle}
