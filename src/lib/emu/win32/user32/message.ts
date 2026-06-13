@@ -650,7 +650,13 @@ export function registerMessage(emu: Emulator): void {
     }
 
     if (message === WM_SETTEXT && lParam) {
-      const newTitle = wide ? emu.memory.readUTF16String(lParam) : emu.memory.readCString(lParam);
+      // SetWindowTextA/W routes here via DefWindowProc/DefDlgProc, but the shared
+      // dialog wndProc can't tell A from W, so `wide` defaults to false. Prefer
+      // the _setTextUnicode flag set by SetWindowTextA/W for the duration of the
+      // send; otherwise honour `wide`, then fall back to a UTF-16 byte sniff.
+      const uni = (emu as any)._setTextUnicode ??
+        (wide || (emu.memory.readU8(lParam) !== 0 && emu.memory.readU8(lParam + 1) === 0));
+      const newTitle = uni ? emu.memory.readUTF16String(lParam) : emu.memory.readCString(lParam);
       const cls = (wnd.classInfo?.baseClassName || wnd.classInfo?.className || '').toUpperCase();
       if (cls === 'EDIT') {
         console.log(`[EDIT] WM_SETTEXT hwnd=0x${hwnd.toString(16)} text="${newTitle}"`);
