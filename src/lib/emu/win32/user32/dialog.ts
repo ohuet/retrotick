@@ -5,7 +5,7 @@ import type { DialogTemplate } from '../../../pe/types';
 import { emuFindResourceEntryForModule } from '../../emu-load';
 import { emuCompleteThunk } from '../../emu-exec';
 import { renderChildControls } from '../../emu-render';
-import { IDCANCEL } from '../types';
+import { IDCANCEL, WS_VISIBLE } from '../types';
 import { getNonClientMetrics } from './_helpers';
 
 const RT_DIALOG = 5;
@@ -234,7 +234,11 @@ export function registerDialog(emu: Emulator): void {
         parent: hwnd,
         x: pxX, y: pxY, width: pxW, height: pxH,
         style: item.style, exStyle: item.exStyle,
-        title: item.text, visible: true, hMenu: 0,
+        // Honor the template's WS_VISIBLE bit: controls without it (e.g. Task
+        // Manager's spare per-CPU history graphs, shown later via ShowWindow
+        // based on processor count) must start hidden, not render at their
+        // template position and overflow the resized page.
+        title: item.text, visible: (item.style & WS_VISIBLE) !== 0, hMenu: 0,
         extraBytes: new Uint8Array(Math.max(0, ctrlCls.cbWndExtra)),
         userData: 0, controlId: item.id,
       };
@@ -657,7 +661,11 @@ export function registerDialog(emu: Emulator): void {
         parent: hwnd,
         x: pxX, y: pxY, width: pxW, height: pxH,
         style: item.style, exStyle: item.exStyle,
-        title: item.text, visible: true, hMenu: 0,
+        // Honor the template's WS_VISIBLE bit: controls without it (e.g. Task
+        // Manager's spare per-CPU history graphs, shown later via ShowWindow
+        // based on processor count) must start hidden, not render at their
+        // template position and overflow the resized page.
+        title: item.text, visible: (item.style & WS_VISIBLE) !== 0, hMenu: 0,
         extraBytes: new Uint8Array(Math.max(0, ctrlCls.cbWndExtra)),
         userData: 0, controlId: item.id,
       };
@@ -1095,7 +1103,11 @@ export function registerDialog(emu: Emulator): void {
         parent: hwnd,
         x: pxX, y: pxY, width: pxW, height: pxH,
         style: item.style, exStyle: item.exStyle,
-        title: item.text, visible: true, hMenu: 0,
+        // Honor the template's WS_VISIBLE bit: controls without it (e.g. Task
+        // Manager's spare per-CPU history graphs, shown later via ShowWindow
+        // based on processor count) must start hidden, not render at their
+        // template position and overflow the resized page.
+        title: item.text, visible: (item.style & WS_VISIBLE) !== 0, hMenu: 0,
         extraBytes: new Uint8Array(Math.max(0, ctrlCls.cbWndExtra)),
         userData: 0, controlId: item.id,
       };
