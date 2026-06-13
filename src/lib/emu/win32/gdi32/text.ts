@@ -431,7 +431,7 @@ export function registerText(emu: Emulator): void {
       text += String.fromCharCode(emu.memory.readU16(strPtr + i * 2));
     }
     const fontSize = getFontSize(hdc);
-    dc.ctx.font = getFontCSS(hdc);
+    applyFont(dc.ctx, getDCFont(emu, hdc));
     if (dc.bkMode === OPAQUE) {
       dc.ctx.fillStyle = colorToCSS(dc.bkColor);
       const m = dc.ctx.measureText(text);
