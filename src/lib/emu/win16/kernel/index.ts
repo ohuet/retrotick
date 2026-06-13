@@ -1,5 +1,6 @@
 import type { Emulator } from '../../emulator';
 import type { Win16Module } from '../../emulator';
+import type { LoadedNE } from '../../ne-loader';
 import { registerKernelMemory } from './memory';
 import { registerKernelFile } from './file';
 import { registerKernelModule } from './module';
@@ -26,6 +27,8 @@ export interface KernelState {
   atomTable: Map<number, string>;
   nextAtom: number;
   moduleHandles: Map<string, number>;
+  /** Reverse map: hInstance → LoadedNE so GetProcAddress can find exports. */
+  loadedDlls: Map<number, LoadedNE>;
   nextModuleHandle: number;
   savedStack: { ss: number; sp: number } | null;
   lastError: number;
@@ -45,7 +48,8 @@ export function registerWin16Kernel(emu: Emulator): void {
     atomTable: new Map(),
     nextAtom: 0xC000,
     moduleHandles: new Map(),
-    nextModuleHandle: 2,
+    loadedDlls: new Map(),
+    nextModuleHandle: 0x200,
     savedStack: null,
     lastError: 0,
   };

@@ -231,15 +231,28 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
     }
 
-    // Promote to mainWindow: skip WS_POPUP and re-promote if a window with
-    // WS_CAPTION is created after a bare WS_OVERLAPPED (hidden OLE/DDE windows)
-    if (hWndParent === 0 && !(dwStyle & 0x80000000)) { // not WS_POPUP
-      const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
-      const hasCaption = !!(dwStyle & 0x00C00000); // WS_CAPTION
-      const currentHasCaption = currentMain ? !!(currentMain.style & 0x00C00000) : false;
-      if (!emu.mainWindow || (!currentHasCaption && hasCaption)) {
-        const wnd = emu.handles.get<WindowInfo>(hwnd);
-        if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+    // Promote to mainWindow. Heuristic: prefer visible windows, then prefer ones
+    // with WS_CAPTION. Skip hidden WS_POPUP windows (typical OLE/DDE helpers)
+    // but allow visible WS_POPUP windows (e.g. custom-skinned media players that
+    // draw their own title bar and use WS_POPUP for their main window).
+    if (hWndParent === 0) {
+      const WS_POPUP = 0x80000000;
+      const WS_VISIBLE = 0x10000000;
+      const WS_CAPTION = 0x00C00000;
+      const isPopup = !!(dwStyle & WS_POPUP);
+      const isVisible = !!(dwStyle & WS_VISIBLE);
+      const hasCaption = !!(dwStyle & WS_CAPTION);
+      if (!isPopup || isVisible) {
+        const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
+        const currentVisible = currentMain ? !!(currentMain.style & WS_VISIBLE) : false;
+        const currentHasCaption = currentMain ? !!(currentMain.style & WS_CAPTION) : false;
+        const shouldPromote = !emu.mainWindow ||
+          (!currentVisible && isVisible) ||
+          (currentVisible === isVisible && !currentHasCaption && hasCaption);
+        if (shouldPromote) {
+          const wnd = emu.handles.get<WindowInfo>(hwnd);
+          if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+        }
       }
     }
 
@@ -889,15 +902,28 @@ export function registerWin16UserWindow(emu: Emulator, user: Win16Module, h: Win
       }
     }
 
-    // Promote to mainWindow: skip WS_POPUP and re-promote if a window with
-    // WS_CAPTION is created after a bare WS_OVERLAPPED (hidden OLE/DDE windows)
-    if (hWndParent === 0 && !(dwStyle & 0x80000000)) { // not WS_POPUP
-      const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
-      const hasCaption = !!(dwStyle & 0x00C00000); // WS_CAPTION
-      const currentHasCaption = currentMain ? !!(currentMain.style & 0x00C00000) : false;
-      if (!emu.mainWindow || (!currentHasCaption && hasCaption)) {
-        const wnd = emu.handles.get<WindowInfo>(hwnd);
-        if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+    // Promote to mainWindow. Heuristic: prefer visible windows, then prefer ones
+    // with WS_CAPTION. Skip hidden WS_POPUP windows (typical OLE/DDE helpers)
+    // but allow visible WS_POPUP windows (e.g. custom-skinned media players that
+    // draw their own title bar and use WS_POPUP for their main window).
+    if (hWndParent === 0) {
+      const WS_POPUP = 0x80000000;
+      const WS_VISIBLE = 0x10000000;
+      const WS_CAPTION = 0x00C00000;
+      const isPopup = !!(dwStyle & WS_POPUP);
+      const isVisible = !!(dwStyle & WS_VISIBLE);
+      const hasCaption = !!(dwStyle & WS_CAPTION);
+      if (!isPopup || isVisible) {
+        const currentMain = emu.mainWindow ? emu.handles.get<WindowInfo>(emu.mainWindow) : null;
+        const currentVisible = currentMain ? !!(currentMain.style & WS_VISIBLE) : false;
+        const currentHasCaption = currentMain ? !!(currentMain.style & WS_CAPTION) : false;
+        const shouldPromote = !emu.mainWindow ||
+          (!currentVisible && isVisible) ||
+          (currentVisible === isVisible && !currentHasCaption && hasCaption);
+        if (shouldPromote) {
+          const wnd = emu.handles.get<WindowInfo>(hwnd);
+          if (wnd) emu.promoteToMainWindow(hwnd, wnd);
+        }
       }
     }
 

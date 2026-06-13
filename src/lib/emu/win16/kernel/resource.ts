@@ -8,31 +8,52 @@ interface LoadedRes {
 }
 
 export function registerKernelResource(kernel: Win16Module, emu: Emulator, _state: KernelState): void {
-  // Map from FindResource handle → resource entry
-  const resHandleMap = new Map<number, NEResourceEntry>();
+  // Map from FindResource handle → resource entry + source buffer
+  const resHandleMap = new Map<number, { entry: NEResourceEntry; buffer: ArrayBuffer }>();
   // Map from LoadResource handle → loaded resource info
   const loadedResMap = new Map<number, LoadedRes>();
   let nextResHandle = 0x100;
 
-  function findResEntry(typeId: number, resId: number, resName: string | null): NEResourceEntry | undefined {
-    if (!emu.ne) return undefined;
-    return emu.ne.resources.find(r => {
+  function matches(r: NEResourceEntry, typeId: number, typeName: string | null, resId: number, resName: string | null): boolean {
+    if (typeName) {
+      if (!r.typeName || r.typeName.toUpperCase() !== typeName.toUpperCase()) return false;
+    } else {
       if (r.typeID !== typeId) return false;
-      if (resName) return r.name?.toUpperCase() === resName.toUpperCase();
-      return r.id === resId;
-    });
+    }
+    if (resName) return r.name?.toUpperCase() === resName.toUpperCase();
+    return r.id === resId;
+  }
+
+  function findResEntry(typeId: number, typeName: string | null, resId: number, resName: string | null): { entry: NEResourceEntry; buffer: ArrayBuffer } | undefined {
+    if (emu.ne && emu._arrayBuffer) {
+      const main = emu.ne.resources.find(r => matches(r, typeId, typeName, resId, resName));
+      if (main) return { entry: main, buffer: emu._arrayBuffer };
+    }
+    // Fall back to runtime-loaded DLL resource tables.
+    for (const dllInfo of emu.neDllResources) {
+      const hit = dllInfo.resources.find(r => matches(r, typeId, typeName, resId, resName));
+      if (hit) return { entry: hit, buffer: dllInfo.arrayBuffer };
+    }
+    return undefined;
   }
 
   // --- Ordinal 60: FindResource(hInst, lpName, lpType) — 10 bytes (word+str+str) ---
   kernel.register('FindResource', 10, () => {
     const [hInst, lpName, lpType] = emu.readPascalArgs16([2, 4, 4]);
 
-    // Decode type: if high word is 0, low word is integer type ID; otherwise it's a far pointer to string
+    // Decode type: high word = 0 → integer type ID (numeric); otherwise far pointer to string.
     const typeSeg = (lpType >>> 16) & 0xFFFF;
     const typeOff = lpType & 0xFFFF;
-    const typeId = (typeSeg === 0) ? typeOff : 0;
+    let typeId = 0;
+    let typeName: string | null = null;
+    if (typeSeg === 0) {
+      typeId = typeOff;
+    } else {
+      const base = emu.cpu.segBases.get(typeSeg) ?? (typeSeg << 4);
+      typeName = emu.memory.readCString(base + typeOff);
+    }
 
-    // Decode name: if high word is 0, low word is integer resource ID; otherwise it's a far pointer to string
+    // Decode name: same convention.
     const nameSeg = (lpName >>> 16) & 0xFFFF;
     const nameOff = lpName & 0xFFFF;
     let resId = 0;
@@ -40,28 +61,27 @@ export function registerKernelResource(kernel: Win16Module, emu: Emulator, _stat
     if (nameSeg === 0) {
       resId = nameOff;
     } else {
-      // Read string name from memory (seg:off → linear)
       const base = emu.cpu.segBases.get(nameSeg) ?? (nameSeg << 4);
       resName = emu.memory.readCString(base + nameOff);
     }
 
-    const entry = findResEntry(typeId, resId, resName);
-    if (!entry) {
-      console.warn(`[RES16] FindResource: type=${typeId} id=${resId} name=${resName} — not found`);
+    const found = findResEntry(typeId, typeName, resId, resName);
+    if (!found) {
+      console.warn(`[RES16] FindResource: type=${typeName ? `"${typeName}"` : typeId} id=${resId} name=${resName} — not found`);
       return 0;
     }
 
     const handle = nextResHandle++;
-    resHandleMap.set(handle, entry);
-    console.log(`[RES16] FindResource: type=${typeId} id=${resId} name=${resName} → handle=0x${handle.toString(16)} offset=0x${entry.fileOffset.toString(16)} len=${entry.length}`);
+    resHandleMap.set(handle, found);
+    console.log(`[RES16] FindResource: type=${typeName ? `"${typeName}"` : typeId} id=${resId} name=${resName} → handle=0x${handle.toString(16)} offset=0x${found.entry.fileOffset.toString(16)} len=${found.entry.length}`);
     return handle;
   }, 60);
 
   // --- Ordinal 61: LoadResource(hInst, hResInfo) — 4 bytes (word+word) ---
   kernel.register('LoadResource', 4, () => {
     const [hInst, hResInfo] = emu.readPascalArgs16([2, 2]);
-    const entry = resHandleMap.get(hResInfo);
-    if (!entry || !emu._arrayBuffer) {
+    const found = resHandleMap.get(hResInfo);
+    if (!found) {
       console.warn(`[RES16] LoadResource: invalid handle 0x${hResInfo.toString(16)}`);
       return 0;
     }
@@ -70,9 +90,10 @@ export function registerKernelResource(kernel: Win16Module, emu: Emulator, _stat
     const existing = loadedResMap.get(hResInfo);
     if (existing) return hResInfo;
 
-    // Copy resource data from file into emulated memory
+    // Copy resource data from the source DLL/EXE buffer into emulated memory
+    const { entry, buffer } = found;
     const ptr = emu.allocHeap(entry.length);
-    const src = new Uint8Array(emu._arrayBuffer, entry.fileOffset, entry.length);
+    const src = new Uint8Array(buffer, entry.fileOffset, entry.length);
     for (let i = 0; i < entry.length; i++) {
       emu.memory.writeU8(ptr + i, src[i]);
     }
@@ -103,8 +124,8 @@ export function registerKernelResource(kernel: Win16Module, emu: Emulator, _stat
   // --- Ordinal 65: SizeofResource(word word) — 4 bytes ---
   kernel.register('SizeofResource', 4, () => {
     const [hInst, hResInfo] = emu.readPascalArgs16([2, 2]);
-    const entry = resHandleMap.get(hResInfo);
-    return entry ? entry.length : 0;
+    const found = resHandleMap.get(hResInfo);
+    return found ? found.entry.length : 0;
   }, 65);
 
   // --- Ordinal 66: AllocResource(word word long) — 8 bytes (word+word+long) ---

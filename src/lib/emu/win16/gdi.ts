@@ -1498,15 +1498,15 @@ export function registerWin16Gdi(emu: Emulator): void {
     const NUMPENS = 18;
     const NUMFONTS = 22;
     const NUMCOLORS = 24;
-    const ASPECTX = 36;
-    const ASPECTY = 38;
-    const ASPECTXY = 40;
+    const RASTERCAPS = 38;
+    const ASPECTX = 40;
+    const ASPECTY = 42;
+    const ASPECTXY = 44;
     const LOGPIXELSX = 88;
     const LOGPIXELSY = 90;
     const SIZEPALETTE = 104;
     const NUMRESERVED = 106;
     const COLORRES = 108;
-    const RASTERCAPS = 38; // actually 38 is ASPECTXY; RASTERCAPS=38 in some refs but 38 in Win16 is different
     const caps: Record<number, number> = {
       [DRIVERVERSION]: 0x0300,
       [TECHNOLOGY]: 1,     // DT_RASDISPLAY
@@ -1520,6 +1520,7 @@ export function registerWin16Gdi(emu: Emulator): void {
       [NUMPENS]: 256,
       [NUMFONTS]: 0,
       [NUMCOLORS]: 256,
+      [RASTERCAPS]: 0x7E99, // RC_BITBLT | RC_BANDING | RC_GDI20_OUTPUT | RC_PALETTE | RC_DIBTODEV | RC_BIGFONT | RC_STRETCHBLT | RC_FLOODFILL | RC_STRETCHDIB
       [ASPECTX]: 36,
       [ASPECTY]: 36,
       [ASPECTXY]: 51,
@@ -1528,7 +1529,6 @@ export function registerWin16Gdi(emu: Emulator): void {
       [SIZEPALETTE]: 256,
       [NUMRESERVED]: 20,
       [COLORRES]: 18,
-      26: 0x7E99,          // RASTERCAPS
     };
     return caps[nIndex] ?? 0;
   }, 80);

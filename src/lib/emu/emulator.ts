@@ -405,6 +405,7 @@ export class Emulator {
   _dosMcbFirstSeg = 0;
   _dosFindState: { entries: { name: string; size: number; isDir: boolean }[]; index: number; pattern: string } | null = null;
   _dosFileOpenPending = false;
+  _loadLibraryPending = false;
   _dosLastTimerTick = 0;
   /** When set, skip the wall-clock gate on PIT IRQ0 — used by cycle-only
    *  pacing mode where the dispatcher fires the timer purely off cpuSteps. */
@@ -747,6 +748,8 @@ export class Emulator {
   private timers = new Map<string, { jsTimer: number; elapse: number; timerFunc: number }>();
   /** Multimedia timers (timeSetEvent) — callback invoked during tick */
   _mmTimers = new Map<number, { callback: number; dwUser: number; delay: number; periodic: boolean; nextFire: number }>();
+  /** Deferred Win16 Pascal callbacks (waveOut buffer-done etc.) — drained in tick. */
+  _pendingCb16: Array<{ addr: number; args: number[]; sizes: number[] }> = [];
 
   // CBT hooks (WH_CBT = 5)
   cbtHooks: { lpfn: number; hMod: number }[] = [];
@@ -780,7 +783,7 @@ export class Emulator {
   segStaticEnd = new Map<number, number>();
 
   // NE DLL resources (for LoadBitmap etc. to search across DLLs)
-  neDllResources: Array<{ resources: NEResourceEntry[]; arrayBuffer: ArrayBuffer }> = [];
+  neDllResources: Array<{ resources: NEResourceEntry[]; arrayBuffer: ArrayBuffer; dataSegSelector?: number }> = [];
 
   // NE DLL data segment selectors (for correct DS when calling DLL wndProcs)
   neDllDataSegs = new Set<number>();
@@ -1238,25 +1241,40 @@ export class Emulator {
     return result;
   }
 
-  loadNEString(uID: number): string {
-    if (!this.ne) return '';
+  loadNEString(uID: number, hInstance?: number): string {
     const blockID = Math.floor(uID / 16) + 1;
     const indexInBlock = uID % 16;
-    const entry = this.ne.resources.find(r => r.typeID === 6 && r.id === blockID);
-    if (!entry) return '';
-    const data = new Uint8Array(this.arrayBuffer, entry.fileOffset, entry.length);
-    let off = 0;
-    for (let i = 0; i < indexInBlock; i++) {
-      if (off >= data.length) return '';
-      off += 1 + data[off];
+    type Source = { resources: { typeID: number; id: number; fileOffset: number; length: number }[]; arrayBuffer: ArrayBuffer; instance?: number };
+    const sources: Source[] = [];
+    if (this.ne) sources.push({ resources: this.ne.resources, arrayBuffer: this.arrayBuffer });
+    for (const dllInfo of this.neDllResources) {
+      sources.push({ resources: dllInfo.resources, arrayBuffer: dllInfo.arrayBuffer, instance: (dllInfo as { dataSegSelector?: number }).dataSegSelector });
     }
-    if (off >= data.length) return '';
-    const len = data[off];
-    let str = '';
-    for (let j = 0; j < len && off + 1 + j < data.length; j++) {
-      str += String.fromCharCode(data[off + 1 + j]);
+    // If caller passed an hInstance, prefer the matching module — Win16 hInstance
+    // == auto-data segment selector for our NE DLLs. Fall back to scanning all
+    // sources if no hInstance match (some apps pass 0 or the EXE's hInstance).
+    const ordered = hInstance && hInstance !== 0
+      ? [...sources].sort((a, b) => Number(b.instance === hInstance) - Number(a.instance === hInstance))
+      : sources;
+    for (const src of ordered) {
+      const entry = src.resources.find(r => r.typeID === 6 && r.id === blockID);
+      if (!entry) continue;
+      const data = new Uint8Array(src.arrayBuffer, entry.fileOffset, entry.length);
+      let off = 0;
+      for (let i = 0; i < indexInBlock; i++) {
+        if (off >= data.length) { off = -1; break; }
+        off += 1 + data[off];
+      }
+      if (off < 0 || off >= data.length) continue;
+      const len = data[off];
+      if (len === 0) continue;
+      let str = '';
+      for (let j = 0; j < len && off + 1 + j < data.length; j++) {
+        str += String.fromCharCode(data[off + 1 + j]);
+      }
+      return str;
     }
-    return str;
+    return '';
   }
 
   postMessage(hwnd: number, message: number, wParam: number, lParam: number): void {

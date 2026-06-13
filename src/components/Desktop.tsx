@@ -170,9 +170,14 @@ export function Desktop({ onRunExe, onViewResources, onOpenFolder, onShowDisplay
       // Only pre-load sibling DLLs (not all files) — everything else is lazy-loaded via onFileRequest
       const metas = await listFileMetadata();
       const dllExts = new Set(['dll', 'ocx', 'drv', 'vxd', 'cpl']);
-      const siblingDlls = metas.filter(m =>
-        m.name !== name && !m.name.includes('/') &&
-        dllExts.has((m.name.split('.').pop() ?? '').toLowerCase()));
+      const exeDir = name.includes('/') ? name.slice(0, name.lastIndexOf('/') + 1) : '';
+      const siblingDlls = metas.filter(m => {
+        if (m.name === name) return false;
+        if (!dllExts.has((m.name.split('.').pop() ?? '').toLowerCase())) return false;
+        // Sibling = same directory prefix as the EXE
+        const dir = m.name.includes('/') ? m.name.slice(0, m.name.lastIndexOf('/') + 1) : '';
+        return dir === exeDir;
+      });
       const additional = new Map<string, ArrayBuffer>();
       await Promise.all(siblingDlls.map(async m => {
         const buf = await getFile(m.name);

@@ -131,8 +131,9 @@ export class CPU {
   get ss(): number { return this._ssVal; }
   set ss(val: number) {
     this._ssVal = val;
-    // In Win16/NE mode (no GDT) segBases IS the source of truth, so dropping
-    // the entry would cause segBase() to return 0 forever.
+    // Invalidate cached base for the new SS (PM only). In Win16/NE mode (no GDT)
+    // segBases IS the source of truth, so dropping the entry would cause
+    // segBase() to return 0 forever.
     if (this.emu?._gdtBase) this.segBases.delete(val);
     this._recomputeSsB32();
   }
@@ -187,8 +188,9 @@ export class CPU {
   loadCS(selector: number): void {
     // Invalidate the cached base so segBase(CS) re-reads the descriptor (the
     // program may have rewritten the GDT slot since we last cached it).
-    // In Win16/NE mode (no GDT) the segBases map IS the source of truth, so
-    // dropping the entry here would cause segBase() to return 0 forever.
+    // Skip when there is no GDT (Win16 NE): the segBases map IS the source of
+    // truth there, so deleting it would lose the bind (notably the thunk
+    // selector 0xFE → linear 0xF0000, which is not sel*0x10000).
     if (this.emu?._gdtBase) this.segBases.delete(selector);
     this.cs = selector;
     if (!this.realMode) {

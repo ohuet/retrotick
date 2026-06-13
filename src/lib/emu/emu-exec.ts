@@ -363,6 +363,118 @@ export function emuCallTimerProc(emu: Emulator, callback: number, timerId: numbe
   return callStdcall(emu, callback, [timerId, 0 /* TIME_CALLBACK */, dwUser, 0, 0]);
 }
 
+/** Invoke a Win16 PASCAL callback with mixed-size args.
+ *
+ *  Used for MMSYSTEM TimeProc / waveOutProc and similar Pascal-far callbacks.
+ *  args[i] is pushed left-to-right (Pascal); sizes[i] selects 16-bit or 32-bit push.
+ *  The callback's CS comes from segBase scan of the far pointer; the dispatcher's
+ *  depth tracking uses `wndProcDepth` so a callback that itself calls a thunk
+ *  returns to the same outer frame as a regular wndproc. */
+export function emuCallCb16(emu: Emulator, callback: number, args: number[], sizes: number[]): number | undefined {
+  if (!callback) return 0;
+  const segOff = callback & 0xFFFF;
+  const segSel = (callback >>> 16) & 0xFFFF;
+  if (!segSel && callback < 0x10000) return 0;
+
+  emu.wndProcDepth++;
+  const savedSP = emu.cpu.reg[4] & 0xFFFF;
+  const savedDS = emu.cpu.ds;
+  const savedCS = emu.cpu.cs;
+  const savedEIP = emu.cpu.eip;
+  const savedEBX = emu.cpu.reg[3];
+  const savedESI = emu.cpu.reg[6];
+  const savedEDI = emu.cpu.reg[7];
+  const savedEBP = emu.cpu.reg[5];
+
+  if (emu.isNE && emu.ne) {
+    emu.cpu.ds = emu.ne.dataSegSelector;
+  }
+
+  // Push args in Pascal order (left to right), matching declaration order.
+  for (let i = 0; i < args.length; i++) {
+    if (sizes[i] === 4) emu.cpu.push32(args[i]);
+    else emu.cpu.push16(args[i] & 0xFFFF);
+  }
+
+  // Far return address: WNDPROC_RETURN thunk
+  const WNDPROC_RETURN_SELECTOR = 0xFE;
+  const WNDPROC_RETURN_OFFSET = 0xFF04;
+  emu.cpu.push16(WNDPROC_RETURN_SELECTOR);
+  emu.cpu.push16(WNDPROC_RETURN_OFFSET);
+
+  // Set CS:IP. Callback can be a linear address (>0xFFFF, set by FAR-jmp resolver)
+  // or a raw seg:off packed in `callback`.
+  let segFound = false;
+  if (callback > 0xFFFF) {
+    for (const [sel, base] of emu.cpu.segBases) {
+      if (callback >= base && callback < base + 0x10000) {
+        emu.cpu.cs = sel;
+        emu.cpu.eip = callback;
+        segFound = true;
+        break;
+      }
+    }
+  } else {
+    emu.cpu.cs = segSel;
+    const base = emu.cpu.segBases.get(segSel) ?? (segSel * 0x10000);
+    emu.cpu.eip = base + segOff;
+    segFound = true;
+  }
+  if (!segFound) {
+    emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+    emu.cpu.cs = savedCS;
+    emu.cpu.eip = savedEIP;
+    emu.cpu.ds = savedDS;
+    emu.wndProcDepth--;
+    return 0;
+  }
+
+  const targetDepth = emu.wndProcDepth - 1;
+  let steps = 0;
+  const MAX_STEPS = 5_000_000;
+  while (emu.wndProcDepth > targetDepth && !emu.halted && !emu.cpu.halted && steps < MAX_STEPS) {
+    const eip = emu.cpu.eip >>> 0;
+    const thunk = emu.thunkPages.has(eip >>> 12) ? emu.thunkToApi.get(eip) : undefined;
+    if (thunk) {
+      const key = `${thunk.dll}:${thunk.name}`;
+      const handler = emu.apiDefs.get(key)?.handler;
+      if (handler) {
+        if (key === 'SYSTEM:WNDPROC_RETURN') {
+          handler(emu);
+          break;
+        }
+        emu._currentThunkStackBytes = thunk.stackBytes;
+        const retVal = handler(emu);
+        if (retVal === undefined) { steps++; continue; }
+        if (emu.halted || emu.waitingForMessage) break;
+        emuCompleteThunk16(emu, retVal as number, thunk.stackBytes);
+      } else {
+        emuCompleteThunk16(emu, 0, thunk.stackBytes);
+      }
+    } else {
+      emu.cpu.step();
+    }
+    steps++;
+  }
+
+  if (emu.cpu.halted) {
+    console.warn(`[MM16 CB] callback at 0x${callback.toString(16)} halted CPU — clearing halt`);
+    emu.cpu.halted = false;
+    emu.cpu.haltReason = '';
+  }
+
+  emu.cpu.reg[4] = (emu.cpu.reg[4] & 0xFFFF0000) | (savedSP & 0xFFFF);
+  emu.cpu.cs = savedCS;
+  emu.cpu.eip = savedEIP;
+  emu.cpu.ds = savedDS;
+  emu.cpu.reg[3] = savedEBX;
+  emu.cpu.reg[5] = savedEBP;
+  emu.cpu.reg[6] = savedESI;
+  emu.cpu.reg[7] = savedEDI;
+
+  return emu.wndProcResult;
+}
+
 export function emuCallWndProc16(emu: Emulator, wndProc: number, hwnd: number, message: number, wParam: number, lParam: number): number | undefined {
   if (!wndProc) return 0;
 
@@ -732,7 +844,11 @@ export function emuTick(emu: Emulator): void {
         const savedEIP = emu.cpu.eip;
         const savedRegs = [...emu.cpu.reg]; // EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
         const savedFlags = emu.cpu.getFlags();
-        emuCallTimerProc(emu, t.callback, id, t.dwUser);
+        if (emu.isNE) {
+          emuCallCb16(emu, t.callback, [id, 0, t.dwUser, 0, 0], [2, 2, 4, 4, 4]);
+        } else {
+          emuCallTimerProc(emu, t.callback, id, t.dwUser);
+        }
         // Restore CPU state after callback
         emu.cpu.eip = savedEIP;
         for (let ri = 0; ri < 8; ri++) emu.cpu.reg[ri] = savedRegs[ri];
@@ -744,6 +860,20 @@ export function emuTick(emu: Emulator): void {
         }
         if (emu.halted || emu.waitingForMessage) break;
       }
+    }
+  }
+
+  // Dispatch deferred Win16 PASCAL callbacks (waveOut buffer-done etc.)
+  if (emu._pendingCb16.length > 0 && emu.isNE) {
+    while (emu._pendingCb16.length > 0 && !emu.halted && !emu.waitingForMessage) {
+      const cb = emu._pendingCb16.shift()!;
+      const savedEIP = emu.cpu.eip;
+      const savedRegs = [...emu.cpu.reg];
+      const savedFlags = emu.cpu.getFlags();
+      emuCallCb16(emu, cb.addr, cb.args, cb.sizes);
+      emu.cpu.eip = savedEIP;
+      for (let ri = 0; ri < 8; ri++) emu.cpu.reg[ri] = savedRegs[ri];
+      emu.cpu.setFlags(savedFlags);
     }
   }
 

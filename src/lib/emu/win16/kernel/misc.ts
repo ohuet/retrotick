@@ -80,6 +80,8 @@ export function registerKernelMisc(kernel: Win16Module, emu: Emulator, _state: K
   }, 180);
   // --- Ordinal 200: ValidateFreeSpaces() — 0 bytes ---
   kernel.register('ValidateFreeSpaces', 0, () => 0, 200);
+  // --- Ordinal 202: RegisterPtrace(segptr) — 4 bytes (debugger trap registration, stub) ---
+  kernel.register('RegisterPtrace', 4, () => 0, 202);
   // --- Ordinal 207: IsDBCSLeadByte(word) — 2 bytes ---
   kernel.register('IsDBCSLeadByte', 2, () => 0, 207);
   // --- Ordinal 354: GetAppCompatFlags(word) — 2 bytes ---

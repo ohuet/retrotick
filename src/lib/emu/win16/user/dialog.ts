@@ -171,6 +171,15 @@ export function registerWin16UserDialog(emu: Emulator, user: Win16Module, h: Win
   user.register('DialogBoxParam', 16, () => 0, 239);
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Ordinal 241: CreateDialogParam(hInst, lpTemplate, hWndParent, dlgProc, dwInitParam) — 16 bytes (2+4+2+4+4)
+  // Creates a modeless dialog box with parameter. Returns dialog HWND or 0.
+  // ───────────────────────────────────────────────────────────────────────────
+  user.register('CreateDialogParam', 16, () => {
+    const [_hInst, _lpTemplate, _hWndParent, _dlgProc, _dwInitParam] = emu.readPascalArgs16([2, 4, 2, 4, 4]);
+    return 0;
+  }, 241);
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Ordinal 454: AdjustWindowRectEx(lpRect_ptr, dwStyle_long, bMenu, dwExStyle_long) — 14 bytes (4+4+2+4)
   // ───────────────────────────────────────────────────────────────────────────
   user.register('AdjustWindowRectEx', 14, () => {

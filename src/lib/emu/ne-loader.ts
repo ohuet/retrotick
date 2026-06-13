@@ -11,7 +11,8 @@ export interface NESegmentInfo {
 }
 
 export interface NEResourceEntry {
-  typeID: number;     // resource type (e.g. 2=RT_BITMAP, 6=RT_STRING, 4=RT_MENU)
+  typeID: number;     // resource type (e.g. 2=RT_BITMAP, 6=RT_STRING, 4=RT_MENU). 0 if custom string type.
+  typeName?: string;  // Set instead of typeID when the type is a custom string ("TASKEXE" etc.)
   id: number;         // resource ID (integer, or 0 for string-named)
   name?: string;      // resource name (for string-named resources)
   fileOffset: number; // absolute file offset
@@ -39,6 +40,7 @@ export interface LoadedNE {
   nameToOrdinal: Map<string, number>; // export name (uppercase) → ordinal
   nextSelector: number;        // next available selector after this module
   flags: number;               // NE header flags
+  modulePath?: string;         // file path of this module (for GetModuleFileName)
 }
 
 // Thunk segment selector
@@ -167,7 +169,21 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
       // Skip 4 bytes reserved
       resOff += 8; // past typeID(2) + count(2) + reserved(4)
 
-      const typeID = (rtTypeID & 0x8000) ? (rtTypeID & 0x7FFF) : rtTypeID;
+      // High bit set: numeric standard type. Clear: offset (relative to resource
+      // table base) of a Pascal string holding a custom type name (e.g. "TASKEXE").
+      let typeID = 0;
+      let typeName: string | undefined;
+      if (rtTypeID & 0x8000) {
+        typeID = rtTypeID & 0x7FFF;
+      } else {
+        const strPos = resTableBase + rtTypeID;
+        if (strPos < arrayBuffer.byteLength) {
+          const strLen = data[strPos];
+          let name = '';
+          for (let j = 0; j < strLen; j++) name += String.fromCharCode(data[strPos + 1 + j]);
+          typeName = name;
+        }
+      }
 
       for (let i = 0; i < rtCount; i++) {
         if (resOff + 12 > arrayBuffer.byteLength) break;
@@ -181,6 +197,7 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
         const fileOffset = rnOffset << rscAlignShift;
         const length = rnLength << rscAlignShift;
         const entry: NEResourceEntry = { typeID, id: 0, fileOffset, length };
+        if (typeName) entry.typeName = typeName;
         if (rnID & 0x8000) {
           entry.id = rnID & 0x7FFF;
         } else {
@@ -203,6 +220,13 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
   // Ordinals are 1-based and assigned sequentially across bundles
   const entryTableBase = neOffset + entryTableOffset;
   const entryPoints = new Map<number, { seg: number; offset: number }>(); // ordinal → {seg, offset}
+  // Functions whose entry-table flag has bit 1 (0x02) set need their prologue
+  // patched: a Borland/MSC-style "mov ax, ds; nop" (8C D8 90) at the function
+  // entry must become "mov ax, dataSegSelector" (B8 lo hi) so the standard
+  // "push ds; mov ds, ax" prologue switches DS to the DLL's auto-data segment.
+  // Without this, callers that don't go through MakeProcInstance would run the
+  // function with the caller's DS.
+  const sharedDataPatches: { seg: number; offset: number }[] = [];
   {
     let pos = entryTableBase;
     let ordinal = 1;
@@ -217,20 +241,22 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
       } else if (segIndicator === 0xFF) {
         // Moveable entries: 6 bytes each (flags, INT3Fh word, seg#, offset)
         for (let i = 0; i < count; i++) {
-          const _flags = data[pos];
+          const flags = data[pos];
           // skip INT 3Fh (2 bytes)
           const seg = data[pos + 3];
           const off = dv.getUint16(pos + 4, true);
           entryPoints.set(ordinal, { seg, offset: off });
+          if (flags & 0x02) sharedDataPatches.push({ seg, offset: off });
           pos += 6;
           ordinal++;
         }
       } else {
         // Fixed entries: 3 bytes each (flags, offset)
         for (let i = 0; i < count; i++) {
-          const _flags = data[pos];
+          const flags = data[pos];
           const off = dv.getUint16(pos + 1, true);
           entryPoints.set(ordinal, { seg: segIndicator, offset: off });
+          if (flags & 0x02) sharedDataPatches.push({ seg: segIndicator, offset: off });
           pos += 3;
           ordinal++;
         }
@@ -280,29 +306,37 @@ export function loadNE(arrayBuffer: ArrayBuffer, memory: Memory, opts?: LoadNEOp
     }
   }
 
-  // Patch Win16 function prologs in code segments
-  // The standard prolog "push ds; pop ax; nop" (1E 58 90) must be patched to
-  // "mov ax, DGROUP_selector" (B8 xx xx) so DS gets set to the module's own data segment.
+  // Patch Win16 function prologs in code segments. The "MakeProcInstance
+  // placeholder" — 3 bytes that load DS into AX — gets replaced by
+  // "mov ax, DGROUP_selector" (B8 lo hi) so the standard "push ds; mov ds, ax"
+  // prologue switches DS to the DLL's auto-data segment. Two compilers, two
+  // patterns:
+  //   MSC/C++ : push ds; pop ax; nop  (1E 58 90)  — used by Microsoft tools
+  //   Borland: mov ax, ds; nop        (8C D8 90)  — used by Turbo/Borland
   if (autoDataSeg) {
     const dgroupSelector = segments[autoDataSeg - 1].selector;
     for (const seg of segments) {
       if (seg.flags & 0x01) continue; // skip DATA segments, only patch CODE segments
       const base = seg.linearBase;
-      const size = seg.fileSize > 0 ? seg.fileSize : seg.minAlloc;
       // Scan for exported entry points and patch their prologs
       // ep.seg is 1-based local segment index; convert to global selector
       for (const [, ep] of entryPoints) {
         const epSelector = segments[ep.seg - 1]?.selector ?? (selectorBase + ep.seg - 1);
         if (epSelector !== seg.selector) continue;
         const addr = base + ep.offset;
-        if (memory.readU8(addr) === 0x1E && memory.readU8(addr + 1) === 0x58 &&
-            memory.readU8(addr + 2) === 0x90) {
+        const b0 = memory.readU8(addr);
+        const b1 = memory.readU8(addr + 1);
+        const b2 = memory.readU8(addr + 2);
+        const isMSC = b0 === 0x1E && b1 === 0x58 && b2 === 0x90;
+        const isBorland = b0 === 0x8C && b1 === 0xD8 && b2 === 0x90;
+        if (isMSC || isBorland) {
           memory.writeU8(addr, 0xB8); // mov ax, imm16
           memory.writeU16(addr + 1, dgroupSelector);
         }
       }
     }
   }
+  void sharedDataPatches; // kept for potential future flag-gated patching
 
   // Process relocations and build thunk table
   const apiMap = new Map<number, { dll: string; name: string; ordinal: number }>();
