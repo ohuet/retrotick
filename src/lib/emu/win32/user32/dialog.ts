@@ -240,7 +240,7 @@ export function registerDialog(emu: Emulator): void {
       };
       const childHwnd = emu.handles.alloc('window', childWnd);
       childWnd.hwnd = childHwnd;
-      wnd.children.set(item.id, childHwnd);
+      (wnd.children ??= new Map()).set(item.id, childHwnd);
       if (!wnd.childList) wnd.childList = [];
       wnd.childList.push(childHwnd);
 
@@ -663,7 +663,7 @@ export function registerDialog(emu: Emulator): void {
       };
       const childHwnd = emu.handles.alloc('window', childWnd);
       childWnd.hwnd = childHwnd;
-      wnd.children.set(item.id, childHwnd);
+      (wnd.children ??= new Map()).set(item.id, childHwnd);
       if (!wnd.childList) wnd.childList = [];
       wnd.childList.push(childHwnd);
 
@@ -682,7 +682,7 @@ export function registerDialog(emu: Emulator): void {
     if (dlg.font) {
       const fontHeight = Math.round(dlg.font.pointSize * 96 / 72); // pt → px at 96 DPI
       const hFont = emu.handles.alloc('font', { height: fontHeight });
-      for (const [, childHwnd] of wnd.children) {
+      for (const [, childHwnd] of (wnd.children ?? new Map())) {
         const childWnd = emu.handles.get<WindowInfo>(childHwnd);
         if (childWnd) {
           childWnd.hFont = hFont;
@@ -1101,7 +1101,7 @@ export function registerDialog(emu: Emulator): void {
       };
       const childHwnd = emu.handles.alloc('window', childWnd);
       childWnd.hwnd = childHwnd;
-      wnd.children.set(item.id, childHwnd);
+      (wnd.children ??= new Map()).set(item.id, childHwnd);
       if (!wnd.childList) wnd.childList = [];
       wnd.childList.push(childHwnd);
       if (ctrlCls.wndProc) emu.callWndProc(ctrlCls.wndProc, childHwnd, 0x0001, 0, 0);
@@ -1111,7 +1111,7 @@ export function registerDialog(emu: Emulator): void {
     if (dlg.font) {
       const fontHeight = Math.round(dlg.font.pointSize * 96 / 72);
       const hFont = emu.handles.alloc('font', { height: fontHeight });
-      for (const [, childHwnd] of wnd.children) {
+      for (const [, childHwnd] of (wnd.children ?? new Map())) {
         const childWnd = emu.handles.get<WindowInfo>(childHwnd);
         if (childWnd) {
           childWnd.hFont = hFont;
