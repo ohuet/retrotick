@@ -538,6 +538,30 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
     // Async init for registry + profiles, then start emulator
     let regFlushTimer: ReturnType<typeof setTimeout> | null = null;
     let profFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let regStoreRef: RegistryStore | null = null;
+    let profStoreRef: ProfileStore | null = null;
+    // Force any pending debounced writes out to IndexedDB immediately. Called
+    // on unmount and on page hide: apps that persist their settings while
+    // closing (e.g. in WM_DESTROY) write within the 500ms debounce window, so
+    // cancelling the timer instead of flushing would silently drop those writes.
+    const flushPendingPersistence = () => {
+      if (regFlushTimer !== null) { clearTimeout(regFlushTimer); regFlushTimer = null; }
+      if (regStoreRef) {
+        saveRegistry(regStoreRef.serialize()).catch(e =>
+          console.warn('[REG] Failed to save registry:', e)
+        );
+      }
+      if (profFlushTimer !== null) { clearTimeout(profFlushTimer); profFlushTimer = null; }
+      if (profStoreRef) {
+        saveProfiles(profStoreRef.serialize()).catch(e =>
+          console.warn('[PROF] Failed to save profiles:', e)
+        );
+      }
+    };
+    // The browser may close/refresh the tab without unmounting React first;
+    // flush on pagehide so a tab close right after a settings change isn't lost.
+    const onPageHide = () => flushPendingPersistence();
+    window.addEventListener('pagehide', onPageHide);
     const initAndRun = async () => {
       // Load registry, profiles, and virtual filesystem in parallel (independent IndexedDB reads)
       const [regData, profData] = await Promise.all([
@@ -548,6 +572,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Set up registry store with IndexedDB persistence
       const regStore = new RegistryStore();
+      regStoreRef = regStore;
       if (regData) regStore.deserialize(regData);
       regStore.onChange = () => {
         if (regFlushTimer !== null) clearTimeout(regFlushTimer);
@@ -561,6 +586,7 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
       // Set up profile store with IndexedDB persistence
       const profStore = new ProfileStore();
+      profStoreRef = profStore;
       if (profData) profStore.deserialize(profData);
       profStore.onChange = () => {
         if (profFlushTimer !== null) clearTimeout(profFlushTimer);
@@ -950,7 +976,10 @@ export function EmulatorView({ arrayBuffer, peInfo, additionalFiles, exeName, co
 
     return () => {
       window.removeEventListener('desktop-files-changed', onDesktopChanged);
-      if (regFlushTimer !== null) clearTimeout(regFlushTimer);
+      window.removeEventListener('pagehide', onPageHide);
+      // Flush (not cancel) any debounced registry/profile writes so settings
+      // saved right before the app closed are persisted.
+      flushPendingPersistence();
       if (emuRef.current) {
         if (processRegistry && emuRef.current.pid) {
           processRegistry.unregister(emuRef.current.pid);
