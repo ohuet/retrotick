@@ -417,7 +417,17 @@ export class CPU {
     // Expose VM bit (17) when pseudo-V86 is active so guest PUSHF/PUSHFD
     // and IRETD consumers see EFLAGS.VM=1 (DOS/4GW detection gate).
     // flagsCache itself never stores VM — we OR it in on every read.
-    return this._vm86 ? (this.flagsCache | 0x00020000) >>> 0 : this.flagsCache;
+    //
+    // Only force VM while in real/V86 mode (realMode === true). Pseudo-V86 is a
+    // real-mode emulation trick; in our model a genuine V86 task is always
+    // represented with realMode = true. Once a DOS extender enters true
+    // protected mode (realMode === false) — e.g. DOS/4GW switching to its
+    // 32-bit client via the DPMI host entry, which never runs the MOV CR0 path
+    // that clears _vm86 — EFLAGS.VM must read back as 0. Otherwise every
+    // interrupt frame pushed in PM gets VM=1, and the handler's IRETD wrongly
+    // switches to V86 popping a 9-dword frame off a 3-dword PM push, leaving
+    // SS:ESP = 0 (root cause of the DOOM/DOS4GW cs=0xFFFE derail).
+    return (this._vm86 && this.realMode) ? (this.flagsCache | 0x00020000) >>> 0 : this.flagsCache;
   }
 
   setFlags(f: number): void {

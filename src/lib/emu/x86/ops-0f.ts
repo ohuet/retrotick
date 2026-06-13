@@ -286,7 +286,18 @@ export function exec0F(
         // selector (see cpu.segBase). Real DPMI hosts auto-shadow these;
         // we report them as present 16-bit data R/W DPL=3 segments so
         // that DOS/4GW's LAR-based validator accepts them.
-        if (rights === undefined && sel >= 8) {
+        //
+        // BUT only for selectors we've actually materialized as a segment
+        // (tracked in segBases, e.g. 0x1569/0x1b4e/0x271e loaded into CS/SS/DS
+        // — ensureShadowDescriptor wrote a present descriptor for those, so
+        // they normally pass the present-bit check above anyway). A genuinely
+        // empty GDT slot that was never loaded is a *free* descriptor: real
+        // hardware LARs it as not-present (ZF=0). DOS/4GW probes its free
+        // descriptor range (e.g. selectors 0x7fc0..0x7ff8) with LAR and aborts
+        // (exit 0xED) if those empty slots wrongly report present. Without the
+        // segBases guard the fallback resurrected every empty slot as present.
+        if (rights === undefined && sel >= 8
+            && (cpu.segBases.has(sel) || cpu.segBases.has(sel >>> 3))) {
           const base = cpu.loadGdtDescriptorBase(sel);
           const lim = cpu.loadGdtDescriptorLimit(sel);
           if ((base === undefined || (base === 0 && lim === 0))) {
@@ -421,7 +432,6 @@ export function exec0F(
         const newPG = (cpu.emu._cr0 & 0x80000000) !== 0;
         if (!oldPE && newPE) {
           // Transition to protected mode — set up segment bases from GDT
-          console.log(`[CR0] RM→PM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)}`);
           cpu.realMode = false;
           // Guest is entering its own PM — leave pseudo-V86 so far jumps
           // resolve selectors through the GDT instead of sel*16 paragraphs.
@@ -430,7 +440,6 @@ export function exec0F(
           // Back to real mode — enable "unreal mode" if data segments have flat base.
           // DOS4GW sets base=0 for DS/ES/SS in PM, returns to RM, and expects the
           // CPU to cache the flat base for 32-bit data access in real mode.
-          console.log(`[CR0] PM→RM (MOV CR0, eax=${(d.val >>> 0).toString(16)}) cs:eip=${cpu.cs.toString(16)}:${(cpu.eip >>> 0).toString(16)} ds=${cpu.ds.toString(16)} es=${cpu.es.toString(16)} ss=${cpu.ss.toString(16)} esp=${(cpu.reg[4] >>> 0).toString(16)}`);
           if (cpu.segBase(cpu.ds) === 0 || cpu.segBase(cpu.es) === 0) {
             cpu._unrealMode = true;
           }

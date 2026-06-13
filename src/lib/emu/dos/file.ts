@@ -97,6 +97,28 @@ export function getSyncFileData(fs: FileManager, fileInfo: FileInfo, emu: Emulat
 /** Open a file by resolved path. Shared by 0x3D and 0x6C. */
 function openFileByPath(cpu: CPU, emu: Emulator, name: string, resolved: string): void {
   const fs = emu.fs;
+  // Self-EXE re-open: DOS extenders (DOS/4GW, DOS/16M) re-open the program's own
+  // EXE to load the LE/LX image appended after the MZ stub. This MUST resolve to
+  // the exact in-memory image we loaded — in the browser the virtual FS is backed
+  // by IndexedDB, where a findFile/getSyncFileData lookup for the EXE can miss or
+  // go async and return wrong/partial data, making DOS/4GW abort with error 1008
+  // "can't load executable format". emu-load registers the EXE in additionalFiles
+  // by basename; serve it synchronously here, before the FS lookup.
+  const selfExeBase = (emu.exePath || emu.exeName || '').replace(/^.*[\\/]/, '').toUpperCase();
+  const reqBase = resolved.replace(/^.*[\\/]/, '').toUpperCase();
+  if (selfExeBase && reqBase === selfExeBase) {
+    for (const [key, buf] of emu.additionalFiles) {
+      if (key.replace(/^.*[\\/]/, '').toUpperCase() === selfExeBase) {
+        const handle = allocDosHandle(emu);
+        const data = new Uint8Array(buf);
+        emu._dosFiles.set(handle, { data, pos: 0, name });
+        emu.handles.set(handle, 'file', { path: resolved, access: 0x80000000, pos: 0, data, size: data.length, modified: false });
+        cpu.setReg16(EAX, handle);
+        cpu.setFlag(CF, false);
+        return;
+      }
+    }
+  }
   const fileInfo = fs.findFile(resolved, emu.additionalFiles);
   if (fileInfo) {
     // Try synchronous path first (additionalFiles / externalFiles are in memory)
@@ -207,10 +229,17 @@ export function dosCloseFile(cpu: CPU, emu: Emulator): void {
 /** 0x3F: Read file (BX=handle, CX=count, DS:DX=buffer) */
 export function dosReadFile(cpu: CPU, emu: Emulator): void {
   const h = cpu.getReg16(EBX);
-  const count = cpu.getReg16(ECX);
+  // A 32-bit DPMI client (DOS/4GW, cs D=1) issues INT 21h AH=3F with the byte
+  // count in the full ECX and the buffer at DS:EDX — DOS/4GW services >64KB in
+  // one PM call (e.g. DOOM reads a 68168-byte WAD lump). Real mode / 16-bit PM
+  // use CX/DX. Truncating ECX to 16 bits returned a short count and broke large
+  // reads (W_ReadLump). The PM file-service intercept in dispatch.ts routes
+  // tracked-handle reads here directly, so honour the 32-bit width.
+  const is32 = !cpu.realMode && cpu.use32;
+  const count = is32 ? (cpu.reg[ECX] >>> 0) : cpu.getReg16(ECX);
   const dsBase = cpu.segBase(cpu.ds);
-  const dx = cpu.getReg16(EDX);
-  const bufAddr = dsBase + dx;
+  const dx = is32 ? (cpu.reg[EDX] >>> 0) : cpu.getReg16(EDX);
+  const bufAddr = (dsBase + dx) >>> 0;
   if (h <= 2) {
     cpu.setReg16(EAX, 0);
     cpu.setFlag(CF, false);
@@ -222,10 +251,10 @@ export function dosReadFile(cpu: CPU, emu: Emulator): void {
         console.log(`[READ] h=${h.toString(16)} pos=0x${f.pos.toString(16)} cnt=${count.toString(16)} ds:dx=${cpu.ds.toString(16)}:${dx.toString(16)} lin=0x${bufAddr.toString(16)} rm=${cpu.realMode} name="${f.name ?? '?'}" avail=${avail.toString(16)}`);
       }
       for (let i = 0; i < avail; i++) {
-        cpu.mem.writeU8(bufAddr + i, f.data[f.pos + i]);
+        cpu.mem.writeU8((bufAddr + i) >>> 0, f.data[f.pos + i]);
       }
       f.pos += avail;
-      cpu.setReg16(EAX, avail);
+      if (is32) cpu.reg[EAX] = avail >>> 0; else cpu.setReg16(EAX, avail);
       cpu.setFlag(CF, false);
     } else {
       // Unknown handle: some DOS apps (DOOM shareware under DOS/4GW) get

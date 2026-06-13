@@ -51,6 +51,15 @@ export function dispatchException(
   // Exceptions: INT 31h (DPMI services) and DPMI trap INTs (FD, FC) always go to JS.
   if (!cpu.realMode && cpu.emu && cpu.emu._dpmiState) {
     const dpmi = cpu.emu._dpmiState;
+    // INT 10h AH=00 (set video mode) for a 32-bit PM client. DOS/4GW's own PM
+    // INT 10h handler programs the VGA registers directly without going through
+    // our BIOS video handler, so emu.videoMode stays stale (text 0x3) even after
+    // the client sets mode 13h — the canvas would then render text instead of the
+    // graphics the program is drawing to 0xA0000. Run our video handler so
+    // emu.videoMode / vga.currentMode track the real mode.
+    if (intNum === 0x10 && ((cpu.reg[EAX] >>> 8) & 0xFF) === 0x00 && cpu.use32) {
+      if (handleDosInt(cpu, 0x10, cpu.emu)) return true;
+    }
     // DOS clients like DOOM install their timer/IRQ handlers via INT 21h AH=25h
     // rather than DPMI AX=0205h. DOS/4GW's PM INT 21h handler processes the call
     // internally, but may skip registering IRQ-range vectors (e.g., vec 8) in
@@ -107,6 +116,19 @@ export function dispatchException(
         cpu.haltReason = `terminated with code ${retCode}`;
         console.warn(`[AH=4C-PM] exit=0x${retCode.toString(16)} cs=${cpu.cs.toString(16)}:${((cpu.eip-cpu.segBase(cpu.cs))>>>0).toString(16)} step=${(cpu.emu as any)?.cpuSteps}`);
         return true;
+      }
+      // File read/seek/close for a 32-bit PM client on a handle WE track.
+      // DOS/4GW's own PM INT 21h handler mishandles large reads (bigger than its
+      // RM transfer buffer): instead of chunk-reflecting them it returns stale
+      // bytes — DOOM aborts with "W_ReadLump: only read 16193 of 68168". Service
+      // these directly in PM with full 32-bit ECX/EDX (a DPMI host may provide
+      // DOS file services to its client). Only for handles in _dosFiles so we
+      // never shadow DOS/4GW's own internal file operations.
+      if ((ah === 0x3F || ah === 0x42 || ah === 0x3E) && cpu.use32 && !cpu.realMode) {
+        const fileHandle = cpu.reg[EBX] & 0xFFFF;
+        if (cpu.emu._dosFiles && cpu.emu._dosFiles.has(fileHandle)) {
+          return handleDosInt(cpu, 0x21, cpu.emu);
+        }
       }
       // Intercept AH=35h (Get Interrupt Vector) in 32-bit PM for IRQ-range
       // vectors. DOS/4GW's own PM INT 21h handler returns a bogus

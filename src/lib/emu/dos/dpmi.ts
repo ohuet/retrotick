@@ -251,6 +251,14 @@ export function handleDpmiEntry(cpu: CPU, emu: Emulator): boolean {
 
   // Switch to protected mode
   cpu.realMode = false;
+  // Leave pseudo-V86: we are now in true protected mode. _vm86 must be cleared
+  // so PUSHF/PUSHFD and interrupt frames report EFLAGS.VM=0 and LAR/LSL execute
+  // normally (they early-exit while realMode || _vm86). Mirrors the VCPI DE0C
+  // V86→PM transition in ems.ts. Without this, every interrupt frame pushed in
+  // PM carries VM=1 and its IRETD wrongly switches to V86 with a 3-dword frame
+  // (DOOM/DOS4GW cs=0xFFFE derail), and DOS/4GW's descriptor-validation LAR
+  // loop always fails (abort with exit code 0xED).
+  cpu._vm86 = false;
 
   // Load segment registers.
   // DPMI 0.9 spec: initial ES is the PSP selector. DOS/4GW 1.95 saves ES into
@@ -816,6 +824,7 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
   const savedGS = cpu.gs;
   const savedEIP = cpu.eip;
   const savedRealMode = cpu.realMode;
+  const savedVm86 = cpu._vm86;
 
   // Load RM registers from struct
   cpu.reg[EDI] = rmEDI;
@@ -831,6 +840,7 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
 
   // Temporarily switch to real mode for the INT handler
   cpu.realMode = true;
+  cpu._vm86 = true; // RM handler runs in pseudo-V86
   cpu.use32 = false;
 
   // For AX=0300 we dispatch the IVT entry for BL; for AX=0301/0302 the
@@ -919,6 +929,7 @@ function dpmiSimulateRmInt(cpu: CPU, emu: Emulator, mode: 'int' | 'farcall' | 'i
   cpu.gs = savedGS;
   cpu.eip = asyncPending ? (savedEIP - 2) >>> 0 : savedEIP;
   cpu.realMode = savedRealMode;
+  cpu._vm86 = savedVm86;
   if (!savedRealMode) {
     const is32 = cpu.loadGdtDescriptorIs32(savedCS);
     cpu.use32 = is32;
@@ -1095,6 +1106,7 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     const newEIP = cpu.reg[EDI] >>> 0; // 32-bit EIP for PM
     if (emu.traceDosInt) console.log(`[DPMI-SW] RM→PM newCS=${newCS.toString(16)} newIP=${newEIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newESP.toString(16)}`);
     cpu.realMode = false;
+    cpu._vm86 = false; // raw-mode RM→PM: leaving pseudo-V86 for true PM
     cpu.loadCS(newCS);
     cpu.ds = newDS;
     cpu.es = newES;
@@ -1107,6 +1119,7 @@ export function handleDpmiSwitch(cpu: CPU, emu: Emulator): boolean {
     const newIP = cpu.getReg16(EDI);
     if (emu.traceDosInt) console.log(`[DPMI-SW] PM→RM newCS=${newCS.toString(16)} newIP=${newIP.toString(16)} newDS=${newDS.toString(16)} newES=${newES.toString(16)} newSS=${newSS.toString(16)} newSP=${newSP.toString(16)}`);
     cpu.realMode = true;
+    cpu._vm86 = true; // raw-mode PM→RM: back to pseudo-V86 real mode
     cpu.use32 = false;
     cpu._addrSize16 = true;
     cpu.cs = newCS;
