@@ -253,7 +253,12 @@ export function renderControlOverlay(
               width: `${ctrl.width}px`, height: `${ctrl.height}px`,
               pointerEvents: 'none',
               imageRendering: 'pixelated',
-              ...(isDisabled ? { filter: 'grayscale(100%) opacity(0.5)' } : {}),
+              // No grayscale/opacity filter here: an owner-draw control paints its
+              // ENTIRE appearance (incl. the disabled look) itself via WM_DRAWITEM,
+              // and already receives ODS_DISABLED in the DRAWITEMSTRUCT. A CSS
+              // grayscale/opacity filter would corrupt the owner's real colors —
+              // e.g. taskmgr's graphs are WS_DISABLED but draw full-colour
+              // green-on-black; the filter turned them light-grey on dark-grey.
             }}
           />
         </div>
