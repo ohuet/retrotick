@@ -185,6 +185,28 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
   const savedESI = emu.cpu.reg[6];
   const savedEDI = emu.cpu.reg[7];
   const savedEBP = emu.cpu.reg[5];
+  // Save EIP + the volatile GP registers (EAX/ECX/EDX) so a synchronous return
+  // is FULLY transparent to the paused x86 CPU state. callStdcall is always an
+  // emulator→app callback, never an app `call`. Two cases:
+  //  1. App-initiated (a thunk handler such as DispatchMessage/SendMessage calls
+  //     callWndProc): after we return, the main loop runs emuCompleteThunk, which
+  //     re-sets EAX to the real result — so restoring these here is overwritten
+  //     and harmless.
+  //  2. Render-path-initiated (renderChildControls/sendCtlColor/sendDrawItem call
+  //     callWndProc directly while the app is PAUSED mid-message-loop, all at
+  //     depth 0): nothing fixes the registers afterwards. The wndProc's `ret`
+  //     lands on the WNDPROC_RETURN thunk whose handler does NOT advance EIP, and
+  //     the callback clobbers EAX/ECX/EDX. Both then leak into the paused program:
+  //     a dangling EIP=0x00FE0000 reaches the main emuTick loop (mis-dispatched as
+  //     a stale WNDPROC_RETURN → reads [ESP]=0 → EIP=0 → WILD EIP), and a clobbered
+  //     EAX corrupts the resumed instruction stream (e.g. taskmgr's pump sits at
+  //     `call GetMessage; test eax,eax; jz exit` with EAX=1 from a just-delivered
+  //     message; an overlay repaint clobbering EAX→0 makes the pump exit the app).
+  // Restoring EIP+EAX+ECX+EDX makes the call register-transparent and fixes both.
+  const savedEIP = emu.cpu.eip;
+  const savedEAX = emu.cpu.reg[0];
+  const savedECX = emu.cpu.reg[1];
+  const savedEDX = emu.cpu.reg[2];
 
   // Push args right-to-left (stdcall)
   for (let i = args.length - 1; i >= 0; i--) emu.cpu.push32(args[i]);
@@ -345,6 +367,13 @@ function callStdcall(emu: Emulator, addr: number, args: number[]): number | unde
   emu.cpu.reg[5] = savedEBP;
   emu.cpu.reg[6] = savedESI;
   emu.cpu.reg[7] = savedEDI;
+  // Restore EIP + volatile GP regs so the call is fully transparent to a paused
+  // x86 program (see savedEIP comment above). App-initiated calls overwrite EAX
+  // again via emuCompleteThunk, so this only matters for render-path callbacks.
+  emu.cpu.eip = savedEIP;
+  emu.cpu.reg[0] = savedEAX;
+  emu.cpu.reg[1] = savedECX;
+  emu.cpu.reg[2] = savedEDX;
 
   return emu.wndProcResult;
 }
