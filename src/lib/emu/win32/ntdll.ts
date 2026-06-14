@@ -97,19 +97,30 @@ export function registerNtdll(emu: Emulator): void {
       if (retLenPtr) emu.memory.writeU32(retLenPtr, 48);
       if (bufLen >= 48) {
         for (let i = 0; i < 48; i += 4) emu.memory.writeU32(bufPtr + i, 0);
-        // Provide incrementing times to prevent division by zero
-        // Each call should return larger values so the delta is non-zero
-        emu._perfCounter = (emu._perfCounter || 0) + 1000000;
-        const t = emu._perfCounter;
-        // IdleTime (8 bytes) — ~50% idle
-        emu.memory.writeU32(bufPtr + 0, (t * 5) >>> 0);
-        emu.memory.writeU32(bufPtr + 4, 0);
-        // KernelTime (8 bytes)
-        emu.memory.writeU32(bufPtr + 8, (t * 3) >>> 0);
-        emu.memory.writeU32(bufPtr + 12, 0);
-        // UserTime (8 bytes)
-        emu.memory.writeU32(bufPtr + 16, (t * 2) >>> 0);
-        emu.memory.writeU32(bufPtr + 20, 0);
+        // Model a mostly-idle CPU with mild, lifelike variation so taskmgr's CPU
+        // gauge + history graph show a plausible low-usage curve. taskmgr computes
+        // CPU% = (TotalDelta - IdleDelta) / TotalDelta, where TotalTime = Kernel +
+        // User and IdleTime is a SUBSET of KernelTime. The old code returned
+        // Idle(5t) > Kernel+User(5t), so CPU% came out 0% (idle >= total).
+        emu._perfTick = (emu._perfTick || 0) + 1;
+        const k = emu._perfTick;
+        // 1..~15% typical, occasional higher — two sines (irregular) + small jitter
+        let pct = 4 + 5 * Math.sin(k / 3.7) + 2 * Math.sin(k / 1.3) + Math.random() * 3;
+        pct = Math.max(1, Math.min(35, pct));
+        const TOTAL = 10_000_000;            // ~1s of CPU time per sample (100ns units)
+        const busy = Math.floor(TOTAL * pct / 100);
+        const idleDelta = TOTAL - busy;
+        // KernelTime INCLUDES IdleTime; split the busy part kernel/user ~60/40.
+        emu._cpuIdle = (emu._cpuIdle || 0) + idleDelta;
+        emu._cpuKernel = (emu._cpuKernel || 0) + idleDelta + Math.floor(busy * 0.6);
+        emu._cpuUser = (emu._cpuUser || 0) + Math.ceil(busy * 0.4);
+        const w64 = (o: number, v: number) => {
+          emu.memory.writeU32(bufPtr + o, v >>> 0);
+          emu.memory.writeU32(bufPtr + o + 4, Math.floor(v / 0x100000000) >>> 0);
+        };
+        w64(0, emu._cpuIdle);    // IdleTime
+        w64(8, emu._cpuKernel);  // KernelTime (includes idle)
+        w64(16, emu._cpuUser);   // UserTime
       }
       return 0;
     }
@@ -119,30 +130,21 @@ export function registerNtdll(emu: Emulator): void {
       if (retLenPtr) emu.memory.writeU32(retLenPtr, size);
       if (bufLen >= size) {
         for (let i = 0; i < size; i += 4) emu.memory.writeU32(bufPtr + i, 0);
-        // Use browser memory info if available (Chrome performance.memory), else emulator stats
+        // Stable, plausible memory model. Total physical = a fixed 512 MB (era
+        // appropriate). Commit charge = an OS baseline + the emulated program's
+        // REAL allocations (heap + VirtualAlloc), so it stays steady instead of
+        // ballooning with the browser's JS heap (the old code used usedJSHeapSize,
+        // which grows continuously and made taskmgr's Commit Charge graph ramp up).
         const PAGE_SIZE = 4096;
-        const perf: Performance & { memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number; totalJSHeapSize: number } } = globalThis.performance;
-        const mem = perf?.memory;
-        let availablePages: number, committedPages: number, commitLimit: number;
-        let totalPhysPages: number, pagedPoolPages: number, nonPagedPoolPages: number;
-        if (mem && mem.jsHeapSizeLimit) {
-          totalPhysPages = Math.floor(mem.jsHeapSizeLimit / PAGE_SIZE);
-          committedPages = Math.floor(mem.usedJSHeapSize / PAGE_SIZE);
-          commitLimit = Math.floor(mem.totalJSHeapSize / PAGE_SIZE);
-          availablePages = totalPhysPages - committedPages;
-          pagedPoolPages = Math.floor(mem.usedJSHeapSize / PAGE_SIZE / 8);
-          nonPagedPoolPages = Math.floor(pagedPoolPages / 2);
-        } else {
-          const usedHeap = (emu.heapPtr - emu.heapBase) || 0;
-          const usedVirtual = (emu.virtualPtr - emu.virtualBase) || 0;
-          const totalUsed = usedHeap + usedVirtual;
-          totalPhysPages = 65536; // 256 MB
-          committedPages = Math.floor(totalUsed / PAGE_SIZE) || 256;
-          commitLimit = totalPhysPages * 2;
-          availablePages = totalPhysPages - Math.floor(totalUsed / PAGE_SIZE);
-          pagedPoolPages = Math.floor(committedPages / 8) || 1024;
-          nonPagedPoolPages = Math.floor(pagedPoolPages / 2) || 512;
-        }
+        const totalPhysPages = 131072;                 // 512 MB
+        const OS_BASELINE = 64 * 1024 * 1024;          // ~64 MB for "the rest of the OS"
+        const usedBytes = ((emu.heapPtr - emu.heapBase) || 0) + ((emu.virtualPtr - emu.virtualBase) || 0);
+        let committedPages = Math.floor((OS_BASELINE + usedBytes) / PAGE_SIZE);
+        if (committedPages > totalPhysPages - 256) committedPages = totalPhysPages - 256;
+        const commitLimit = Math.floor(totalPhysPages * 1.5); // physical + page file
+        const availablePages = totalPhysPages - committedPages;
+        const pagedPoolPages = Math.floor(committedPages / 8) || 1024;
+        const nonPagedPoolPages = Math.floor(pagedPoolPages / 2) || 512;
         // Offsets from SYSTEM_PERFORMANCE_INFORMATION:
         emu.memory.writeU32(bufPtr + 0x2C, availablePages);    // AvailablePages
         emu.memory.writeU32(bufPtr + 0x30, committedPages);    // CommittedPages
@@ -167,9 +169,7 @@ export function registerNtdll(emu: Emulator): void {
       if (retLenPtr) emu.memory.writeU32(retLenPtr, 44);
       if (bufLen >= 44) {
         for (let i = 0; i < 44; i += 4) emu.memory.writeU32(bufPtr + i, 0);
-        const perf0: Performance & { memory?: { jsHeapSizeLimit: number } } = globalThis.performance;
-        const mem0 = perf0.memory;
-        const physPages = mem0?.jsHeapSizeLimit ? Math.floor(mem0.jsHeapSizeLimit / 4096) : 65536;
+        const physPages = 131072; // 512 MB — keep consistent with class 2 (SystemPerformanceInformation)
         emu.memory.writeU32(bufPtr + 0, 0);           // Reserved
         emu.memory.writeU32(bufPtr + 4, 4096);         // TimerResolution
         emu.memory.writeU32(bufPtr + 8, 4096);         // PageSize
