@@ -148,6 +148,19 @@ export function registerMessage(emu: Emulator): void {
         }
         return { hwnd: handle, message: WM_PAINT, wParam: 0, lParam: 0 };
       }
+      // Owner-draw button (no wndProc of its own): its content is painted by
+      // renderChildControls, which runs only on the MAIN window's paint cycle.
+      // When such a control is invalidated on its own (e.g. taskmgr invalidates
+      // just the CPU/MEM graph buttons every second on WM_TIMER), redirect the
+      // paint to the main window so renderChildControls refreshes the owner-draw
+      // content. Without this the graphs draw once and then never update.
+      if (wnd.classInfo?.className?.toUpperCase() === 'BUTTON' && (wnd.style & 0xF) === 0xB) {
+        wnd.needsPaint = false;
+        wnd.needsErase = false;
+        const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
+        if (mainWnd && !mainWnd.needsPaint) mainWnd.needsPaint = true;
+        continue;
+      }
       // Built-in windows (no wndProc) with a class brush: erase background directly
       if (wnd.needsErase && wnd.classInfo.hbrBackground) {
         wnd.needsErase = false;

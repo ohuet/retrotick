@@ -221,7 +221,11 @@ export function renderControlOverlay(
       return (
         <div key={ctrl.childHwnd} style={{ ...posStyle, cursor: 'var(--win2k-cursor)', pointerEvents: isDisabled ? 'none' : 'auto' }}
           onPointerDown={onOwnerDrawMouseDown} onPointerUp={onOwnerDrawMouseUp}>
-          <Button fontCSS={ctrlFont(ctrl)} disabled={isDisabled}>{formatMnemonic(ctrl.title)}</Button>
+          {/* Owner-draw: the owner paints the entire control via WM_DRAWITEM into
+              the companion canvas. Never render the window caption as DOM text —
+              it would show through (e.g. taskmgr's "CPU Usage Display") whenever
+              the canvas is transparent. Keep an empty Button only as the base. */}
+          <Button fontCSS={ctrlFont(ctrl)} disabled={isDisabled}></Button>
           <canvas
             ref={useCallback((el: HTMLCanvasElement | null) => {
               const emu = emuRef.current;
