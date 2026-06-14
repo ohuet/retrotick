@@ -230,8 +230,15 @@ export function renderChildControls(emu: Emulator, hwnd: number): void {
       } else {
         renderControl(emu, ctx, child);
       }
-      if (wnd.wndProc) {
-        sendDrawItem(emu, hwnd, wnd, child, childHwnd, controlId);
+      // WM_DRAWITEM must go to the control's OWN parent, not the top-level
+      // window. Owner-draw controls can live on a nested child dialog (e.g.
+      // taskmgr's CPU/Memory graphs sit on the Performance page-dialog); only
+      // that dialog's proc knows how to paint control id N. Sending to the main
+      // window made an unrelated proc receive the message → it drew nothing.
+      const parentHwnd = child.parent || hwnd;
+      const parentWnd = emu.handles.get<WindowInfo>(parentHwnd) ?? wnd;
+      if (parentWnd.wndProc) {
+        sendDrawItem(emu, parentHwnd, parentWnd, child, childHwnd, controlId);
       }
     }
     // Custom-class child controls with their own wndProc: send WM_PAINT
