@@ -224,6 +224,20 @@ export class ProcessRegistry {
     return result;
   }
 
+  /** Aggregate CPU usage (%) across all running emulators, for taskmgr's CPU
+   *  graph. Each emulator reports the fraction of wall time it spent executing
+   *  the guest (emu._cpuBusyPct). An app blocked in its message loop stops
+   *  ticking, so a stale reading (no recent emuTick) counts as idle (0%). */
+  getSystemCpuPercent(): number {
+    const now = performance.now();
+    let total = 0;
+    for (const emu of this.emulators.values()) {
+      if (!emu._cpuLastTickAt || now - emu._cpuLastTickAt > 700) continue; // idle / not ticking
+      total += emu._cpuBusyPct || 0;
+    }
+    return Math.min(100, total);
+  }
+
   /** Get all visible top-level windows across all emulators */
   getWindowList(): WindowEntry[] {
     const result: WindowEntry[] = [];
@@ -638,6 +652,19 @@ export class Emulator {
   stopped = false;
   _sysmsgTablesAddr = 0;
   _perfCounter = 0;
+
+  // CPU-usage measurement for taskmgr's Performance graph. We can't get per-page
+  // CPU from the browser, so we measure how much wall time this emulator spends
+  // actually executing the guest (sum of emuTick durations over a window).
+  _cpuBusyMs = 0;          // accumulated emuTick time in the current window
+  _cpuWindowStart = 0;     // performance.now() at window start (0 = uninit)
+  _cpuBusyPct = 0;         // smoothed busy fraction (0..100) of wall time
+  _cpuLastTickAt = 0;      // performance.now() of last emuTick (staleness check)
+  // 64-bit CPU time accumulators (100ns units) reported via NtQuerySystemInformation
+  _cpuIdle = 0;
+  _cpuKernel = 0;
+  _cpuUser = 0;
+  _perfTick = 0;
 
   // XMS (Extended Memory Specification) state
   _xmsHandles = new Map<number, { base: number; size: number; lockCount: number }>();

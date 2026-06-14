@@ -102,11 +102,16 @@ export function registerNtdll(emu: Emulator): void {
         // CPU% = (TotalDelta - IdleDelta) / TotalDelta, where TotalTime = Kernel +
         // User and IdleTime is a SUBSET of KernelTime. The old code returned
         // Idle(5t) > Kernel+User(5t), so CPU% came out 0% (idle >= total).
-        emu._perfTick = (emu._perfTick || 0) + 1;
-        const k = emu._perfTick;
-        // 1..~15% typical, occasional higher — two sines (irregular) + small jitter
-        let pct = 4 + 5 * Math.sin(k / 3.7) + 2 * Math.sin(k / 1.3) + Math.random() * 3;
-        pct = Math.max(1, Math.min(35, pct));
+        // Real signal: aggregate busy-time across ALL running emulators (so
+        // launching a CPU-heavy app actually pushes the graph up). Falls back to
+        // this emulator's own busy% when there's no shared registry (headless).
+        const measured = emu.processRegistry
+          ? emu.processRegistry.getSystemCpuPercent()
+          : (emu._cpuBusyPct || 0);
+        // Small idle floor + light jitter so a quiet system shows a gentle live
+        // wiggle instead of a dead-flat line, without masking real load.
+        let pct = Math.max(measured, 1 + Math.random() * 2);
+        pct = Math.max(1, Math.min(100, pct));
         const TOTAL = 10_000_000;            // ~1s of CPU time per sample (100ns units)
         const busy = Math.floor(TOTAL * pct / 100);
         const idleDelta = TOTAL - busy;

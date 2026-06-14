@@ -1524,8 +1524,22 @@ export function emuTick(emu: Emulator): void {
   }
   _diagInterpInsns += stepCount;
   _diagTickCount++;
-  _diagTickTotalMs += performance.now() - tickStart;
   const now2 = performance.now();
+  _diagTickTotalMs += now2 - tickStart;
+  // CPU-usage accounting: how much wall time this emulator spent executing the
+  // guest. Summed per ~500ms window → a busy-fraction %, smoothed (EMA). An app
+  // blocked in its message loop returns from emuTick almost instantly, so its
+  // busy% naturally falls toward 0; a compute-bound app fills each frame → ~100%.
+  emu._cpuBusyMs += now2 - tickStart;
+  emu._cpuLastTickAt = now2;
+  if (!emu._cpuWindowStart) emu._cpuWindowStart = tickStart;
+  const cpuWinMs = now2 - emu._cpuWindowStart;
+  if (cpuWinMs >= 500) {
+    const raw = Math.min(100, (emu._cpuBusyMs / cpuWinMs) * 100);
+    emu._cpuBusyPct = emu._cpuBusyPct * 0.6 + raw * 0.4; // EMA smoothing
+    emu._cpuBusyMs = 0;
+    emu._cpuWindowStart = now2;
+  }
   if (emu.wasmJitEnabled && now2 - _diagLastLog > 2000) {
     console.log(`[WASM-DIAG] ${_diagTickCount} ticks in ${_diagTickTotalMs.toFixed(0)}ms | WASM: ${_diagWasmRuns} runs, ${_diagWasmInsns} insns | Interp: ${_diagInterpInsns} insns | exits: ${JSON.stringify(_diagWasmExits)} | avg tick: ${(_diagTickTotalMs/_diagTickCount).toFixed(1)}ms | use32=${emu.cpu.use32} realMode=${emu.cpu.realMode}`);
     _diagWasmRuns = 0; _diagWasmInsns = 0; _diagInterpInsns = 0;
