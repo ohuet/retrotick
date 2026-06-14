@@ -256,10 +256,17 @@ export function renderControlOverlay(
       );
     }
 
-    // GroupBox
+    // GroupBox — a group box is a CONTAINER/frame: in Windows it sits behind the
+    // sibling controls it visually encloses (it only paints an etched border +
+    // label, transparent interior). Our overlays are flattened to one z-index and
+    // painted in array order, which does NOT guarantee the group box comes before
+    // the controls it contains (e.g. Task Manager creates the "Totals"/"Physical
+    // Memory" frames AFTER the labels/edits inside them). Pin group boxes below
+    // the other controls (z 99 < 100) so the enclosed controls always show
+    // through, instead of the frame (and its companion canvas) covering them.
     if (bsType === 7) {
       return (
-        <div key={ctrl.childHwnd} style={posStyle}>
+        <div key={ctrl.childHwnd} style={{ ...posStyle, zIndex: 99 }}>
           <GroupBox label={formatMnemonic(ctrl.title)} fontCSS={ctrlFont(ctrl)}>{null}</GroupBox>
           <CompanionCanvas ctrl={ctrl} emuRef={emuRef} />
         </div>
@@ -997,28 +1004,42 @@ export function renderControlOverlay(
       const WM_NOTIFY = 0x004E;
       const TCN_SELCHANGING = -552;
       const TCN_SELCHANGE = -551;
-      // NMHDR: hwndFrom(4) + idFrom(4) + code(4) = 12 bytes
-      const nmhdr = emu.allocHeap(12);
-      emu.memory.writeU32(nmhdr, ctrl.childHwnd);
-      emu.memory.writeU32(nmhdr + 4, ctrl.controlId);
+      // NMHDR: hwndFrom(4) + idFrom(4) + code(4) = 12 bytes.
+      // Use a SEPARATE buffer per notification: postMessage is async, so the
+      // wndproc reads the NMHDR at dispatch time. Reusing one buffer let the
+      // second writeU32(code) clobber the first message's code before it was
+      // read, so the app saw TCN_SELCHANGE twice (never SELCHANGING) and
+      // switched pages twice — the source of the Performance-tab flap.
+      const mkNmhdr = (code: number) => {
+        const p = emu.allocHeap(12);
+        emu.memory.writeU32(p, ctrl.childHwnd);
+        emu.memory.writeU32(p + 4, ctrl.controlId);
+        emu.memory.writeU32(p + 8, code & 0xFFFFFFFF);
+        return p;
+      };
 
       // Send TCN_SELCHANGING — if wndproc returns TRUE, cancel the switch
-      emu.memory.writeU32(nmhdr + 8, TCN_SELCHANGING & 0xFFFFFFFF);
-      emu.postMessage(emu.mainWindow, WM_NOTIFY, ctrl.controlId, nmhdr);
+      emu.postMessage(emu.mainWindow, WM_NOTIFY, ctrl.controlId, mkNmhdr(TCN_SELCHANGING));
 
       // Update the selected index on the control
       wnd.tabSelectedIndex = index;
 
       // Send TCN_SELCHANGE
-      emu.memory.writeU32(nmhdr + 8, TCN_SELCHANGE & 0xFFFFFFFF);
-      emu.postMessage(emu.mainWindow, WM_NOTIFY, ctrl.controlId, nmhdr);
+      emu.postMessage(emu.mainWindow, WM_NOTIFY, ctrl.controlId, mkNmhdr(TCN_SELCHANGE));
 
       // Trigger repaint
       const mainWnd = emu.handles.get<WindowInfo>(emu.mainWindow);
       if (mainWnd) mainWnd.needsPaint = true;
     };
     return (
-      <div key={ctrl.childHwnd} style={posStyle}>
+      // A tab control is a CONTAINER: the active page's controls are separate
+      // sibling overlays that must render on top of the tab's (opaque) body
+      // panel. Overlay paint order follows array order, which isn't guaranteed
+      // to place the tab control before its page controls (it does on a live
+      // tab click but not when a page is restored at load), so the panel could
+      // cover the whole page — the tab looked empty. Pin the tab control below
+      // the other controls (z 99 < 100) so the page always shows through.
+      <div key={ctrl.childHwnd} style={{ ...posStyle, zIndex: 99 }}>
         <TabControl tabs={ctrl.tabItems || []} selectedIndex={ctrl.tabSelectedIndex ?? 0} onTabClick={onTabClick} />
       </div>
     );

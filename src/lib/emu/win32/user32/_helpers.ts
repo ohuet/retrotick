@@ -100,6 +100,16 @@ export function getNonClientMetrics(style: number, hasMenu: boolean, win16 = fal
  * Returns clamped { w, h }.
  */
 export function clampToMinTrackSize(emu: Emulator, hwnd: number, wnd: WindowInfo, w: number, h: number): { w: number; h: number } {
+  // Callers pass the raw 32-bit MoveWindow/SetWindowPos/DeferWindowPos extent.
+  // An app that computes a size from a not-yet-laid-out parent can hand us a
+  // negative width/height (e.g. Task Manager sizes the "CPU/MEM Usage History"
+  // graph button to frameClient-margins, which is briefly -6). Stored as the
+  // raw unsigned value that becomes ~4 billion px, which blows up the whole
+  // page layout (the tab renders empty) and feeds garbage into the app's own
+  // resize math. Treat a negative extent as an invalid resize: keep the
+  // window's current size.
+  if ((w | 0) < 0) w = wnd.width;
+  if ((h | 0) < 0) h = wnd.height;
   if (wnd.wndProc) {
     // MINMAXINFO is 40 bytes: 5 POINTs (ptReserved, ptMaxSize, ptMaxPosition, ptMinTrackSize, ptMaxTrackSize)
     const pInfo = emu.allocHeap(40);
